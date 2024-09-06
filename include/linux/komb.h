@@ -14,7 +14,7 @@
 #define DEFINE_KOMBSPINLOCK(x)                                                 \
 	arch_spinlock_t(x) = (arch_spinlock_t)__ORIG_QSPIN_LOCK_UNLOCKED
 
-//#define KOMB_STATS 1
+#define KOMB_STATS 1
 
 /*
  * TODO (Correctness optimization): 
@@ -66,7 +66,4 @@ extern int komb_spin_is_contended(struct qspinlock *lock);
 extern int komb_spin_trylock(struct qspinlock *lock);
 extern void komb_spin_lock(struct qspinlock *lock);
 extern void komb_spin_unlock(struct qspinlock *lock);
-
-struct task_struct *komb_get_current(spinlock_t *lock);
-void komb_set_current_state(spinlock_t *lock, unsigned int state);
 #endif

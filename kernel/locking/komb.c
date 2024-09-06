@@ -1209,34 +1209,6 @@ queue:
 }
 EXPORT_SYMBOL_GPL(komb_spin_lock);
 
-struct task_struct *komb_get_current(spinlock_t *lock)
-{
-	struct shadow_stack *ptr = this_cpu_ptr(&local_shadow_stack);
-
-	int j, my_idx;
-
-	j = 0;
-	my_idx = -1;
-
-	for (j = 0; j < 8; j++) {
-		if (ptr->lock_addr[j] == lock) {
-#ifdef DEBUG_KOMB
-			BUG_ON(ptr->curr_cs_cpu < 0);
-#endif
-			return per_cpu_ptr(&komb_nodes[0], ptr->curr_cs_cpu)
-				->task_struct_ptr;
-		}
-	}
-
-	return current;
-}
-
-void komb_set_current_state(spinlock_t *lock, unsigned int state)
-{
-	WRITE_ONCE(komb_get_current(lock)->__state, state);
-	smp_mb();
-}
-
 /* 
  * No IPA is even more relevant here, because even if assembly is removed,
  * compiler shouldn't assume which caller-saved registers are in use inside
