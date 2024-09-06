@@ -38,19 +38,52 @@
  * - detects multi-task circular deadlocks and prints out all affected
  *   locks and tasks (and only those tasks)
  */
+struct mutex_node {
+	struct mutex_node *next;
+	struct mutex_node *tail;
+
+	int socket_id; //Socket ID
+	int cpuid;
+
+	uint64_t rsp;
+	struct task_struct *task_struct_ptr;
+	void *lock;
+	struct ww_acquire_ctx *ww_ctx;
+	char dummy1[80];
+
+	union {
+		atomic_long_t val;
+		atomic_long_t cnts;
+		struct {
+			u8 completed;
+			u8 locked;
+			u8 __unused[6];
+		};
+		struct {
+			u16 locked_completed;
+			u8 __unused1[6];
+		};
+		struct {
+			u16 wlocked;
+			u8 rcount[6];
+		};
+	};
+
+	char dummy[16];
+};
+
 struct mutex {
-	atomic_long_t		owner;
-	raw_spinlock_t		wait_lock;
-#ifdef CONFIG_MUTEX_SPIN_ON_OWNER
-	struct optimistic_spin_queue osq; /* Spinner MCS lock */
-#endif
-	struct list_head	wait_list;
-#ifdef CONFIG_DEBUG_MUTEXES
-	void			*magic;
-#endif
-#ifdef CONFIG_DEBUG_LOCK_ALLOC
-	struct lockdep_map	dep_map;
-#endif
+	struct mutex_node *tail;
+	union {
+		atomic_t state;
+		u8 locked;
+	};
+	struct task_struct *combiner_task;
+};
+
+struct ww_mutex {
+	struct mutex base;
+	struct ww_acquire_ctx *ctx;
 };
 
 #else /* !CONFIG_PREEMPT_RT */

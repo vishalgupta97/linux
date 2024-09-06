@@ -758,6 +758,18 @@ struct task_struct {
 	/* saved state for "spinlock sleepers" */
 	unsigned int			saved_state;
 
+  void *komb_stack_curr_ptr;
+  void *komb_stack_base_ptr;
+  void *komb_mutex_node;
+  void *aqm_node;
+  void *komb_local_queue_head;
+  void *komb_local_queue_tail;
+  void *komb_curr_waiter_task;
+  void *komb_prev_waiter_task;
+  void *komb_next_waiter_task;
+  uint64_t counter_val;
+  void *komb_lock_addr[8];
+
 	/*
 	 * This begins the randomizable portion of task_struct. Only
 	 * scheduling-critical items should be added above here.

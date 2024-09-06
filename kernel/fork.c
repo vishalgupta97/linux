@@ -103,6 +103,7 @@
 #include <linux/rseq.h>
 #include <uapi/linux/pidfd.h>
 #include <linux/pidfs.h>
+#include <linux/mutex.h>
 
 #include <asm/pgalloc.h>
 #include <linux/uaccess.h>
@@ -606,6 +607,10 @@ void free_task(struct task_struct *tsk)
 	if (tsk->flags & PF_KTHREAD)
 		free_kthread_struct(tsk);
 	bpf_task_storage_free(tsk);
+  
+  vfree(tsk->komb_stack_base_ptr);
+  vfree(tsk->komb_mutex_node);
+
 	free_task_struct(tsk);
 }
 EXPORT_SYMBOL(free_task);
@@ -1100,7 +1105,7 @@ void set_task_stack_end_magic(struct task_struct *tsk)
 static struct task_struct *dup_task_struct(struct task_struct *orig, int node)
 {
 	struct task_struct *tsk;
-	int err;
+	int err, i;
 
 	if (node == NUMA_NO_NODE)
 		node = tsk_fork_get_node(orig);
@@ -1194,6 +1199,23 @@ static struct task_struct *dup_task_struct(struct task_struct *orig, int node)
 	tsk->mm_cid_active = 0;
 	tsk->migrate_from_cpu = -1;
 #endif
+  
+  //KOMB_allocation
+  void *ptr = vzalloc(8192);
+  tsk->komb_stack_base_ptr = ptr;
+  tsk->komb_stack_curr_ptr = ptr + 8192 - 8;
+  tsk->komb_mutex_node = vzalloc(sizeof(struct mutex_node));
+  //tsk->aqm_node = vzalloc(sizeof(struct aqm_node));
+
+  tsk->komb_local_queue_head = NULL;
+  tsk->komb_local_queue_tail = NULL;
+  tsk->komb_curr_waiter_task = NULL;
+  tsk->komb_prev_waiter_task = NULL;
+  tsk->komb_next_waiter_task = NULL;
+  tsk->counter_val = 0;
+  for (i = 0; i < 8; i++)
+    tsk->komb_lock_addr[i] = NULL;
+
 	return tsk;
 
 free_stack:
