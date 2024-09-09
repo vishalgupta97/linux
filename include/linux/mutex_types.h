@@ -81,11 +81,6 @@ struct mutex {
 	struct task_struct *combiner_task;
 };
 
-struct ww_mutex {
-	struct mutex base;
-	struct ww_acquire_ctx *ctx;
-};
-
 #else /* !CONFIG_PREEMPT_RT */
 /*
  * Preempt-RT variant based on rtmutexes.

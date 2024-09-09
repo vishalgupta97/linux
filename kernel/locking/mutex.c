@@ -56,6 +56,9 @@
 #endif
 #include <linux/topology.h>
 
+#define CREATE_TRACE_POINTS
+#include <trace/events/lock.h>
+
 //#define DSM_DEBUG 1
 #ifdef DSM_DEBUG
 #define print_debug(fmt, ...)                                                  \
@@ -68,7 +71,7 @@
 #define print_debug(fmt, ...)
 #endif
 
-#define DEBUG_KOMB 1
+//#define DEBUG_KOMB 1
 
 #define smp_cond_load_relaxed_sleep(curr_node, ptr, cond_expr)                 \
 	({                                                                     \
@@ -705,6 +708,7 @@ __attribute__((noipa)) noinline notrace void mutex_lock(struct mutex *lock)
 	might_sleep();
 
 	preempt_disable();
+	trace_contention_begin(lock, LCB_F_MUTEX);
 	__komb_mutex_lock(lock);
 
 	if (current->komb_curr_waiter_task) {
@@ -741,7 +745,7 @@ __attribute__((noipa)) noinline notrace void mutex_lock(struct mutex *lock)
 			current->komb_prev_waiter_task = NULL;
 		}
 	}
-
+	trace_contention_end(lock, 0);
 	preempt_enable();
 }
 EXPORT_SYMBOL(mutex_lock);
@@ -891,6 +895,36 @@ __attribute__((noipa)) noinline notrace void mutex_unlock(struct mutex *lock)
 }
 EXPORT_SYMBOL(mutex_unlock);
 
+#include <linux/ww_mutex.h>
+
+int ww_mutex_trylock(struct ww_mutex *lock, struct ww_acquire_ctx *ww_ctx)
+{
+	return mutex_trylock(&lock->base);
+}
+EXPORT_SYMBOL(ww_mutex_trylock);
+
+int __sched ww_mutex_lock(struct ww_mutex *lock, struct ww_acquire_ctx *ctx)
+{
+	mutex_lock(&lock->base);
+	return 0;
+}
+EXPORT_SYMBOL(ww_mutex_lock);
+
+int __sched ww_mutex_lock_interruptible(struct ww_mutex *lock, struct ww_acquire_ctx *ctx)
+{
+	mutex_lock(&lock->base);
+	return 0;
+}
+EXPORT_SYMBOL(ww_mutex_lock_interruptible);
+
+
+void __sched ww_mutex_unlock(struct ww_mutex *lock)
+{
+	mutex_unlock(&lock->base);
+}
+EXPORT_SYMBOL(ww_mutex_unlock);
+
+
 void __mutex_init(struct mutex *lock, const char *name,
 		  struct lock_class_key *key)
 {
@@ -946,22 +980,5 @@ int atomic_dec_and_mutex_lock(atomic_t *cnt, struct mutex *lock)
 }
 EXPORT_SYMBOL(atomic_dec_and_mutex_lock);
 
-/**
- * mutex_lock_io() - Acquire the mutex and mark the process as waiting for I/O
- * @lock: The mutex to be acquired.
- *
- * Lock the mutex like mutex_lock().  While the task is waiting for this
- * mutex, it will be accounted as being in the IO wait state by the
- * scheduler.
- *
- * Context: Process context.
- */
-void __sched mutex_lock_io(struct mutex *lock)
-{
-	int token;
-
-	token = io_schedule_prepare();
-	mutex_lock(lock);
-	io_schedule_finish(token);
-}
-EXPORT_SYMBOL_GPL(mutex_lock_io);
+EXPORT_TRACEPOINT_SYMBOL_GPL(contention_begin);
+EXPORT_TRACEPOINT_SYMBOL_GPL(contention_end);
