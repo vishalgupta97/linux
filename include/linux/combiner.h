@@ -92,4 +92,5 @@ DECLARE_PER_CPU_ALIGNED(u64, rwsem_waiter_combined);
 DECLARE_PER_CPU_ALIGNED(u64, rwsem_ooo_combiner_count);
 DECLARE_PER_CPU_ALIGNED(u64, rwsem_ooo_waiter_combined);
 DECLARE_PER_CPU_ALIGNED(u64, rwsem_ooo_unlocks);
+DECLARE_PER_CPU_ALIGNED(u64, rwsem_downgrade);
 #endif

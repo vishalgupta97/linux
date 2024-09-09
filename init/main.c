@@ -104,6 +104,7 @@
 #include <linux/ptdump.h>
 #include <net/net_namespace.h>
 #include <linux/spinlock.h>
+#include <linux/rwsem.h>
 
 #include <asm/io.h>
 #include <asm/setup.h>
@@ -1026,7 +1027,8 @@ void start_kernel(void)
 	call_function_init();
 	WARN(!irqs_disabled(), "Interrupts were enabled early\n");
 
-	komb_init();	
+	komb_init();
+	komb_rwsem_init();
 
 	early_boot_irqs_disabled = false;
 	local_irq_enable();

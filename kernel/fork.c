@@ -610,6 +610,7 @@ void free_task(struct task_struct *tsk)
   
   vfree(tsk->komb_stack_base_ptr);
   vfree(tsk->komb_mutex_node);
+  vfree(tsk->aqm_node);
 
 	free_task_struct(tsk);
 }
@@ -1205,7 +1206,7 @@ static struct task_struct *dup_task_struct(struct task_struct *orig, int node)
   tsk->komb_stack_base_ptr = ptr;
   tsk->komb_stack_curr_ptr = ptr + 8192 - 8;
   tsk->komb_mutex_node = vzalloc(sizeof(struct mutex_node));
-  //tsk->aqm_node = vzalloc(sizeof(struct aqm_node));
+  tsk->aqm_node = vzalloc(sizeof(struct aqm_node));
 
   tsk->komb_local_queue_head = NULL;
   tsk->komb_local_queue_tail = NULL;
