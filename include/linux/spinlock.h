@@ -346,6 +346,9 @@ do {						\
 
 #endif
 
+extern struct task_struct* komb_get_current(spinlock_t *lock);
+extern void komb_set_current_state(spinlock_t *lock, unsigned int state);
+
 static __always_inline void spin_lock(spinlock_t *lock)
 {
 	raw_spin_lock(&lock->rlock);
