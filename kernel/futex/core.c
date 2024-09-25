@@ -565,11 +565,11 @@ void __futex_queue(struct futex_q *q, struct futex_hash_bucket *hb)
 	 * Thus, all RT-threads are woken first in priority order, and
 	 * the others are woken last, in FIFO order.
 	 */
-	prio = min(current->normal_prio, MAX_RT_PRIO);
+	prio = min(komb_get_current(&hb->lock)->normal_prio, MAX_RT_PRIO);
 
 	plist_node_init(&q->list, prio);
 	plist_add(&q->list, &hb->chain);
-	q->task = current;
+	q->task = komb_get_current(&hb->lock);
 }
 
 /**

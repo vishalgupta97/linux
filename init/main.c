@@ -1487,6 +1487,8 @@ static int __ref kernel_init(void *unused)
 
 	rcu_end_inkernel_boot();
 
+	kd_init();
+
 	do_sysctl_args();
 
 	if (ramdisk_execute_command) {

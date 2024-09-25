@@ -349,7 +349,7 @@ void futex_wait_queue(struct futex_hash_bucket *hb, struct futex_q *q,
 	 * futex_queue() calls spin_unlock() upon completion, both serializing
 	 * access to the hash list and forcing another memory barrier.
 	 */
-	set_current_state(TASK_INTERRUPTIBLE|TASK_FREEZABLE);
+	komb_set_current_state(&hb->lock, TASK_INTERRUPTIBLE|TASK_FREEZABLE);
 	futex_queue(q, hb);
 
 	/* Arm the timer */
@@ -369,7 +369,7 @@ void futex_wait_queue(struct futex_hash_bucket *hb, struct futex_q *q,
 		if (!timeout || timeout->task)
 			schedule();
 	}
-	__set_current_state(TASK_RUNNING);
+	komb_set_current_state(&hb->lock, TASK_RUNNING);
 }
 
 /**
