@@ -56,9 +56,7 @@
 			if (cond_expr)                         \
 				break;                         \
 			cpu_relax();                           \
-			if (need_resched()) {                  \
-				cond_resched();                \
-			}                                      \
+			cond_resched();                \
 		}                                              \
 		(typeof(*ptr))VAL;                             \
 	})
@@ -82,8 +80,8 @@ struct shadow_stack {
 };
 
 static struct task_struct **dthreads;
-static int num_delegation_threads;
-static int num_cores_per_socket;
+static int num_delegation_threads = 1;
+static int num_cores_per_socket = 1;
 
 #ifdef KOMB_STATS
 DEFINE_PER_CPU_ALIGNED(uint64_t, combiner_count);
@@ -119,7 +117,7 @@ static inline __pure struct kd_node *decode_tail(u32 tail)
 	int cpu = (tail >> _Q_TAIL_CPU_OFFSET) - 1;
 	int idx = (tail & _Q_TAIL_IDX_MASK) >> _Q_TAIL_IDX_OFFSET;
 
-	KOMB_BUG_ON(idx > 1); //TODO: Fix for nested case
+	//KOMB_BUG_ON(idx > 1); //TODO: Fix for nested case
 
 	return per_cpu_ptr(&kd_nodes[idx], cpu);
 }
@@ -522,11 +520,7 @@ int komb_thread(void *args)
 		print_debug("Releasing the lock from combiner\n");
 		WRITE_ONCE(lock->locked, 0);
 
-		if (need_resched()) {
-			preempt_enable();
-			schedule();
-			preempt_disable();
-		}
+		cond_resched();
 	}
 
 	BUG_ON(true);
@@ -719,7 +713,7 @@ queue:
 	KOMB_BUG_ON(curr_node == NULL);
 
 	if (curr_node->count > 0 || !in_task() || irqs_disabled() ||
-	    current->migration_disabled) {
+	    current->migration_disabled || ((smp_processor_id() % num_cores_per_socket) == 0)) {
 		struct kd_node *prev_node, *next_node;
 		u32 tail, idx;
 
@@ -756,7 +750,7 @@ queue:
 			prev_node = decode_tail(old_tail);
 			WRITE_ONCE(prev_node->next, curr_node);
 
-			print_debug("IRQ going to waiting for lock\n");
+			//print_debug("IRQ going to waiting for lock\n");
 			smp_cond_load_relaxed_sched(&curr_node->locked, !(VAL));
 		}
 
@@ -764,7 +758,7 @@ queue:
 
 		u32 val, new_val;
 
-		print_debug("IRQ spinning on the locked field\n");
+		//print_debug("IRQ spinning on the locked field\n");
 
 		val = atomic_cond_read_acquire(&lock->val,
 					       !(VAL & _Q_LOCKED_PENDING_MASK));
@@ -772,7 +766,7 @@ queue:
 		if (((val & _Q_TAIL_MASK) == tail) &&
 		    atomic_try_cmpxchg_relaxed(&lock->val, &val,
 					       _Q_LOCKED_IRQ_VAL)) {
-			print_debug("IRQ only one in the queue unlocked\n");
+			//print_debug("IRQ only one in the queue unlocked\n");
 			goto irq_release;
 		}
 
@@ -791,7 +785,7 @@ queue:
 				break;
 		}
 
-		print_debug("IRQ got the lock\n");
+		//print_debug("IRQ got the lock\n");
 
 		smp_cond_load_relaxed_sched(&curr_node->next, (VAL));
 		next_node = curr_node->next;
@@ -875,6 +869,8 @@ kd_spin_unlock(struct qspinlock *lock)
 		}
 		return;
 	}
+
+	KOMB_BUG_ON(my_idx < max_idx);
 
 #if DEBUG_KOMB
 	//Delegation thread should be on CPU 0 on each socket
