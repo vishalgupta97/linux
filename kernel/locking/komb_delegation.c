@@ -24,8 +24,8 @@
 #if DSM_DEBUG
 #define print_debug(fmt, ...)                                                \
 	({                                                                   \
-		printk(KERN_EMERG "[%d] komb (%s) " fmt, smp_processor_id(), \
-		       __func__, ##__VA_ARGS__);                             \
+		printk(KERN_EMERG "[%d] {%p} (%s) " fmt, smp_processor_id(), \
+		       lock, __func__, ##__VA_ARGS__);                       \
 	})
 #else
 #define print_debug(fmt, ...)
@@ -56,7 +56,11 @@
 			if (cond_expr)                         \
 				break;                         \
 			cpu_relax();                           \
-			cond_resched();                \
+			if (need_resched()) {                  \
+				preempt_enable();              \
+				cond_resched();                \
+				preempt_disable();             \
+			}                                      \
 		}                                              \
 		(typeof(*ptr))VAL;                             \
 	})
@@ -88,7 +92,7 @@ DEFINE_PER_CPU_ALIGNED(uint64_t, combiner_count);
 DEFINE_PER_CPU_ALIGNED(uint64_t, waiter_combined);
 DEFINE_PER_CPU_ALIGNED(uint64_t, ooo_combiner_count);
 DEFINE_PER_CPU_ALIGNED(uint64_t, ooo_waiter_combined);
-DEFINE_PER_CPU_ALIGNED(uint64_t, ooo_unlocks);
+DEFINE_PER_CPU_ALIGNED(uint64_t, qspinlock_fallback);
 #endif
 
 static DEFINE_PER_CPU_ALIGNED(struct kd_node, *lock_rq_tail);
@@ -145,7 +149,8 @@ static __always_inline u32 cmpxchg_tail(struct qspinlock *lock, u32 tail,
 	       << _Q_TAIL_OFFSET;
 }
 
-__always_inline static void add_to_local_queue(struct kd_node *node)
+__always_inline static void add_to_local_queue(struct qspinlock *lock,
+					       struct kd_node *node)
 {
 	struct shadow_stack *ptr = this_cpu_ptr(&local_shadow_stack);
 
@@ -198,7 +203,7 @@ static __always_inline struct kd_node *get_next_node(struct kd_node *my_node)
 		}
 
 		curr_node->next = NULL;
-		add_to_local_queue(next_node);
+		add_to_local_queue(my_node->lock, next_node);
 		curr_node = next_node;
 		next_node = curr_node->next;
 	}
@@ -245,23 +250,26 @@ __attribute__((noipa)) noinline notrace static struct kd_node *
 run_combiner(struct kd_node *curr_node)
 {
 	struct shadow_stack *ptr;
+	struct qspinlock *lock;
+
 	KOMB_BUG_ON(curr_node == NULL);
 	KOMB_BUG_ON((smp_processor_id() % num_cores_per_socket) != 0);
 	ptr = this_cpu_ptr(&local_shadow_stack);
+	lock = curr_node->lock;
 
 	ptr->counter_val = 0;
 	ptr->prev_cs_cpu = -1;
 	ptr->next_node_ptr = NULL;
 	ptr->curr_cs_cpu = curr_node->cpuid;
 
-	//print_debug("Combiner %d giving control to %d\n", smp_processor_id(),
-	//	    curr_node->cpuid);
+	print_debug("Combiner %d giving control to %d\n", smp_processor_id(),
+		    curr_node->cpuid);
 
 	execute_cs(curr_node);
 
-	//print_debug(
-	//	"Combiner got the control back: %d counter: %lld last_waiter: %d\n",
-	//	smp_processor_id(), ptr->counter_val, ptr->curr_cs_cpu);
+	print_debug(
+		"Combiner got the control back: %d counter: %lld last_waiter: %d\n",
+		smp_processor_id(), ptr->counter_val, ptr->curr_cs_cpu);
 
 #if KOMB_STATS
 	this_cpu_add(waiter_combined, ptr->counter_val);
@@ -337,8 +345,11 @@ head_of_queue:
 
 		rq_tail =
 			per_cpu_ptr(&lock_rq_tail, select_delegation_cpu(lock));
-		if (cmpxchg(rq_tail, NULL, curr_node) != NULL) {
+		if (READ_ONCE(*rq_tail) == 0xdeadbeef ||
+		    !task_is_running(dthreads[numa_node_id()]) ||
+		    cmpxchg(rq_tail, NULL, curr_node) != NULL) {
 			// Fallback to qspinlock
+			this_cpu_inc(qspinlock_fallback);
 			print_debug("Delegation %d running something else\n",
 				    select_delegation_cpu(lock));
 			curr_node->locked = false;
@@ -363,6 +374,7 @@ head_of_queue:
 			WRITE_ONCE(curr_node->next->locked, false);
 
 		} else {
+			KOMB_BUG_ON(!task_is_running(dthreads[numa_node_id()]));
 			print_debug("Added to the delegation thread: %d\n",
 				    select_delegation_cpu(lock));
 		}
@@ -397,13 +409,23 @@ int komb_thread(void *args)
 	struct shadow_stack *ptr;
 	struct kd_node *prev_node, *next_node;
 	struct kd_node **rq_tail;
-	int j;
+	int j, prev_preempt_count;
 
 	ptr = this_cpu_ptr(&local_shadow_stack);
 	rq_tail = this_cpu_ptr(&lock_rq_tail);
 	lock = NULL;
 
 	while (true) {
+		if (READ_ONCE(*rq_tail) != 0xdeadbeef)
+			break;
+		cpu_relax();
+		cond_resched();
+	}
+
+	preempt_disable();
+
+	while (true) {
+		print_debug("komb thread waiting for lock\n");
 		smp_cond_load_relaxed_sched_delegation(rq_tail, (VAL));
 
 		next_node = *rq_tail;
@@ -430,11 +452,14 @@ int komb_thread(void *args)
 		ptr->local_queue_tail = NULL;
 		ptr->is_local_queue_tail_last = false;
 
-		preempt_disable();
+		KOMB_BUG_ON(!in_task());
+		KOMB_BUG_ON(irqs_disabled());
+
+		prev_preempt_count = preempt_count();
 
 		prev_node = run_combiner(next_node);
 
-		preempt_enable();
+		KOMB_BUG_ON(prev_preempt_count != preempt_count());
 
 		KOMB_BUG_ON(ptr->lock_addr[j] != lock);
 		ptr->lock_addr[j] = NULL;
@@ -519,11 +544,10 @@ int komb_thread(void *args)
 		KOMB_BUG_ON(lock->locked != _Q_LOCKED_COMBINER_VAL);
 		print_debug("Releasing the lock from combiner\n");
 		WRITE_ONCE(lock->locked, 0);
-
-		cond_resched();
 	}
 
 	BUG_ON(true);
+	preempt_enable();
 
 	return 0;
 }
@@ -549,7 +573,7 @@ void kd_init(void)
 		ptr->counter_val = 0;
 		ptr->next_node_ptr = NULL;
 		ptr->irqs_disabled = false;
-		*per_cpu_ptr(&lock_rq_tail, i) = NULL;
+		*per_cpu_ptr(&lock_rq_tail, i) = 0xdeadbeef;
 	}
 
 	komb_node = per_cpu_ptr(&kd_nodes[0], 0);
@@ -713,7 +737,9 @@ queue:
 	KOMB_BUG_ON(curr_node == NULL);
 
 	if (curr_node->count > 0 || !in_task() || irqs_disabled() ||
-	    current->migration_disabled || ((smp_processor_id() % num_cores_per_socket) == 0)) {
+	    current->migration_disabled ||
+	    ((smp_processor_id() % num_cores_per_socket) == 0) ||
+	    !task_is_running(dthreads[numa_node_id()])) {
 		struct kd_node *prev_node, *next_node;
 		u32 tail, idx;
 
@@ -750,7 +776,7 @@ queue:
 			prev_node = decode_tail(old_tail);
 			WRITE_ONCE(prev_node->next, curr_node);
 
-			//print_debug("IRQ going to waiting for lock\n");
+			print_debug("IRQ going to waiting for lock\n");
 			smp_cond_load_relaxed_sched(&curr_node->locked, !(VAL));
 		}
 
@@ -758,7 +784,7 @@ queue:
 
 		u32 val, new_val;
 
-		//print_debug("IRQ spinning on the locked field\n");
+		print_debug("IRQ spinning on the locked field\n");
 
 		val = atomic_cond_read_acquire(&lock->val,
 					       !(VAL & _Q_LOCKED_PENDING_MASK));
@@ -766,7 +792,7 @@ queue:
 		if (((val & _Q_TAIL_MASK) == tail) &&
 		    atomic_try_cmpxchg_relaxed(&lock->val, &val,
 					       _Q_LOCKED_IRQ_VAL)) {
-			//print_debug("IRQ only one in the queue unlocked\n");
+			print_debug("IRQ only one in the queue unlocked\n");
 			goto irq_release;
 		}
 
@@ -785,7 +811,7 @@ queue:
 				break;
 		}
 
-		//print_debug("IRQ got the lock\n");
+		print_debug("IRQ got the lock\n");
 
 		smp_cond_load_relaxed_sched(&curr_node->next, (VAL));
 		next_node = curr_node->next;
@@ -961,4 +987,14 @@ struct task_struct *komb_get_current(spinlock_t *lock)
 void komb_set_current_state(spinlock_t *lock, unsigned int state)
 {
 	smp_store_mb(komb_get_current(lock)->__state, state);
+}
+
+SYSCALL_DEFINE0(komb_start_delegation)
+{
+	printk(KERN_ALERT "======== KOMB starting delegation ========\n");
+	int i;
+	for_each_online_cpu(i) {
+		*per_cpu_ptr(&lock_rq_tail, i) = 0;
+	}
+	return 0;
 }

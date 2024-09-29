@@ -1186,6 +1186,7 @@ asmlinkage long sys_old_mmap(struct mmap_arg_struct __user *arg);
 
 asmlinkage long sys_komb_stats(void);
 asmlinkage long sys_komb_clear_stats(void);
+asmlinkage long sys_komb_start_delegation(void);
 
 /*
  * Not a real system call, but a placeholder for syscalls which are
