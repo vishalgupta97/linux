@@ -26,10 +26,10 @@
 
 //#define DSM_DEBUG 1
 #ifdef DSM_DEBUG
-#define print_debug(fmt, ...)                                                  \
-	({                                                                     \
-		printk(KERN_EMERG "[%d] komb (%s) lock(%px): " fmt,            \
-		       smp_processor_id(), __func__, lock, ##__VA_ARGS__);     \
+#define print_debug(fmt, ...)                                              \
+	({                                                                 \
+		printk(KERN_EMERG "[%d] komb (%s) lock(%px): " fmt,        \
+		       smp_processor_id(), __func__, lock, ##__VA_ARGS__); \
 	})
 #else
 #define print_debug(fmt, ...)
@@ -43,35 +43,35 @@
 #define UINT64_MAX 0xffffffffffffffffL
 
 #ifdef KERNEL_SYNCSTRESS
-#define smp_cond_load_relaxed_sched(ptr, cond_expr)                            \
-	({                                                                     \
-		typeof(ptr) __PTR = (ptr);                                     \
-		__unqual_scalar_typeof(*ptr) VAL;                              \
-		for (;;) {                                                     \
-			VAL = READ_ONCE(*__PTR);                               \
-			if (cond_expr)                                         \
-				break;                                         \
-			cpu_relax();                                           \
-			if (need_resched()) {                                  \
-				preempt_enable();                              \
-				schedule();                                    \
-				preempt_disable();                             \
-			}                                                      \
-		}                                                              \
-		(typeof(*ptr))VAL;                                             \
+#define smp_cond_load_relaxed_sched(ptr, cond_expr) \
+	({                                          \
+		typeof(ptr) __PTR = (ptr);          \
+		__unqual_scalar_typeof(*ptr) VAL;   \
+		for (;;) {                          \
+			VAL = READ_ONCE(*__PTR);    \
+			if (cond_expr)              \
+				break;              \
+			cpu_relax();                \
+			if (need_resched()) {       \
+				preempt_enable();   \
+				schedule();         \
+				preempt_disable();  \
+			}                           \
+		}                                   \
+		(typeof(*ptr))VAL;                  \
 	})
 #else
-#define smp_cond_load_relaxed_sched(ptr, cond_expr)                            \
-	({                                                                     \
-		typeof(ptr) __PTR = (ptr);                                     \
-		__unqual_scalar_typeof(*ptr) VAL;                              \
-		for (;;) {                                                     \
-			VAL = READ_ONCE(*__PTR);                               \
-			if (cond_expr)                                         \
-				break;                                         \
-			cpu_relax();                                           \
-		}                                                              \
-		(typeof(*ptr))VAL;                                             \
+#define smp_cond_load_relaxed_sched(ptr, cond_expr) \
+	({                                          \
+		typeof(ptr) __PTR = (ptr);          \
+		__unqual_scalar_typeof(*ptr) VAL;   \
+		for (;;) {                          \
+			VAL = READ_ONCE(*__PTR);    \
+			if (cond_expr)              \
+				break;              \
+			cpu_relax();                \
+		}                                   \
+		(typeof(*ptr))VAL;                  \
 	})
 
 //if (need_resched()) {
@@ -80,16 +80,16 @@
 #endif
 
 #ifndef smp_cond_load_acquire_sched
-#define smp_cond_load_acquire_sched(ptr, cond_expr)                            \
-	({                                                                     \
-		__unqual_scalar_typeof(*ptr) _val;                             \
-		_val = smp_cond_load_relaxed_sched(ptr, cond_expr);            \
-		smp_acquire__after_ctrl_dep();                                 \
-		(typeof(*ptr))_val;                                            \
+#define smp_cond_load_acquire_sched(ptr, cond_expr)                 \
+	({                                                          \
+		__unqual_scalar_typeof(*ptr) _val;                  \
+		_val = smp_cond_load_relaxed_sched(ptr, cond_expr); \
+		smp_acquire__after_ctrl_dep();                      \
+		(typeof(*ptr))_val;                                 \
 	})
 #endif
 
-#define atomic_cond_read_acquire_sched(v, c)                                   \
+#define atomic_cond_read_acquire_sched(v, c) \
 	smp_cond_load_acquire_sched(&(v)->counter, (c))
 
 struct shadow_stack {
@@ -145,6 +145,9 @@ DEFINE_PER_CPU_ALIGNED(uint64_t, ooo_combiner_count);
 DEFINE_PER_CPU_ALIGNED(uint64_t, ooo_waiter_combined);
 DEFINE_PER_CPU_ALIGNED(uint64_t, ooo_unlocks);
 #endif
+
+extern bool do_fds_fallback;
+extern bool do_tas_fallback;
 
 /*
  * Used by all threads to add itself to the queue on the slowpath.
@@ -781,7 +784,7 @@ __komb_spin_lock_slowpath(struct qspinlock *lock)
 void komb_init(void)
 {
 	int i, j;
-	for_each_possible_cpu (i) {
+	for_each_possible_cpu(i) {
 		void *stack_ptr = vzalloc(SIZE_OF_SHADOW_STACK);
 		struct shadow_stack *ptr = per_cpu_ptr(&local_shadow_stack, i);
 
@@ -814,7 +817,7 @@ void komb_init(void)
 void komb_free(void)
 {
 	int i;
-	for_each_possible_cpu (i) {
+	for_each_possible_cpu(i) {
 		vfree(per_cpu_ptr(&local_shadow_stack, i)->ptr -
 		      SIZE_OF_SHADOW_STACK);
 	}
@@ -1042,9 +1045,10 @@ queue:
 #ifdef DEBUG_KOMB
 	BUG_ON(curr_node == NULL);
 #endif
+
 #ifdef ENABLE_IRQS_CHECK
 	if (curr_node->count > 0 || !in_task() || irqs_disabled() ||
-	    current->migration_disabled) {
+	    current->migration_disabled || do_fds_fallback) {
 		/*print_debug("Nested lock: waiting for lock\n");
 		while (true) {
 			atomic_cond_read_acquire(&lock->val, !(VAL));
@@ -1069,7 +1073,7 @@ queue:
 	 * any MCS node. This is not the most elegant solution, but is
 	 * simple enough.
 	 */
-		if (unlikely(idx >= MAX_NODES)) {
+		if (do_tas_fallback || unlikely(idx >= MAX_NODES)) {
 			while (!komb_spin_trylock(lock))
 				cpu_relax();
 			goto irq_release;
@@ -1154,7 +1158,7 @@ queue:
 		print_debug("IRQ passing lock next node: %d\n",
 			    next_node->cpuid);
 
-	irq_release:
+irq_release:
 		curr_node = this_cpu_ptr(&komb_nodes[0]);
 		curr_node->count--;
 		return;
@@ -1380,28 +1384,28 @@ __always_inline int komb_spin_value_unlocked(struct qspinlock lock)
 }
 
 struct task_struct *komb_get_current(spinlock_t *lock)
-{ 
-  struct shadow_stack *ptr = this_cpu_ptr(&local_shadow_stack);
-  
-  int j, my_idx;
-  
-  j = 0;
-  my_idx = -1;
+{
+	struct shadow_stack *ptr = this_cpu_ptr(&local_shadow_stack);
 
-  for (j = 0; j < 8; j++) {
-    if (ptr->lock_addr[j] == lock) {
+	int j, my_idx;
+
+	j = 0;
+	my_idx = -1;
+
+	for (j = 0; j < 8; j++) {
+		if (ptr->lock_addr[j] == lock) {
 #ifdef DEBUG_KOMB
-      BUG_ON(ptr->curr_cs_cpu < 0);
+			BUG_ON(ptr->curr_cs_cpu < 0);
 #endif
-      return per_cpu_ptr(&komb_nodes[0], ptr->curr_cs_cpu)
-        ->task_struct_ptr;
-    }
-  } 
+			return per_cpu_ptr(&komb_nodes[0], ptr->curr_cs_cpu)
+				->task_struct_ptr;
+		}
+	}
 
-  return current;
-}     
-    
+	return current;
+}
+
 void komb_set_current_state(spinlock_t *lock, unsigned int state)
-{ 
-  smp_store_mb(komb_get_current(lock)->__state, state);
-} 
+{
+	smp_store_mb(komb_get_current(lock)->__state, state);
+}
