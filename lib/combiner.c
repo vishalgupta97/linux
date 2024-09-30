@@ -1,12 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0
 // Copyright (c) 2022 Vishal Gupta, Kumar Kartikeya Dwivedi
 
-#ifdef KERNEL_SYNCSTRESS
-#include "lib/combiner.h"
-#else
 #include <linux/combiner.h>
-long komb_batch_size = 1024; //262144;
-#endif
+long komb_batch_size = 262144;
 
 #include <linux/syscalls.h>
 /*
@@ -49,7 +45,7 @@ SYSCALL_DEFINE0(komb_stats)
 	printk(KERN_ALERT "======== KOMB spinlock stats ========\n");
 	int i;
 	uint64_t total_counters[17] = { 0 };
-	for_each_online_cpu (i) {
+	for_each_online_cpu(i) {
 		total_counters[0] += per_cpu(combiner_count, i);
 		total_counters[1] += per_cpu(waiter_combined, i);
 		total_counters[2] += per_cpu(ooo_unlocks, i);
@@ -97,7 +93,7 @@ SYSCALL_DEFINE0(komb_clear_stats)
 {
 	printk(KERN_ALERT "======== KOMB stats cleared ========\n");
 	int i;
-	for_each_online_cpu (i) {
+	for_each_online_cpu(i) {
 		*per_cpu_ptr(&combiner_count, i) = 0;
 		*per_cpu_ptr(&waiter_combined, i) = 0;
 		*per_cpu_ptr(&ooo_unlocks, i) = 0;
@@ -120,7 +116,6 @@ SYSCALL_DEFINE0(komb_clear_stats)
 }
 
 #else
-#ifndef KERNEL_SYNCSTRESS
 SYSCALL_DEFINE0(komb_stats)
 {
 	return 0;
@@ -130,5 +125,4 @@ SYSCALL_DEFINE0(komb_clear_stats)
 {
 	return 0;
 }
-#endif
 #endif

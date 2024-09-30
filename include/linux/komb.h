@@ -1,17 +1,10 @@
 #ifndef __KOMB_H__
 #define __KOMB_H__
 
-#ifdef KERNEL_SYNCSTRESS
-#include "qspinlock_i.h"
-#include "lib/combiner.h"
-#define qspinlock orig_qspinlock
-#else
-#define ENABLE_IRQS_CHECK 1
 #include <asm/qspinlock.h>
-#endif
 
 #define MAX_NODES 4
-#define DEFINE_KOMBSPINLOCK(x)                                                 \
+#define DEFINE_KOMBSPINLOCK(x) \
 	arch_spinlock_t(x) = (arch_spinlock_t)__ORIG_QSPIN_LOCK_UNLOCKED
 
 #define KOMB_STATS 1
