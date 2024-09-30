@@ -1,9 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0 */
-/* rwsem.h: R/W semaphores, public interface
- *
- * Written by David Howells (dhowells@redhat.com).
- * Derived from asm-i386/semaphore.h
- */
+// Copyright (c) 2022 Vishal Gupta, Kumar Kartikeya Dwivedi
 
 #ifndef _LINUX_RWSEM_H
 #define _LINUX_RWSEM_H
@@ -44,18 +40,6 @@
 #define CHECK_FOR_BIAS 16
 #define MULTIPLIER 9
 
-/*
- * For an uncontended rwsem, count and owner are the only fields a task
- * needs to touch when acquiring the rwsem. So they are put next to each
- * other to increase the chance that they will share the same cacheline.
- *
- * In a contended rwsem, the owner is likely the most frequently accessed
- * field in the structure as the optimistic waiter that holds the osq lock
- * will spin on owner. For an embedded rwsem, other hot fields in the
- * containing structure should be moved further away from the rwsem to
- * reduce the chance that they will share the same cacheline causing
- * cacheline bouncing problem.
- */
 struct rw_semaphore {
 	union {
 		atomic_long_t cnts;
@@ -78,7 +62,6 @@ struct rw_semaphore {
 #endif
 };
 
-/* In all implementations count != 0 means locked */
 static inline int rwsem_is_locked(struct rw_semaphore *sem)
 {
 	return atomic_long_read(&sem->cnts) != 0;
@@ -86,19 +69,15 @@ static inline int rwsem_is_locked(struct rw_semaphore *sem)
 
 #define RWSEM_UNLOCKED_VALUE 0L
 
-/* Common initializer macros and functions */
-
 #define __RWSEM_DEP_MAP_INIT(lockname)
-
 #define __RWSEM_DEBUG_INIT(lockname)
-
 #define __RWSEM_OPT_INIT(lockname)
 
-#define __RWSEM_INITIALIZER(lockname)                                          \
-	{                                                                      \
-		.cnts = ATOMIC_LONG_INIT(0),                                   \
-		.reader_wait_lock.val = ATOMIC_INIT(0),                        \
-		.reader_wait_lock.tail = NULL, .writer_tail = NULL             \
+#define __RWSEM_INITIALIZER(lockname)                              \
+	{                                                          \
+		.cnts = ATOMIC_LONG_INIT(0),                       \
+		.reader_wait_lock.val = ATOMIC_INIT(0),            \
+		.reader_wait_lock.tail = NULL, .writer_tail = NULL \
 	}
 
 #define DECLARE_RWSEM(name) struct rw_semaphore name = __RWSEM_INITIALIZER(name)
@@ -106,62 +85,30 @@ static inline int rwsem_is_locked(struct rw_semaphore *sem)
 extern void __init_rwsem(struct rw_semaphore *sem, const char *name,
 			 struct lock_class_key *key);
 
-#define init_rwsem(sem)                                                        \
-	do {                                                                   \
-		static struct lock_class_key __key;                            \
-                                                                               \
-		__init_rwsem((sem), #sem, &__key);                             \
+#define init_rwsem(sem)                             \
+	do {                                        \
+		static struct lock_class_key __key; \
+                                                    \
+		__init_rwsem((sem), #sem, &__key);  \
 	} while (0)
 
 extern void komb_rwsem_init(void);
 
-/*
- * This is the same regardless of which rwsem implementation that is being used.
- * It is just a heuristic meant to be called by somebody already holding the
- * rwsem to see if somebody from an incompatible type is wanting access to the
- * lock.
- */
 static inline int rwsem_is_contended(struct rw_semaphore *sem)
 {
 	return (sem->writer_tail != NULL);
 }
 
-/*
- * lock for reading
- */
 extern void down_read(struct rw_semaphore *sem);
 extern int __must_check down_read_interruptible(struct rw_semaphore *sem);
 extern int __must_check down_read_killable(struct rw_semaphore *sem);
-
-/*
- * trylock for reading -- returns 1 if successful, 0 if contention
- */
 extern int down_read_trylock(struct rw_semaphore *sem);
-
-/*
- * lock for writing
- */
 extern void down_write(struct rw_semaphore *sem);
 extern int __must_check down_write_killable(struct rw_semaphore *sem);
-
-/*
- * trylock for writing -- returns 1 if successful, 0 if contention
- */
 extern int down_write_trylock(struct rw_semaphore *sem);
 
-/*
- * release a read lock
- */
 extern void up_read(struct rw_semaphore *sem);
-
-/*
- * release a write lock
- */
 extern void up_write(struct rw_semaphore *sem);
-
-/*
- * downgrade write lock to read lock
- */
 extern void downgrade_write(struct rw_semaphore *sem);
 
 #define down_read_nested(sem, subclass) down_read(sem)
@@ -183,6 +130,5 @@ DEFINE_GUARD_COND(rwsem_read, _intr, down_read_interruptible(_T) == 0)
 
 DEFINE_GUARD(rwsem_write, struct rw_semaphore *, down_write(_T), up_write(_T))
 DEFINE_GUARD_COND(rwsem_write, _try, down_write_trylock(_T))
-
 
 #endif /* _LINUX_RWSEM_H */

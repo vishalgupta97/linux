@@ -12,7 +12,7 @@
 #include <linux/random.h>
 
 #include <linux/aqm.h>
-#define get_curr_node_ptr() ((struct aqm_node*)((current)->aqm_node))
+#define get_curr_node_ptr() ((struct aqm_node *)((current)->aqm_node))
 #define INTRA_SOCKET_HANDOFF_PROB_ARG 0x10000
 
 #define THRESHOLD (0xffff)
@@ -93,9 +93,7 @@ static void wake_up_waiter(struct aqm_node *node)
 
 static void schedule_out_curr_task(void)
 {
-	//preempt_enable();
 	schedule();
-	//preempt_disable();
 }
 
 static inline int force_update_node(struct aqm_node *node, u8 state)
@@ -144,7 +142,6 @@ void __aqm_init(struct aqm_mutex *lock, const char *name,
 static void shuffle_waiters(struct aqm_mutex *lock, struct aqm_node *node,
 			    int is_next_waiter)
 {
-
 	return;
 
 	struct aqm_node *curr, *prev, *next, *last, *sleader, *qend;
@@ -406,15 +403,14 @@ static void __aqm_lock_slowpath(struct aqm_mutex *lock, struct aqm_node *node)
 			break;
 
 		if (!_AQ_MCS_WCOUNT_VAL(val) ||
-		    (_AQ_MCS_WCOUNT_VAL(val) && _AQ_MCS_SLEADER_VAL(val))) 		{
+		    (_AQ_MCS_WCOUNT_VAL(val) && _AQ_MCS_SLEADER_VAL(val))) {
 			shuffle_waiters(lock, node, true);
 			cpu_relax();
 		}
 
 		cpu_relax();
 
-		if(need_resched())
-		{
+		if (need_resched()) {
 			preempt_enable();
 			schedule();
 			preempt_disable();
@@ -422,10 +418,8 @@ static void __aqm_lock_slowpath(struct aqm_mutex *lock, struct aqm_node *node)
 	}
 
 	for (;;) {
-		
 		if (patience_count == 0 && !is_stealing_disabled(lock))
 			disable_stealing(lock);
-
 
 		if (cmpxchg(&lock->locked, 0, 1) == 0) {
 			lock->nid = numa_node_id();
@@ -465,12 +459,11 @@ static void __aqm_lock_slowpath(struct aqm_mutex *lock, struct aqm_node *node)
 		goto out;
 	}
 
-	if(next->nid != node->nid)
+	if (next->nid != node->nid)
 		enable_stealing(lock);
 
 out:
 	return;
-	//preempt_enable();
 }
 
 void aqm_lock(struct aqm_mutex *lock)

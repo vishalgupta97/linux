@@ -1,26 +1,6 @@
-// SPDX-License-Identifier: GPL-2.0-only
 // SPDX-License-Identifier: GPL-2.0
 // Copyright (c) 2022 Vishal Gupta, Kumar Kartikeya Dwivedi
 
-/*
- * kernel/locking/mutex.c
- *
- * Mutexes: blocking mutual exclusion locks
- *
- * Started by Ingo Molnar:
- *
- *  Copyright (C) 2004, 2005, 2006 Red Hat, Inc., Ingo Molnar <mingo@redhat.com>
- *
- * Many thanks to Arjan van de Ven, Thomas Gleixner, Steven Rostedt and
- * David Howells for suggestions and improvements.
- *
- *  - Adaptive spinning for mutexes by Peter Zijlstra. (Ported to mainline
- *    from the -rt tree, where it was originally implemented for rtmutexes
- *    by Steven Rostedt, based on work by Gregory Haskins, Peter Morreale
- *    and Sven Dietrich.
- *
- * Also see Documentation/locking/mutex-design.rst.
- */
 #include <linux/mutex.h>
 #include <linux/sched/signal.h>
 #include <linux/sched/rt.h>
@@ -44,16 +24,9 @@
 #include <linux/sched/stat.h>
 #include <linux/sched/task.h>
 #include <linux/sched.h>
-#ifdef KERNEL_SYNCSTRESS
-#include "mutex/komb_mutex.h"
-#include "timing_stats.h"
-#else
 #include <linux/mutex.h>
 #include <linux/sched.h>
 #include <linux/combiner.h>
-#define LOCK_START_TIMING_PER_CPU(combiner_loop)
-#define LOCK_END_TIMING_PER_CPU(combiner_loop)
-#endif
 #include <linux/topology.h>
 
 #define CREATE_TRACE_POINTS
@@ -61,17 +34,22 @@
 
 //#define DSM_DEBUG 1
 #ifdef DSM_DEBUG
-#define print_debug(fmt, ...)                                                  \
-	({                                                                     \
-		printk(KERN_ALERT "[%d] [%d] komb (%s) lock(%px): " fmt,       \
-		       smp_processor_id(), current->pid, __func__, lock,       \
-		       ##__VA_ARGS__);                                         \
+#define print_debug(fmt, ...)                                            \
+	({                                                               \
+		printk(KERN_ALERT "[%d] [%d] komb (%s) lock(%px): " fmt, \
+		       smp_processor_id(), current->pid, __func__, lock, \
+		       ##__VA_ARGS__);                                   \
 	})
 #else
 #define print_debug(fmt, ...)
 #endif
 
 //#define DEBUG_KOMB 1
+#if DEBUG_KOMB
+#define KOMB_BUG_ON(cond_expr) BUG_ON(cond_expr)
+#else
+#define KOMB_BUG_ON(cond_expr)
+#endif
 
 #define smp_cond_load_relaxed_sleep(curr_node, ptr, cond_expr)                 \
 	({                                                                     \
@@ -98,40 +76,36 @@
 	})
 
 #ifndef smp_cond_load_relaxed_sched
-#define smp_cond_load_relaxed_sched(ptr, cond_expr)                            \
-	({                                                                     \
-		typeof(ptr) __PTR = (ptr);                                     \
-		__unqual_scalar_typeof(*ptr) VAL;                              \
-		for (;;) {                                                     \
-			VAL = READ_ONCE(*__PTR);                               \
-			if (cond_expr)                                         \
-				break;                                         \
-			cpu_relax();                                           \
-			if (need_resched()) {                                  \
-				preempt_enable();                              \
-				schedule();                                    \
-				preempt_disable();                             \
-			}                                                      \
-		}                                                              \
-		(typeof(*ptr))VAL;                                             \
+#define smp_cond_load_relaxed_sched(ptr, cond_expr) \
+	({                                          \
+		typeof(ptr) __PTR = (ptr);          \
+		__unqual_scalar_typeof(*ptr) VAL;   \
+		for (;;) {                          \
+			VAL = READ_ONCE(*__PTR);    \
+			if (cond_expr)              \
+				break;              \
+			cpu_relax();                \
+			if (need_resched()) {       \
+				preempt_enable();   \
+				schedule();         \
+				preempt_disable();  \
+			}                           \
+		}                                   \
+		(typeof(*ptr))VAL;                  \
 	})
 #endif
 
 #ifndef smp_cond_load_acquire_sched
-#define smp_cond_load_acquire_sched(ptr, cond_expr)                            \
-	({                                                                     \
-		__unqual_scalar_typeof(*ptr) _val;                             \
-		_val = smp_cond_load_relaxed_sched(ptr, cond_expr);            \
-		smp_acquire__after_ctrl_dep();                                 \
-		(typeof(*ptr))_val;                                            \
+#define smp_cond_load_acquire_sched(ptr, cond_expr)                 \
+	({                                                          \
+		__unqual_scalar_typeof(*ptr) _val;                  \
+		_val = smp_cond_load_relaxed_sched(ptr, cond_expr); \
+		smp_acquire__after_ctrl_dep();                      \
+		(typeof(*ptr))_val;                                 \
 	})
 #endif
 
 #define UINT64_MAX 0xffffffffffffffffL
-
-#ifdef LOCK_MEASURE_TIME
-static DEFINE_PER_CPU_ALIGNED(uint64_t, combiner_loop);
-#endif
 
 #ifdef KOMB_STATS
 DEFINE_PER_CPU_ALIGNED(uint64_t, mutex_combiner_count);
@@ -148,6 +122,7 @@ DEFINE_PER_CPU_ALIGNED(uint64_t, mutex_ooo_unlocks);
 #define KOMB_WAITER_PARKED 1
 #define KOMB_WAITER_PROCESSING 2
 #define KOMB_WAITER_PROCESSED 4
+
 static inline void schedule_out_curr_task(void)
 {
 	preempt_enable();
@@ -191,9 +166,6 @@ static __always_inline void set_locked(struct mutex *lock)
 	WRITE_ONCE(lock->locked, 1);
 }
 
-/*
- * lock -> rdi
- */
 __attribute__((noipa)) noinline notrace static uint64_t
 get_shadow_stack_ptr(struct mutex *lock)
 {
@@ -206,7 +178,6 @@ get_komb_mutex_node(struct mutex *lock)
 	return ((struct mutex_node *)(current->komb_mutex_node));
 }
 
-#ifdef NUMA_AWARE
 __always_inline static void add_to_local_queue(struct mutex_node *node)
 {
 	struct mutex_node **head, **tail;
@@ -222,12 +193,10 @@ __always_inline static void add_to_local_queue(struct mutex_node *node)
 		*tail = node;
 	}
 }
-#endif
 
 __always_inline static struct mutex_node *
 get_next_node(struct mutex_node *my_node)
 {
-#ifdef NUMA_AWARE
 	struct mutex_node *curr_node, *next_node;
 
 	curr_node = my_node;
@@ -258,9 +227,6 @@ get_next_node(struct mutex_node *my_node)
 
 next_node_null:
 	return next_node;
-#else
-	return my_node->next;
-#endif
 }
 
 #pragma GCC push_options
@@ -275,23 +241,12 @@ execute_cs(struct mutex *lock, struct mutex_node *curr_node)
 
 	incoming_rsp_ptr = &(curr_node->rsp);
 	outgoing_rsp_ptr = get_shadow_stack_ptr(lock);
-#ifdef LOCK_MEASURE_TIME
-	*this_cpu_ptr(&combiner_loop) = UINT64_MAX;
-#endif
-	/*
-	 * Make the actual switch, the pushed return address is after this
-	 * function call, which we will resume execution at using the switch
-	 * in unlock.
-	 */
 
-	//local_irq_disable();
 	komb_context_switch(incoming_rsp_ptr, outgoing_rsp_ptr);
-	//local_irq_enable();
 
-#ifdef DEBUG_KOMB
-	BUG_ON(current->komb_stack_base_ptr - (current->komb_stack_curr_ptr) >
-	       8192);
-#endif
+	KOMB_BUG_ON(current->komb_stack_base_ptr -
+			    (current->komb_stack_curr_ptr) >
+		    8192);
 
 	if (lock->locked == _Q_UNLOCKED_OOO_VAL) {
 		print_debug("Combiner got control back OOO unlock\n");
@@ -301,9 +256,7 @@ execute_cs(struct mutex *lock, struct mutex_node *curr_node)
 		this_cpu_inc(mutex_ooo_combiner_count);
 #endif
 
-#ifdef DEBUG_KOMB
-		BUG_ON(current->komb_curr_waiter_task == NULL);
-#endif
+		KOMB_BUG_ON(current->komb_curr_waiter_task == NULL);
 
 		curr_node =
 			((struct task_struct *)current->komb_curr_waiter_task)
@@ -315,9 +268,7 @@ execute_cs(struct mutex *lock, struct mutex_node *curr_node)
 			curr_node->rsp = my_node->rsp;
 			wake_up_waiter(curr_node);
 			clear_locked_set_completed(curr_node);
-#ifdef DEBUG_KOMB
-			BUG_ON(current->komb_prev_waiter_task != NULL);
-#endif
+			KOMB_BUG_ON(current->komb_prev_waiter_task != NULL);
 		}
 		current->komb_prev_waiter_task = NULL;
 		current->komb_curr_waiter_task = NULL;
@@ -329,9 +280,8 @@ execute_cs(struct mutex *lock, struct mutex_node *curr_node)
 					     current->komb_next_waiter_task)
 					    ->komb_mutex_node;
 
-		if (next_node && next_node->next) {
+		if (next_node && next_node->next)
 			execute_cs(lock, next_node);
-		}
 	}
 }
 #pragma GCC pop_options
@@ -341,46 +291,20 @@ execute_cs(struct mutex *lock, struct mutex_node *curr_node)
 __attribute__((noipa)) noinline notrace static void
 run_combiner(struct mutex *lock, struct mutex_node *curr_node)
 {
-#ifdef DEBUG_KOMB
-	BUG_ON(curr_node == NULL);
-#endif
+	KOMB_BUG_ON(curr_node == NULL);
 
-#ifdef NUMA_AWARE
 	struct mutex_node **local_head, **local_tail;
-#endif
-
 	struct mutex_node *next_node = curr_node->next;
 	int counter = 0;
 
 	if (next_node == NULL) {
 		set_locked(lock);
-
-		/* 
-		 * Make this node spin on the locked variable and then it will 
-		 * become the combiner.
-		 */
-
 		wake_up_waiter(curr_node);
 		WRITE_ONCE(curr_node->locked, 0);
 		return;
 	}
 
 	WRITE_ONCE(lock->combiner_task, current);
-
-	/* while (curr_node) {
-		counter++;
-
-		wake_up_waiter(curr_node);
-		next_node = get_next_node(lock, curr_node);
-
-		execute_cs(lock, curr_node);
-
-		if (next_node == NULL || next_node->next == NULL ||
-		    counter >= batch_size)
-			break;
-
-		curr_node = next_node;
-	}*/
 	current->counter_val = 0;
 
 	print_debug("Combiner %d giving control to %d\n", smp_processor_id(),
@@ -416,8 +340,6 @@ run_combiner(struct mutex *lock, struct mutex_node *curr_node)
 	}
 
 	WRITE_ONCE(lock->combiner_task, NULL);
-
-#ifdef NUMA_AWARE
 	local_head = (struct mutex_node **)(&current->komb_local_queue_head);
 	local_tail = (struct mutex_node **)(&current->komb_local_queue_tail);
 
@@ -427,18 +349,10 @@ run_combiner(struct mutex *lock, struct mutex_node *curr_node)
 		*local_head = NULL;
 		*local_tail = NULL;
 	}
-#endif
 
 	set_locked(lock);
+	KOMB_BUG_ON(next_node == NULL);
 
-#ifdef DEBUG_KOMB
-	BUG_ON(next_node == NULL);
-#endif
-
-	/*
-	 * Make this node spin on the locked variabe and then it will 
-	 * become the combiner.
-	 */
 	wake_up_waiter(next_node);
 	WRITE_ONCE(next_node->locked, 0);
 }
@@ -454,11 +368,8 @@ __komb_mutex_lock_slowpath(struct mutex *lock,
 	u8 prev_locked_val;
 	int j;
 	struct mutex *parent_lock;
-
-#ifdef NUMA_AWARE
 	struct mutex_node *prev_local_queue_head;
 	struct mutex_node *prev_local_queue_tail;
-#endif
 
 	prev = xchg(&lock->tail, curr_node);
 	next = NULL;
@@ -478,17 +389,13 @@ __komb_mutex_lock_slowpath(struct mutex *lock,
 
 			if (j >= 0) {
 				parent_lock = current->komb_lock_addr[j];
-#ifdef DEBUG_KOMB
-				BUG_ON(parent_lock == lock);
-#endif
+				KOMB_BUG_ON(parent_lock == lock);
 				if (parent_lock->locked ==
 				    _Q_UNLOCKED_OOO_VAL) {
 					print_debug("Waiter unlocked OOO\n");
 					return 1;
 				}
 			}
-			return 0;
-
 			return 0;
 		}
 	}
@@ -515,20 +422,14 @@ __komb_mutex_lock_slowpath(struct mutex *lock,
 			schedule_out_curr_task();
 	}
 
-	//Head of the queue. Run Combiner.
-
 	struct task_struct *prev_curr_waiter_task =
 		current->komb_curr_waiter_task;
 	current->komb_curr_waiter_task = NULL;
 
-#ifdef DEBUG_KOMB
-	BUG_ON(current->komb_prev_waiter_task != NULL);
-#endif
+	KOMB_BUG_ON(current->komb_prev_waiter_task != NULL);
 
 	prev_locked_val = lock->locked;
-#ifdef DEBUG_KOMB
-	BUG_ON(prev_locked_val >= _Q_LOCKED_COMBINER_VAL);
-#endif
+	KOMB_BUG_ON(prev_locked_val >= _Q_LOCKED_COMBINER_VAL);
 
 	lock->locked = _Q_LOCKED_COMBINER_VAL;
 
@@ -544,7 +445,6 @@ __komb_mutex_lock_slowpath(struct mutex *lock,
 
 	uint64_t prev_stack_curr_ptr = current->komb_stack_curr_ptr;
 
-#ifdef NUMA_AWARE
 	prev_local_queue_head =
 		(struct mutex_node *)current->komb_local_queue_head;
 	prev_local_queue_tail =
@@ -552,32 +452,24 @@ __komb_mutex_lock_slowpath(struct mutex *lock,
 
 	current->komb_local_queue_head = NULL;
 	current->komb_local_queue_tail = NULL;
-#endif
 
 	j = 7;
 	for (j = 7; j >= 0; j--)
 		if (current->komb_lock_addr[j])
 			break;
 	j += 1;
-#ifdef DEBUG_KOMB
-	BUG_ON(j >= 8 || j < 0);
-#endif
+	KOMB_BUG_ON(j >= 8 || j < 0);
 	current->komb_lock_addr[j] = lock;
 
 	run_combiner(lock, next);
-#ifdef DEBUG_KOMB
-	BUG_ON(current->komb_lock_addr[j] != lock);
-#endif
+	KOMB_BUG_ON(current->komb_lock_addr[j] != lock);
 
 	current->komb_lock_addr[j] = NULL;
 
 	current->komb_next_waiter_task = prev_next_waiter_task;
 	current->counter_val = prev_counter_val;
-
-#ifdef NUMA_AWARE
 	current->komb_local_queue_head = prev_local_queue_head;
 	current->komb_local_queue_tail = prev_local_queue_tail;
-#endif
 
 	current->komb_stack_curr_ptr = prev_stack_curr_ptr;
 	current->komb_curr_waiter_task = prev_curr_waiter_task;
@@ -625,7 +517,6 @@ __attribute__((noipa)) noinline notrace void
 __komb_mutex_lock(struct mutex *lock)
 {
 	register int ret_val;
-	//local_irq_disable();
 	asm volatile("pushq %%rbp\n"
 		     "pushq %%rbx\n"
 		     "pushq %%r12\n"
@@ -647,11 +538,9 @@ __komb_mutex_lock(struct mutex *lock)
 		     :
 		     : "i"(get_shadow_stack_ptr)
 		     : "memory");
-	//local_irq_enable();
 
 	ret_val = komb_mutex_lock_slowpath(lock);
 
-	//local_irq_disable();
 	if (ret_val) {
 		asm volatile("popq %%rdi\n"
 			     "callq %P0\n"
@@ -690,7 +579,6 @@ __komb_mutex_lock(struct mutex *lock)
 			     :
 			     : "memory");
 	}
-	//local_irq_enable();
 }
 #pragma GCC pop_options
 
@@ -700,8 +588,6 @@ __attribute__((noipa)) noinline notrace void mutex_lock(struct mutex *lock)
 
 	ret = cmpxchg(&lock->locked, 0, 1);
 	if (likely(ret == 0)) {
-		/*if (lock->tail != NULL)
-			print_debug("Lock stealing\n");*/
 		return;
 	}
 
@@ -717,9 +603,7 @@ __attribute__((noipa)) noinline notrace void mutex_lock(struct mutex *lock)
 				->komb_mutex_node;
 
 		if ((struct mutex *)curr_node->lock == lock) {
-#ifdef DEBUG_KOMB
-			BUG_ON(lock->locked != _Q_LOCKED_COMBINER_VAL);
-#endif
+			KOMB_BUG_ON(lock->locked != _Q_LOCKED_COMBINER_VAL);
 			struct mutex_node *next_node = get_next_node(curr_node);
 			if (next_node == NULL)
 				current->komb_next_waiter_task = NULL;
@@ -736,10 +620,9 @@ __attribute__((noipa)) noinline notrace void mutex_lock(struct mutex *lock)
 					 current->komb_prev_waiter_task)
 					->komb_mutex_node;
 
-#ifdef DEBUG_KOMB
-			BUG_ON(prev_node->lock != lock);
-#endif
-			//print_debug("Waking up prev waiter: %d\n", prev_node->cpuid);
+			KOMB_BUG_ON(prev_node->lock != lock);
+			print_debug("Waking up prev waiter: %d\n",
+				    prev_node->cpuid);
 			wake_up_waiter(prev_node);
 			clear_locked_set_completed(prev_node);
 			current->komb_prev_waiter_task = NULL;
@@ -828,21 +711,10 @@ __attribute__((noipa)) noinline notrace void mutex_unlock(struct mutex *lock)
 		return;
 	}
 
-	LOCK_END_TIMING_PER_CPU(combiner_loop);
+	KOMB_BUG_ON(lock->locked != _Q_LOCKED_COMBINER_VAL);
+	KOMB_BUG_ON(current->komb_curr_waiter_task == NULL);
+	KOMB_BUG_ON(max_idx < 0);
 
-	LOCK_START_TIMING_PER_CPU(combiner_loop);
-
-#ifdef DEBUG_KOMB
-	if (lock->locked != _Q_LOCKED_COMBINER_VAL)
-		BUG_ON(true);
-
-	BUG_ON(current->komb_curr_waiter_task == NULL);
-
-	if (max_idx < 0) {
-		BUG_ON(true);
-	}
-
-#endif
 	if (my_idx < max_idx) {
 #ifdef KOMB_STATS
 		this_cpu_inc(mutex_ooo_unlocks);
@@ -862,9 +734,7 @@ __attribute__((noipa)) noinline notrace void mutex_unlock(struct mutex *lock)
 
 	uint64_t counter = current->counter_val;
 
-#ifdef DEBUG_KOMB
-	BUG_ON(lock->combiner_task != current);
-#endif
+	KOMB_BUG_ON(lock->combiner_task != current);
 
 	if (next_node == NULL || next_node->next == NULL ||
 	    counter >= komb_batch_size) {
@@ -877,19 +747,14 @@ __attribute__((noipa)) noinline notrace void mutex_unlock(struct mutex *lock)
 		current->komb_curr_waiter_task = current->komb_next_waiter_task;
 		incoming_rsp_ptr = &(next_node->rsp);
 		current->counter_val = counter + 1;
-		//print_debug("Jumping to the next waiter: %d\n",
-		//	    next_node->cpuid);
+		print_debug("Jumping to the next waiter: %d\n",
+			    next_node->cpuid);
 	}
 
-	/*
-	 * Komb node still active here, because cpu (from_cpuid) still spinning.
-	 */
 	outgoing_rsp_ptr = &(curr_node->rsp);
 
 	preempt_disable();
-	//local_irq_disable();
 	komb_context_switch(incoming_rsp_ptr, outgoing_rsp_ptr);
-	//local_irq_enable();
 	preempt_enable();
 	return;
 }
@@ -910,20 +775,19 @@ int __sched ww_mutex_lock(struct ww_mutex *lock, struct ww_acquire_ctx *ctx)
 }
 EXPORT_SYMBOL(ww_mutex_lock);
 
-int __sched ww_mutex_lock_interruptible(struct ww_mutex *lock, struct ww_acquire_ctx *ctx)
+int __sched ww_mutex_lock_interruptible(struct ww_mutex *lock,
+					struct ww_acquire_ctx *ctx)
 {
 	mutex_lock(&lock->base);
 	return 0;
 }
 EXPORT_SYMBOL(ww_mutex_lock_interruptible);
 
-
 void __sched ww_mutex_unlock(struct ww_mutex *lock)
 {
 	mutex_unlock(&lock->base);
 }
 EXPORT_SYMBOL(ww_mutex_unlock);
-
 
 void __mutex_init(struct mutex *lock, const char *name,
 		  struct lock_class_key *key)
@@ -934,15 +798,6 @@ void __mutex_init(struct mutex *lock, const char *name,
 }
 EXPORT_SYMBOL(__mutex_init);
 
-/*
- * @owner: contains: 'struct task_struct *' to the current lock owner,
- * NULL means not owned. Since task_struct pointers are aligned at
- * at least L1_CACHE_BYTES, we have low bits to store extra state.
- *
- * Bit0 indicates a non-empty waiter list; unlock must issue a wakeup.
- * Bit1 indicates unlock needs to hand the lock to the top-waiter
- * Bit2 indicates handoff has been done and we're waiting for pickup.
- */
 #define MUTEX_FLAG_WAITERS 0x01
 #define MUTEX_FLAG_HANDOFF 0x02
 #define MUTEX_FLAG_PICKUP 0x04
@@ -956,26 +811,15 @@ static __always_inline bool mutex_optimistic_spin(struct mutex *lock,
 	return false;
 }
 
-/**
- * atomic_dec_and_mutex_lock - return holding mutex if we dec to 0
- * @cnt: the atomic which we are to dec
- * @lock: the mutex to return holding if we dec to 0
- *
- * return true and hold lock if we dec to 0, return false otherwise
- */
 int atomic_dec_and_mutex_lock(atomic_t *cnt, struct mutex *lock)
 {
-	/* dec if we can't possibly hit 0 */
 	if (atomic_add_unless(cnt, -1, 1))
 		return 0;
-	/* we might hit 0, so take the lock */
 	mutex_lock(lock);
 	if (!atomic_dec_and_test(cnt)) {
-		/* when we actually did the dec, we didn't hit 0 */
 		mutex_unlock(lock);
 		return 0;
 	}
-	/* we hit 0, and we hold the lock */
 	return 1;
 }
 EXPORT_SYMBOL(atomic_dec_and_mutex_lock);
