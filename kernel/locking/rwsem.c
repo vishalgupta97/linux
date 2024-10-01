@@ -41,6 +41,8 @@
 #define READ_STATE 0
 #define WRITE_STATE 1
 
+#define IRQ_NUMA_NODE 255
+
 #define KOMB_WAITER_UNPROCESSED 0
 #define KOMB_WAITER_PARKED 1
 #define KOMB_WAITER_PROCESSING 2
@@ -118,6 +120,9 @@ DEFINE_PER_CPU_ALIGNED(uint64_t, rwsem_ooo_unlocks);
 DEFINE_PER_CPU_ALIGNED(uint64_t, rwsem_downgrade);
 #endif
 
+extern bool do_fds_fallback;
+extern bool do_tas_fallback;
+
 #ifdef BRAVO
 
 uint64_t **global_vr_table;
@@ -191,6 +196,11 @@ __always_inline static void add_to_local_queue(struct mutex_node *node)
 	}
 }
 
+static inline bool check_irq_node(struct mutex_node *node)
+{
+	return (node->socket_id == IRQ_NUMA_NODE || node->rsp == 0xdeadbeef);
+}
+
 __always_inline static struct mutex_node *
 get_next_node(struct mutex_node *my_node)
 {
@@ -201,6 +211,9 @@ get_next_node(struct mutex_node *my_node)
 
 	while (true) {
 		if (next_node == NULL || next_node->next == NULL)
+			goto next_node_null;
+		else if (check_irq_node(next_node) ||
+			 check_irq_node(next_node->next))
 			goto next_node_null;
 
 		prefetch(next_node->next);
@@ -367,7 +380,8 @@ execute_cs(struct rw_semaphore *lock, struct mutex_node *curr_node)
 					     current->komb_next_waiter_task)
 					    ->komb_mutex_node;
 
-		if (next_node && next_node->next)
+		if (next_node && next_node->next && !check_irq_node(next_node) &&
+			!check_irq_node(next_node->next))
 			execute_cs(lock, next_node);
 	}
 }
@@ -382,7 +396,7 @@ run_combiner(struct rw_semaphore *lock, struct mutex_node *curr_node)
 	struct mutex_node *next_node = curr_node->next, *waker = curr_node;
 	int counter = 0;
 
-	if (next_node == NULL) {
+	if (next_node == NULL || check_irq_node(curr_node) || check_irq_node(next_node)) {
 		set_locked(lock);
 
 		wake_up_waiter(curr_node);
@@ -716,6 +730,70 @@ void down_write(struct rw_semaphore *lock)
 	}
 #endif
 
+	if(do_fds_fallback) {
+		preempt_disable();
+
+		struct mutex_node *prev, *next;
+		struct mutex_node *curr_node = get_komb_mutex_node(lock);
+
+		curr_node->locked = true;
+		curr_node->completed = KOMB_WAITER_UNPROCESSED;
+		curr_node->next = NULL;
+		curr_node->tail = NULL;
+		curr_node->socket_id = IRQ_NUMA_NODE;
+		curr_node->cpuid = smp_processor_id();
+		curr_node->task_struct_ptr = current;
+		curr_node->lock = lock;
+
+		prev = xchg(&lock->writer_tail, curr_node);
+		next = NULL;
+
+		if (prev) {
+			WRITE_ONCE(prev->next, curr_node);
+			smp_cond_load_relaxed_sleep(curr_node, &curr_node->locked,
+						VAL == 0);
+			KOMB_BUG_ON(READ_ONCE(curr_node->completed) == KOMB_WAITER_PROCESSED);
+		}
+
+		aqm_lock(&lock->reader_wait_lock);
+
+		if (!atomic_long_read(&lock->cnts) &&
+		(atomic_long_cmpxchg_relaxed(&lock->cnts, 0,
+						_KOMB_RWSEM_W_LOCKED) == 0))
+			goto irq_unlock;
+
+		atomic_long_add_return_acquire(_KOMB_RWSEM_W_WAITING, &lock->cnts);
+		
+		do {
+			atomic_long_cond_read_acquire_sched(
+				&lock->cnts, VAL == _KOMB_RWSEM_W_WAITING);
+		} while (atomic_long_cmpxchg_relaxed(&lock->cnts, _KOMB_RWSEM_W_WAITING,
+						_KOMB_RWSEM_W_LOCKED) !=
+			_KOMB_RWSEM_W_WAITING);
+	irq_unlock:
+		aqm_unlock(&lock->reader_wait_lock);
+
+	#ifdef BRAVO
+		wait_for_visible_readers(lock);
+	#endif
+
+		if (cmpxchg(&lock->writer_tail, curr_node, NULL) == curr_node)
+			goto irq_release;
+
+		while (!next) {
+			next = READ_ONCE(curr_node->next);
+
+			cpu_relax();
+			if (need_resched())
+				schedule_out_curr_task();
+		}
+		wake_up_waiter(next);
+		WRITE_ONCE(next->locked, 0);
+	irq_release:
+		preempt_enable();
+		return;
+	}
+
 	preempt_disable();
 	__komb_write_stack_switch(lock);
 
@@ -868,7 +946,8 @@ __attribute__((noipa)) noinline notrace void up_write(struct rw_semaphore *lock)
 	uint64_t counter = current->counter_val;
 
 	if (next_node == NULL || next_node->next == NULL ||
-	    counter >= komb_batch_size) {
+	    check_irq_node(next_node) || check_irq_node(next_node->next) ||
+	    counter >= komb_batch_size || need_resched()) {
 		incoming_rsp_ptr = &(current->komb_stack_curr_ptr);
 		current->komb_prev_waiter_task = current->komb_curr_waiter_task;
 		current->komb_curr_waiter_task = NULL;
