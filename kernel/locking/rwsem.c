@@ -984,6 +984,12 @@ void __init_rwsem(struct rw_semaphore *lock, const char *name,
 	atomic_set(&lock->reader_wait_lock.val, 0);
 	lock->reader_wait_lock.tail = NULL;
 	lock->writer_tail = NULL;
+#ifdef CONFIG_DEBUG_LOCK_ALLOC
+       lockdep_init_map_wait(&lock->dep_map, name, key, 0, LD_WAIT_SLEEP);
+#endif
+#ifdef CONFIG_DEBUG_RWSEMS
+       sem->magic = sem;
+#endif
 }
 EXPORT_SYMBOL(__init_rwsem);
 

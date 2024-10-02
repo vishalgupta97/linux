@@ -17,11 +17,26 @@
 
 struct device;
 
+#ifdef CONFIG_DEBUG_LOCK_ALLOC
+#define __DEP_MAP_MUTEX_INITIALIZER(lockname)     \
+	, .dep_map = {                            \
+		.name = #lockname,                \
+		.wait_type_inner = LD_WAIT_SLEEP, \
+	}
+#else
 #define __DEP_MAP_MUTEX_INITIALIZER(lockname)
+#endif
+
+#ifdef CONFIG_DEBUG_MUTEXES
+#define __DEBUG_MUTEX_INITIALIZER(lockname) \
+	, .magic = &lockname
+extern void mutex_destroy(struct mutex *lock);
+#else
 #define __DEBUG_MUTEX_INITIALIZER(lockname)
-static inline void mutex_destroy(struct mutex *lock)
-{
-}
+static inline void mutex_destroy(struct mutex *lock) {}
+#endif
+
+
 
 #define mutex_init(mutex)                              \
 	do {                                           \
@@ -32,7 +47,7 @@ static inline void mutex_destroy(struct mutex *lock)
 
 #define __MUTEX_INITIALIZER(lockname)                                         \
 	{                                                                     \
-		.tail = NULL, .state = ATOMIC_INIT(0), .combiner_task = NULL, \
+		.tail = NULL, .state = ATOMIC_INIT(0), .combiner_task = NULL \
 		__DEBUG_MUTEX_INITIALIZER(lockname)                           \
 			__DEP_MAP_MUTEX_INITIALIZER(lockname)                 \
 	}
@@ -44,11 +59,6 @@ extern void __mutex_init(struct mutex *lock, const char *name,
 			 struct lock_class_key *key);
 
 extern bool mutex_is_locked(struct mutex *lock);
-
-static inline int __devm_mutex_init(struct device *dev, struct mutex *lock)
-{
-	return 0;
-}
 
 #define devm_mutex_init(dev, mutex)             \
 	({                                      \

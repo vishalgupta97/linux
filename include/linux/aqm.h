@@ -81,12 +81,6 @@ struct aqm_mutex {
 			u16 locked_no_stealing;
 		};
 #endif
-#ifdef CONFIG_DEBUG_MUTEXES
-		void *magic;
-#endif
-#ifdef CONFIG_DEBUG_LOCK_ALLOC
-		struct lockdep_map dep_map;
-#endif
 	};
 };
 

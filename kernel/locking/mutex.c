@@ -29,6 +29,8 @@
 #include <linux/combiner.h>
 #include <linux/topology.h>
 
+#include "mutex.h"
+
 #define CREATE_TRACE_POINTS
 #include <trace/events/lock.h>
 
@@ -795,6 +797,7 @@ void __mutex_init(struct mutex *lock, const char *name,
 	lock->tail = NULL;
 	atomic_set(&lock->state, 0);
 	lock->combiner_task = NULL;
+	debug_mutex_init(lock, name, key);
 }
 EXPORT_SYMBOL(__mutex_init);
 
