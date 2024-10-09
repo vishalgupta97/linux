@@ -4,6 +4,140 @@
 #include <linux/kernel.h>
 #include <linux/proc_fs.h>
 #include <linux/feedbacksync.h>
+#include <linux/hashtable.h>
+
+/*
+	------------------------- Lock Stat Collector -------------------
+*/
+
+struct lock_stat {
+	struct fds_lock_key *key;
+	const char *name;
+	u64 counter;
+	struct hlist_node hnode;
+};
+
+DEFINE_PER_CPU_ALIGNED(struct lock_stat, read_lock_stats[NUM_BUCKETS]);
+DEFINE_PER_CPU_ALIGNED(struct lock_stat, write_lock_stats[NUM_BUCKETS]);
+DEFINE_PER_CPU_ALIGNED(bool, bucket_usage[NUM_BUCKETS]);
+DEFINE_PER_CPU_ALIGNED(uint64_t, collisions);
+
+void __stat_lock_acquire(struct fds_lock_key *key, bool read)
+{
+	if(key == NULL || key->ptr == NULL)
+		return;
+
+	uint64_t bucket = (((uint64_t)key->ptr) & (0x1fff));
+	while(bucket < NUM_BUCKETS) {
+		struct lock_stat *stat_ptr;
+		if(read)
+			stat_ptr = this_cpu_ptr(&read_lock_stats[bucket]);
+		else
+			stat_ptr = this_cpu_ptr(&write_lock_stats[bucket]);
+		if(stat_ptr->key == NULL) {
+			if(stat_ptr->counter > 0)
+				this_cpu_inc(collisions);
+			stat_ptr->key = key->ptr;
+			stat_ptr->counter = 1;
+			stat_ptr->name = key->name;
+			goto out;
+		} else if(stat_ptr->key == key->ptr) {
+			stat_ptr->counter++;
+			goto out;
+		}
+		bucket++;
+	}
+
+out:
+	*this_cpu_ptr(&bucket_usage[bucket]) = true;
+}
+
+void read_stat_lock_acquire(struct fds_lock_key *key)
+{
+	__stat_lock_acquire(key, true);
+}
+
+void write_stat_lock_acquire(struct fds_lock_key *key)
+{
+	__stat_lock_acquire(key, false);
+}
+
+void mutex_stat_lock_acquire(struct fds_lock_key *key)
+{
+	__stat_lock_acquire(key, false);
+}
+
+void spin_stat_lock_acquire(struct fds_lock_key *key)
+{
+	__stat_lock_acquire(key, false);
+}
+
+void print_fds_stats(void) {
+	printk(KERN_ALERT "======== Feedback sync stats ========\n");
+	int i, j, bkt;
+	struct lock_stat *tmp;
+	uint64_t counter;
+
+	DEFINE_HASHTABLE(read_stats_ht, 5);
+	DEFINE_HASHTABLE(write_stats_ht, 5);
+
+	for(j = 0; j < NUM_BUCKETS; j++) {
+		for_each_online_cpu(i) {
+			struct lock_stat *stat = per_cpu_ptr(&read_lock_stats[j], i);
+			if(stat->counter > 0) {
+				bool found = false;
+				hash_for_each(read_stats_ht, bkt, tmp, hnode) {
+					if(stat->key != NULL && tmp->key != NULL) {
+						if(stat->key == tmp->key) {
+							tmp->counter += stat->counter;
+							found = true;
+							break;
+						}
+					}
+				}
+				if(!found)
+					hash_add(read_stats_ht, &stat->hnode, stat->key);
+			}
+			
+			stat = per_cpu_ptr(&write_lock_stats[j], i);
+			if(stat->counter > 0) {
+				bool found = false;
+				hash_for_each(write_stats_ht, bkt, tmp, hnode) {
+					if(stat->key != NULL && tmp->key != NULL) {
+						if(stat->key == tmp->key) {
+							tmp->counter += stat->counter;
+							found = true;
+							break;
+						}
+					}
+				}
+				if(!found)
+					hash_add(write_stats_ht, &stat->hnode, stat->key);
+			}
+		}
+	}
+
+	printk(KERN_ALERT "Traversal done\n");
+	hash_for_each(read_stats_ht, bkt, tmp, hnode) {
+		printk(KERN_ALERT "Read Name: %s, Counter: %ld\n", tmp->name, tmp->counter, tmp->key);
+	}
+
+	hash_for_each(write_stats_ht, bkt, tmp, hnode) {
+		printk(KERN_ALERT "Write Name: %s, Counter: %ld\n", tmp->name, tmp->counter, tmp->key);
+	}
+
+	// for_each_possible_cpu(i) {
+	// 	counter = 0;
+	// 	for(j = 0; j < NUM_BUCKETS; j++)
+	// 		if(*per_cpu_ptr(&bucket_usage[j],i))
+	// 			counter++;
+	// 	printk(KERN_ALERT "CPU: %d, collisions: %ld bucket_usage: %ld\n", i, *per_cpu_ptr(&collisions, i), counter);
+	// }
+}
+
+/*
+	------------------------- Lock Switcher -------------------
+*/
 
 #define IS_VALUE 1
 #define IS_DIRECTION 2

@@ -114,8 +114,8 @@
 #ifdef KOMB_STATS
 DEFINE_PER_CPU_ALIGNED(uint64_t, rwsem_combiner_count);
 DEFINE_PER_CPU_ALIGNED(uint64_t, rwsem_waiter_combined);
-DEFINE_PER_CPU_ALIGNED(uint64_t, rwsem_ooo_combiner_count);
-DEFINE_PER_CPU_ALIGNED(uint64_t, rwsem_ooo_waiter_combined);
+DEFINE_PER_CPU_ALIGNED(uint64_t, rwsem_reads);
+DEFINE_PER_CPU_ALIGNED(uint64_t, rwsem_writes);
 DEFINE_PER_CPU_ALIGNED(uint64_t, rwsem_ooo_unlocks);
 DEFINE_PER_CPU_ALIGNED(uint64_t, rwsem_downgrade);
 #endif
@@ -302,7 +302,7 @@ void down_read(struct rw_semaphore *lock)
 
 		if (cmpxchg(slot, 0, new_val) == 0) {
 			if (READ_ONCE(lock->rbias))
-				return;
+				goto read_exit;
 			(void)xchg(slot, NULL);
 		}
 	}
@@ -313,7 +313,7 @@ void down_read(struct rw_semaphore *lock)
 	cnts = atomic_long_add_return_acquire(_KOMB_RWSEM_R_BIAS, &lock->cnts);
 
 	if (likely(!(cnts & _KOMB_RWSEM_W_WMASK)))
-		return;
+		goto read_exit;
 
 	(void)atomic_long_sub_return_release(_KOMB_RWSEM_R_BIAS, &lock->cnts);
 
@@ -327,6 +327,11 @@ void down_read(struct rw_semaphore *lock)
 #endif
 
 	preempt_enable();
+read_exit:
+	this_cpu_inc(rwsem_reads);
+	read_stat_lock_acquire(&lock->key);
+	return;
+
 }
 EXPORT_SYMBOL(down_read);
 
@@ -352,8 +357,8 @@ execute_cs(struct rw_semaphore *lock, struct mutex_node *curr_node)
 		print_debug("Combiner got control back OOO unlock\n");
 
 #ifdef KOMB_STATS
-		this_cpu_add(rwsem_ooo_waiter_combined, current->counter_val);
-		this_cpu_inc(rwsem_ooo_combiner_count);
+		// this_cpu_add(rwsem_ooo_waiter_combined, current->counter_val);
+		// this_cpu_inc(rwsem_ooo_combiner_count);
 #endif
 
 		KOMB_BUG_ON(current->komb_curr_waiter_task == NULL);
@@ -708,7 +713,7 @@ void down_write(struct rw_semaphore *lock)
 #ifdef BRAVO
 		wait_for_visible_readers(lock);
 #endif
-		return;
+		goto write_exit;
 	}
 
 #if WRITE_BOUNDED_OPPORTUNISTIC_SPIN
@@ -725,7 +730,7 @@ void down_write(struct rw_semaphore *lock)
 #ifdef BRAVO
 			wait_for_visible_readers(lock);
 #endif
-			return;
+			goto write_exit;
 		}
 	}
 #endif
@@ -791,7 +796,7 @@ void down_write(struct rw_semaphore *lock)
 		WRITE_ONCE(next->locked, 0);
 	irq_release:
 		preempt_enable();
-		return;
+		goto write_exit;
 	}
 
 	preempt_disable();
@@ -835,6 +840,10 @@ void down_write(struct rw_semaphore *lock)
 		}
 	}
 	preempt_enable();
+write_exit:
+	this_cpu_inc(rwsem_writes);
+	write_stat_lock_acquire(&lock->key);
+	return;
 }
 EXPORT_SYMBOL(down_write);
 
@@ -978,18 +987,16 @@ void komb_rwsem_init(void)
 }
 
 void __init_rwsem(struct rw_semaphore *lock, const char *name,
-		  struct lock_class_key *key)
+		  struct fds_lock_key *key)
 {
 	atomic_long_set(&lock->cnts, 0);
 	atomic_set(&lock->reader_wait_lock.val, 0);
 	lock->reader_wait_lock.tail = NULL;
 	lock->writer_tail = NULL;
-#ifdef CONFIG_DEBUG_LOCK_ALLOC
-       lockdep_init_map_wait(&lock->dep_map, name, key, 0, LD_WAIT_SLEEP);
-#endif
-#ifdef CONFIG_DEBUG_RWSEMS
-       sem->magic = sem;
-#endif
+	lock->key.name = name;
+	lock->key.ptr = key;
+	key->name = name;
+	key->ptr = key;
 }
 EXPORT_SYMBOL(__init_rwsem);
 
@@ -1032,7 +1039,8 @@ int down_read_trylock(struct rw_semaphore *lock)
 		    (!READ_ONCE(lock->rbias) && rdtsc() >= lock->inhibit_until))
 			WRITE_ONCE(lock->rbias, 1);
 #endif
-
+		this_cpu_inc(rwsem_reads);
+		read_stat_lock_acquire(&lock->key);
 		return 1;
 	}
 	(void)atomic_long_sub_return_release(_KOMB_RWSEM_R_BIAS, &lock->cnts);
@@ -1053,11 +1061,13 @@ int down_write_trylock(struct rw_semaphore *lock)
 	int val = (atomic_long_cmpxchg_acquire(&lock->cnts, 0,
 					       _KOMB_RWSEM_W_LOCKED) == 0);
 
+	if (val) {
 #ifdef BRAVO
-	if (val)
 		wait_for_visible_readers(lock);
 #endif
-
+		this_cpu_inc(rwsem_writes);
+		write_stat_lock_acquire(&lock->key);
+	}
 	return val;
 }
 EXPORT_SYMBOL(down_write_trylock);

@@ -14,6 +14,7 @@
 #include <linux/atomic.h>
 #include <linux/err.h>
 #include <linux/mutex.h>
+#include <linux/feedbacksync.h>
 
 //#define BRAVO 1
 
@@ -40,22 +41,6 @@
 #define CHECK_FOR_BIAS 16
 #define MULTIPLIER 9
 
-#ifdef CONFIG_DEBUG_LOCK_ALLOC
-#define __RWSEM_DEP_MAP_INIT(lockname)            \
-	.dep_map = {                              \
-		.name = #lockname,                \
-		.wait_type_inner = LD_WAIT_SLEEP, \
-	},
-#else
-#define __RWSEM_DEP_MAP_INIT(lockname)
-#endif
-
-#ifdef CONFIG_DEBUG_RWSEMS
-# define __RWSEM_DEBUG_INIT(lockname) .magic = &lockname,
-#else
-# define __RWSEM_DEBUG_INIT(lockname)
-#endif
-
 struct rw_semaphore {
 	union {
 		atomic_long_t cnts;
@@ -76,12 +61,7 @@ struct rw_semaphore {
 	int rbias;
 	u64 inhibit_until;
 #endif
-#ifdef CONFIG_DEBUG_RWSEMS
-	void *magic;
-#endif
-#ifdef CONFIG_DEBUG_LOCK_ALLOC
-	struct lockdep_map dep_map;
-#endif
+	struct fds_lock_key key;
 };
 
 static inline int rwsem_is_locked(struct rw_semaphore *sem)
@@ -93,23 +73,25 @@ static inline int rwsem_is_locked(struct rw_semaphore *sem)
 
 #define __RWSEM_OPT_INIT(lockname)
 
-#define __RWSEM_INITIALIZER(lockname)                              \
-	{                                                          \
-		.cnts = ATOMIC_LONG_INIT(0),                       \
-		.reader_wait_lock.val = ATOMIC_INIT(0),            \
+#define __RWSEM_INITIALIZER(lockname)                               \
+	{                                                           \
+		.cnts = ATOMIC_LONG_INIT(0),                        \
+		.reader_wait_lock.val = ATOMIC_INIT(0),             \
 		.reader_wait_lock.tail = NULL, .writer_tail = NULL, \
-		__RWSEM_DEBUG_INIT(lockname)                              \
-	         __RWSEM_DEP_MAP_INIT(lockname)  	\
+		.key = {                                            \
+			.name = #lockname,                          \
+			.ptr = NULL,                                \
+		},                                                  \
 	}
 
 #define DECLARE_RWSEM(name) struct rw_semaphore name = __RWSEM_INITIALIZER(name)
 
 extern void __init_rwsem(struct rw_semaphore *sem, const char *name,
-			 struct lock_class_key *key);
+			 struct fds_lock_key *key);
 
 #define init_rwsem(sem)                             \
 	do {                                        \
-		static struct lock_class_key __key; \
+		static struct fds_lock_key __key; \
                                                     \
 		__init_rwsem((sem), #sem, &__key);  \
 	} while (0)
