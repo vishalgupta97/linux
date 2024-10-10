@@ -5,6 +5,10 @@
 #include <linux/proc_fs.h>
 #include <linux/feedbacksync.h>
 #include <linux/hashtable.h>
+#include <linux/kthread.h>
+#include <linux/delay.h>
+#include <linux/module.h>
+#include <linux/combiner.h>
 
 /*
 	------------------------- Lock Stat Collector -------------------
@@ -24,24 +28,24 @@ DEFINE_PER_CPU_ALIGNED(uint64_t, collisions);
 
 void __stat_lock_acquire(struct fds_lock_key *key, bool read)
 {
-	if(key == NULL || key->ptr == NULL)
+	if (key == NULL || key->ptr == NULL)
 		return;
 
 	uint64_t bucket = (((uint64_t)key->ptr) & (0x1fff));
-	while(bucket < NUM_BUCKETS) {
+	while (bucket < NUM_BUCKETS) {
 		struct lock_stat *stat_ptr;
-		if(read)
+		if (read)
 			stat_ptr = this_cpu_ptr(&read_lock_stats[bucket]);
 		else
 			stat_ptr = this_cpu_ptr(&write_lock_stats[bucket]);
-		if(stat_ptr->key == NULL) {
-			if(stat_ptr->counter > 0)
+		if (stat_ptr->key == NULL) {
+			if (stat_ptr->counter > 0)
 				this_cpu_inc(collisions);
 			stat_ptr->key = key->ptr;
 			stat_ptr->counter = 1;
 			stat_ptr->name = key->name;
 			goto out;
-		} else if(stat_ptr->key == key->ptr) {
+		} else if (stat_ptr->key == key->ptr) {
 			stat_ptr->counter++;
 			goto out;
 		}
@@ -72,59 +76,108 @@ void spin_stat_lock_acquire(struct fds_lock_key *key)
 	__stat_lock_acquire(key, false);
 }
 
-void print_fds_stats(void) {
-	printk(KERN_ALERT "======== Feedback sync stats ========\n");
+DEFINE_HASHTABLE(read_stats_ht, 5);
+DEFINE_HASHTABLE(write_stats_ht, 5);
+
+void collect_fds_stats(void)
+{
 	int i, j, bkt;
 	struct lock_stat *tmp;
-	uint64_t counter;
 
-	DEFINE_HASHTABLE(read_stats_ht, 5);
-	DEFINE_HASHTABLE(write_stats_ht, 5);
-
-	for(j = 0; j < NUM_BUCKETS; j++) {
+	for (j = 0; j < NUM_BUCKETS; j++) {
 		for_each_online_cpu(i) {
-			struct lock_stat *stat = per_cpu_ptr(&read_lock_stats[j], i);
-			if(stat->counter > 0) {
+			struct lock_stat *stat =
+				per_cpu_ptr(&read_lock_stats[j], i);
+			if (stat->counter > 0) {
 				bool found = false;
 				hash_for_each(read_stats_ht, bkt, tmp, hnode) {
-					if(stat->key != NULL && tmp->key != NULL) {
-						if(stat->key == tmp->key) {
-							tmp->counter += stat->counter;
+					if (stat == tmp) {
+						found = true;
+						break;
+					}
+					if (stat->key != NULL &&
+					    tmp->key != NULL) {
+						if (stat->key == tmp->key) {
+							tmp->counter +=
+								stat->counter;
+							stat->counter = 0;
 							found = true;
 							break;
 						}
 					}
 				}
-				if(!found)
-					hash_add(read_stats_ht, &stat->hnode, stat->key);
+				if (!found)
+					hash_add(read_stats_ht, &stat->hnode,
+						 stat->key);
 			}
-			
+
 			stat = per_cpu_ptr(&write_lock_stats[j], i);
-			if(stat->counter > 0) {
+			if (stat->counter > 0) {
 				bool found = false;
 				hash_for_each(write_stats_ht, bkt, tmp, hnode) {
-					if(stat->key != NULL && tmp->key != NULL) {
-						if(stat->key == tmp->key) {
-							tmp->counter += stat->counter;
+					if (stat == tmp) {
+						found = true;
+						break;
+					}
+					if (stat->key != NULL &&
+					    tmp->key != NULL) {
+						if (stat->key == tmp->key) {
+							tmp->counter +=
+								stat->counter;
+							stat->counter = 0;
 							found = true;
 							break;
 						}
 					}
 				}
-				if(!found)
-					hash_add(write_stats_ht, &stat->hnode, stat->key);
+				if (!found)
+					hash_add(write_stats_ht, &stat->hnode,
+						 stat->key);
 			}
 		}
 	}
+}
 
-	printk(KERN_ALERT "Traversal done\n");
+void reset_fds_stats(void)
+{
+	int bkt;
+	struct lock_stat *tmp;
 	hash_for_each(read_stats_ht, bkt, tmp, hnode) {
-		printk(KERN_ALERT "Read Name: %s, Counter: %ld\n", tmp->name, tmp->counter, tmp->key);
+		tmp->counter = 0;
 	}
 
 	hash_for_each(write_stats_ht, bkt, tmp, hnode) {
-		printk(KERN_ALERT "Write Name: %s, Counter: %ld\n", tmp->name, tmp->counter, tmp->key);
+		tmp->counter = 0;
 	}
+}
+
+void print_fds_stats(void)
+{
+	printk(KERN_ALERT "======== Feedback sync stats ========\n");
+	int bkt;
+	struct lock_stat *tmp;
+	uint64_t rcount = 0, wcount = 0;
+
+	collect_fds_stats();
+
+	printk(KERN_ALERT "Traversal done\n");
+	hash_for_each(read_stats_ht, bkt, tmp, hnode) {
+		if (tmp->counter) {
+			printk(KERN_ALERT "Read Name: %s, Counter: %ld\n",
+			       tmp->name, tmp->counter);
+			rcount++;
+		}
+	}
+
+	hash_for_each(write_stats_ht, bkt, tmp, hnode) {
+		if (tmp->counter) {
+			printk(KERN_ALERT "Write Name: %s, Counter: %ld\n",
+			       tmp->name, tmp->counter);
+			wcount++;
+		}
+	}
+
+	printk(KERN_ALERT "Read locks: %ld Write locks: %ld\n", rcount, wcount);
 
 	// for_each_possible_cpu(i) {
 	// 	counter = 0;
@@ -147,6 +200,8 @@ uint64_t direction = 0;
 
 bool do_fds_fallback = false;
 bool do_tas_fallback = false;
+
+static struct task_struct *fdsthreads;
 
 static ssize_t fds_write(const char __user *buffer, size_t count, int type)
 {
@@ -203,9 +258,58 @@ static const struct proc_ops direction_proc_ops = {
 	.proc_write = fds_direction_write,
 };
 
-void __init feedback_sync_init(void)
+void monitor_fds_stats(void)
+{
+	int bkt;
+	struct lock_stat *tmp;
+
+	hash_for_each(write_stats_ht, bkt, tmp, hnode) {
+		if (tmp->counter > 1000000) {
+			printk(KERN_ALERT
+			       "Flipping Name: %s, Counter: %ld initial: %d\n",
+			       tmp->name, tmp->counter, tmp->key->ptr->lockm);
+			if(tmp->key->ptr->lockm == FDS_QSPINLOCK)
+			 	tmp->key->ptr->lockm = FDS_TCLOCK;
+			else
+			 	tmp->key->ptr->lockm = FDS_QSPINLOCK;
+		}
+	}
+}
+
+int fds_monitor(void *args)
+{
+	printk(KERN_ALERT "Starting fds monitor\n");
+	while (!kthread_should_stop()) {
+		msleep(10000);
+		preempt_disable();
+		print_komb_stats();
+		collect_fds_stats();
+		//print_fds_stats();
+		monitor_fds_stats();
+		reset_fds_stats();
+		preempt_enable();
+		if (need_resched)
+			cond_resched();
+	}
+
+	return 0;
+}
+
+static int __init feedback_sync_init(void)
 {
 	proc_mkdir("fds", NULL);
 	proc_create("fds/value", 0222, NULL, &value_proc_ops);
 	proc_create("fds/direction", 0222, NULL, &direction_proc_ops);
+
+	fdsthreads = kthread_create(fds_monitor, NULL, "fds_monitor");
+	kthread_bind(fdsthreads, 95);
+	if (fdsthreads) {
+		wake_up_process(fdsthreads);
+		return 0;
+	} else {
+		printk(KERN_ALERT "failed to create fds threads\n");
+		return -1;
+	}
 }
+
+module_init(feedback_sync_init)

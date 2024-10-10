@@ -6,14 +6,30 @@
 
 #define NUM_BUCKETS 8192
 
-struct fds_lock_key {
-        struct fds_lock_key *ptr;
-        const char *name;
+enum fds_lock_mechanisms {
+	FDS_TAS,
+	FDS_QSPINLOCK,
+	FDS_TCLOCK,
 };
 
-void __init feedback_sync_init(void);
+struct fds_lock_key {
+	struct fds_lock_key *ptr;
+	const char *name;
+	enum fds_lock_mechanisms lockm;
+};
+
+#define init_fds_lock_key(key, name)                \
+	{                                           \
+		if (key->ptr == NULL) {             \
+			key->ptr = key;             \
+			key->name = name;           \
+			key->lockm = FDS_QSPINLOCK; \
+		}                                   \
+	}
+
 void read_stat_lock_acquire(struct fds_lock_key *key);
 void write_stat_lock_acquire(struct fds_lock_key *key);
+void mutex_stat_lock_acquire(struct fds_lock_key *key);
 void print_fds_stats(void);
 
 #endif

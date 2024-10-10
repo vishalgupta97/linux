@@ -302,7 +302,6 @@ void __init proc_root_init(void)
 	proc_tty_init();
 	proc_mkdir("bus", NULL);
 	proc_sys_init();
-	feedback_sync_init();
 
 	/*
 	 * Last things last. It is not like userspace processes eager

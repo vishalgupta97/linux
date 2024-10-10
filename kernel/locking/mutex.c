@@ -590,6 +590,7 @@ __attribute__((noipa)) noinline notrace void mutex_lock(struct mutex *lock)
 
 	ret = cmpxchg(&lock->locked, 0, 1);
 	if (likely(ret == 0)) {
+		mutex_stat_lock_acquire(&lock->key);
 		return;
 	}
 
@@ -631,6 +632,7 @@ __attribute__((noipa)) noinline notrace void mutex_lock(struct mutex *lock)
 		}
 	}
 	trace_contention_end(lock, 0);
+	mutex_stat_lock_acquire(&lock->key);
 	preempt_enable();
 }
 EXPORT_SYMBOL(mutex_lock);
@@ -667,8 +669,10 @@ EXPORT_SYMBOL(mutex_is_locked);
 
 int mutex_trylock(struct mutex *lock)
 {
-	if (!lock->locked && cmpxchg(&lock->locked, 0, 1) == 0)
+	if (!lock->locked && cmpxchg(&lock->locked, 0, 1) == 0) {
+		mutex_stat_lock_acquire(&lock->key);
 		return 1;
+	}
 
 	return 0;
 }
@@ -791,13 +795,24 @@ void __sched ww_mutex_unlock(struct ww_mutex *lock)
 }
 EXPORT_SYMBOL(ww_mutex_unlock);
 
+void ___mutex_init(struct mutex *lock, const char *name,
+		   struct fds_lock_key *key)
+{
+	lock->tail = NULL;
+	atomic_set(&lock->state, 0);
+	lock->combiner_task = NULL;
+	lock->key.name = name;
+	lock->key.ptr = key;
+	init_fds_lock_key(key, name);
+}
+EXPORT_SYMBOL(___mutex_init);
+
 void __mutex_init(struct mutex *lock, const char *name,
 		  struct lock_class_key *key)
 {
 	lock->tail = NULL;
 	atomic_set(&lock->state, 0);
 	lock->combiner_task = NULL;
-	debug_mutex_init(lock, name, key);
 }
 EXPORT_SYMBOL(__mutex_init);
 

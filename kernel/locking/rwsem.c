@@ -120,9 +120,6 @@ DEFINE_PER_CPU_ALIGNED(uint64_t, rwsem_ooo_unlocks);
 DEFINE_PER_CPU_ALIGNED(uint64_t, rwsem_downgrade);
 #endif
 
-extern bool do_fds_fallback;
-extern bool do_tas_fallback;
-
 #ifdef BRAVO
 
 uint64_t **global_vr_table;
@@ -331,7 +328,6 @@ read_exit:
 	this_cpu_inc(rwsem_reads);
 	read_stat_lock_acquire(&lock->key);
 	return;
-
 }
 EXPORT_SYMBOL(down_read);
 
@@ -385,8 +381,9 @@ execute_cs(struct rw_semaphore *lock, struct mutex_node *curr_node)
 					     current->komb_next_waiter_task)
 					    ->komb_mutex_node;
 
-		if (next_node && next_node->next && !check_irq_node(next_node) &&
-			!check_irq_node(next_node->next))
+		if (next_node && next_node->next &&
+		    !check_irq_node(next_node) &&
+		    !check_irq_node(next_node->next))
 			execute_cs(lock, next_node);
 	}
 }
@@ -401,7 +398,8 @@ run_combiner(struct rw_semaphore *lock, struct mutex_node *curr_node)
 	struct mutex_node *next_node = curr_node->next, *waker = curr_node;
 	int counter = 0;
 
-	if (next_node == NULL || check_irq_node(curr_node) || check_irq_node(next_node)) {
+	if (next_node == NULL || check_irq_node(curr_node) ||
+	    check_irq_node(next_node)) {
 		set_locked(lock);
 
 		wake_up_waiter(curr_node);
@@ -735,7 +733,7 @@ void down_write(struct rw_semaphore *lock)
 	}
 #endif
 
-	if(do_fds_fallback) {
+	if (lock->key.ptr == NULL || lock->key.ptr->lockm == FDS_QSPINLOCK) {
 		preempt_disable();
 
 		struct mutex_node *prev, *next;
@@ -755,32 +753,35 @@ void down_write(struct rw_semaphore *lock)
 
 		if (prev) {
 			WRITE_ONCE(prev->next, curr_node);
-			smp_cond_load_relaxed_sleep(curr_node, &curr_node->locked,
-						VAL == 0);
-			KOMB_BUG_ON(READ_ONCE(curr_node->completed) == KOMB_WAITER_PROCESSED);
+			smp_cond_load_relaxed_sleep(
+				curr_node, &curr_node->locked, VAL == 0);
+			KOMB_BUG_ON(READ_ONCE(curr_node->completed) ==
+				    KOMB_WAITER_PROCESSED);
 		}
 
 		aqm_lock(&lock->reader_wait_lock);
 
 		if (!atomic_long_read(&lock->cnts) &&
-		(atomic_long_cmpxchg_relaxed(&lock->cnts, 0,
-						_KOMB_RWSEM_W_LOCKED) == 0))
+		    (atomic_long_cmpxchg_relaxed(&lock->cnts, 0,
+						 _KOMB_RWSEM_W_LOCKED) == 0))
 			goto irq_unlock;
 
-		atomic_long_add_return_acquire(_KOMB_RWSEM_W_WAITING, &lock->cnts);
-		
+		atomic_long_add_return_acquire(_KOMB_RWSEM_W_WAITING,
+					       &lock->cnts);
+
 		do {
 			atomic_long_cond_read_acquire_sched(
 				&lock->cnts, VAL == _KOMB_RWSEM_W_WAITING);
-		} while (atomic_long_cmpxchg_relaxed(&lock->cnts, _KOMB_RWSEM_W_WAITING,
-						_KOMB_RWSEM_W_LOCKED) !=
-			_KOMB_RWSEM_W_WAITING);
-	irq_unlock:
+		} while (atomic_long_cmpxchg_relaxed(&lock->cnts,
+						     _KOMB_RWSEM_W_WAITING,
+						     _KOMB_RWSEM_W_LOCKED) !=
+			 _KOMB_RWSEM_W_WAITING);
+irq_unlock:
 		aqm_unlock(&lock->reader_wait_lock);
 
-	#ifdef BRAVO
+#ifdef BRAVO
 		wait_for_visible_readers(lock);
-	#endif
+#endif
 
 		if (cmpxchg(&lock->writer_tail, curr_node, NULL) == curr_node)
 			goto irq_release;
@@ -794,7 +795,7 @@ void down_write(struct rw_semaphore *lock)
 		}
 		wake_up_waiter(next);
 		WRITE_ONCE(next->locked, 0);
-	irq_release:
+irq_release:
 		preempt_enable();
 		goto write_exit;
 	}
@@ -995,8 +996,7 @@ void __init_rwsem(struct rw_semaphore *lock, const char *name,
 	lock->writer_tail = NULL;
 	lock->key.name = name;
 	lock->key.ptr = key;
-	key->name = name;
-	key->ptr = key;
+	init_fds_lock_key(key, name);
 }
 EXPORT_SYMBOL(__init_rwsem);
 

@@ -1488,6 +1488,7 @@ static int __ref kernel_init(void *unused)
 	pti_finalize();
 
 	system_state = SYSTEM_RUNNING;
+
 	numa_default_policy();
 
 	rcu_end_inkernel_boot();

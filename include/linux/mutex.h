@@ -16,45 +16,31 @@
 #include <linux/mutex_types.h>
 
 struct device;
+static inline void mutex_destroy(struct mutex *lock)
+{
+}
 
-#ifdef CONFIG_DEBUG_LOCK_ALLOC
-#define __DEP_MAP_MUTEX_INITIALIZER(lockname)     \
-	, .dep_map = {                            \
-		.name = #lockname,                \
-		.wait_type_inner = LD_WAIT_SLEEP, \
-	}
-#else
-#define __DEP_MAP_MUTEX_INITIALIZER(lockname)
-#endif
-
-#ifdef CONFIG_DEBUG_MUTEXES
-#define __DEBUG_MUTEX_INITIALIZER(lockname) \
-	, .magic = &lockname
-extern void mutex_destroy(struct mutex *lock);
-#else
-#define __DEBUG_MUTEX_INITIALIZER(lockname)
-static inline void mutex_destroy(struct mutex *lock) {}
-#endif
-
-
-
-#define mutex_init(mutex)                              \
-	do {                                           \
-		static struct lock_class_key __key;    \
-                                                       \
-		__mutex_init((mutex), #mutex, &__key); \
+#define mutex_init(mutex)                               \
+	do {                                            \
+		static struct fds_lock_key __key;       \
+                                                        \
+		___mutex_init((mutex), #mutex, &__key); \
 	} while (0)
 
 #define __MUTEX_INITIALIZER(lockname)                                         \
 	{                                                                     \
-		.tail = NULL, .state = ATOMIC_INIT(0), .combiner_task = NULL \
-		__DEBUG_MUTEX_INITIALIZER(lockname)                           \
-			__DEP_MAP_MUTEX_INITIALIZER(lockname)                 \
+		.tail = NULL, .state = ATOMIC_INIT(0), .combiner_task = NULL, \
+		.key = {                                                      \
+			.name = #lockname,                                    \
+			.ptr = NULL,                                          \
+		},                                                            \
 	}
 
 #define DEFINE_MUTEX(mutexname) \
 	struct mutex mutexname = __MUTEX_INITIALIZER(mutexname)
 
+extern void ___mutex_init(struct mutex *lock, const char *name,
+			  struct fds_lock_key *key);
 extern void __mutex_init(struct mutex *lock, const char *name,
 			 struct lock_class_key *key);
 

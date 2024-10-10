@@ -7,6 +7,7 @@
 #include <linux/osq_lock.h>
 #include <linux/spinlock_types.h>
 #include <linux/types.h>
+#include <linux/feedbacksync.h>
 
 #ifndef CONFIG_PREEMPT_RT
 
@@ -79,12 +80,7 @@ struct mutex {
 		u8 locked;
 	};
 	struct task_struct *combiner_task;
-#ifdef CONFIG_DEBUG_MUTEXES
-	void *magic;
-#endif
-#ifdef CONFIG_DEBUG_LOCK_ALLOC
-	struct lockdep_map dep_map;
-#endif
+	struct fds_lock_key key;
 };
 
 #else /* !CONFIG_PREEMPT_RT */
