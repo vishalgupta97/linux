@@ -12,6 +12,8 @@
 
 #define NUM_PREFETCH_LINES 6
 
+#define IRQ_NUMA_NODE 255
+
 #define LOCK_START_TIMING_DISABLE(name, start)
 #define LOCK_START_TIMING_PER_CPU_DISABLE(name)
 #define LOCK_END_TIMING_DISABLE(name, start)
@@ -80,8 +82,8 @@ DECLARE_PER_CPU_ALIGNED(u64, ooo_unlocks);
 DECLARE_PER_CPU_ALIGNED(u64, lock_not_in_task);
 DECLARE_PER_CPU_ALIGNED(u64, mutex_combiner_count);
 DECLARE_PER_CPU_ALIGNED(u64, mutex_waiter_combined);
-DECLARE_PER_CPU_ALIGNED(u64, mutex_ooo_combiner_count);
-DECLARE_PER_CPU_ALIGNED(u64, mutex_ooo_waiter_combined);
+DECLARE_PER_CPU_ALIGNED(u64, mutex_qspinlock);
+DECLARE_PER_CPU_ALIGNED(u64, mutex_tclock);
 DECLARE_PER_CPU_ALIGNED(u64, mutex_ooo_unlocks);
 DECLARE_PER_CPU_ALIGNED(u64, rwsem_combiner_count);
 DECLARE_PER_CPU_ALIGNED(u64, rwsem_waiter_combined);

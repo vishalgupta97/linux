@@ -23,7 +23,7 @@ struct fds_lock_key {
 		if (key->ptr == NULL) {             \
 			key->ptr = key;             \
 			key->name = name;           \
-			key->lockm = FDS_QSPINLOCK; \
+			key->lockm = FDS_TCLOCK; \
 		}                                   \
 	}
 

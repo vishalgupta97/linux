@@ -112,8 +112,8 @@
 #ifdef KOMB_STATS
 DEFINE_PER_CPU_ALIGNED(uint64_t, mutex_combiner_count);
 DEFINE_PER_CPU_ALIGNED(uint64_t, mutex_waiter_combined);
-DEFINE_PER_CPU_ALIGNED(uint64_t, mutex_ooo_combiner_count);
-DEFINE_PER_CPU_ALIGNED(uint64_t, mutex_ooo_waiter_combined);
+DEFINE_PER_CPU_ALIGNED(uint64_t, mutex_qspinlock);
+DEFINE_PER_CPU_ALIGNED(uint64_t, mutex_tclock);
 DEFINE_PER_CPU_ALIGNED(uint64_t, mutex_ooo_unlocks);
 #endif
 
@@ -196,6 +196,11 @@ __always_inline static void add_to_local_queue(struct mutex_node *node)
 	}
 }
 
+static inline bool check_irq_node(struct mutex_node *node)
+{
+	return (node->socket_id == IRQ_NUMA_NODE || node->rsp == 0xdeadbeef);
+}
+
 __always_inline static struct mutex_node *
 get_next_node(struct mutex_node *my_node)
 {
@@ -207,6 +212,11 @@ get_next_node(struct mutex_node *my_node)
 	while (true) {
 		if (next_node == NULL || next_node->next == NULL)
 			goto next_node_null;
+		else if (check_irq_node(next_node) ||
+			 check_irq_node(next_node->next))
+			goto next_node_null;
+
+		prefetch(next_node->next);
 
 		if (next_node->socket_id == numa_node_id()) {
 			void *rsp_ptr = (next_node->rsp);
@@ -216,8 +226,6 @@ get_next_node(struct mutex_node *my_node)
 			prefetchw(rsp_ptr + 192);
 			prefetchw(rsp_ptr + 256);
 			prefetchw(rsp_ptr + 320);
-
-			prefetch(next_node->next);
 
 			return next_node;
 		}
@@ -253,11 +261,6 @@ execute_cs(struct mutex *lock, struct mutex_node *curr_node)
 	if (lock->locked == _Q_UNLOCKED_OOO_VAL) {
 		print_debug("Combiner got control back OOO unlock\n");
 
-#ifdef KOMB_STATS
-		this_cpu_add(mutex_ooo_waiter_combined, current->counter_val);
-		this_cpu_inc(mutex_ooo_combiner_count);
-#endif
-
 		KOMB_BUG_ON(current->komb_curr_waiter_task == NULL);
 
 		curr_node =
@@ -282,7 +285,9 @@ execute_cs(struct mutex *lock, struct mutex_node *curr_node)
 					     current->komb_next_waiter_task)
 					    ->komb_mutex_node;
 
-		if (next_node && next_node->next)
+		if (next_node && next_node->next &&
+		    !check_irq_node(next_node) &&
+		    !check_irq_node(next_node->next))
 			execute_cs(lock, next_node);
 	}
 }
@@ -299,7 +304,8 @@ run_combiner(struct mutex *lock, struct mutex_node *curr_node)
 	struct mutex_node *next_node = curr_node->next;
 	int counter = 0;
 
-	if (next_node == NULL) {
+	if (next_node == NULL || check_irq_node(curr_node) ||
+	    check_irq_node(next_node)) {
 		set_locked(lock);
 		wake_up_waiter(curr_node);
 		WRITE_ONCE(curr_node->locked, 0);
@@ -590,13 +596,69 @@ __attribute__((noipa)) noinline notrace void mutex_lock(struct mutex *lock)
 
 	ret = cmpxchg(&lock->locked, 0, 1);
 	if (likely(ret == 0)) {
-		mutex_stat_lock_acquire(&lock->key);
+		// mutex_stat_lock_acquire(&lock->key);
 		return;
 	}
 
 	might_sleep();
 
+	if (lock->key.ptr == NULL || lock->key.ptr->lockm == FDS_QSPINLOCK) {
+		preempt_disable();
+		this_cpu_inc(mutex_qspinlock);
+
+		struct mutex_node *prev, *next;
+		struct mutex_node *curr_node = get_komb_mutex_node(lock);
+
+		curr_node->locked = true;
+		curr_node->completed = KOMB_WAITER_UNPROCESSED;
+		curr_node->next = NULL;
+		curr_node->socket_id = IRQ_NUMA_NODE;
+		curr_node->cpuid = smp_processor_id();
+		curr_node->task_struct_ptr = current;
+		curr_node->lock = lock;
+
+		prev = xchg(&lock->tail, curr_node);
+		next = NULL;
+
+		if (prev) {
+			WRITE_ONCE(prev->next, curr_node);
+			smp_mb();
+			smp_cond_load_relaxed_sleep(
+				curr_node, &curr_node->locked, VAL == 0);
+			KOMB_BUG_ON(READ_ONCE(curr_node->completed) ==
+				    KOMB_WAITER_PROCESSED);
+		}
+
+		for (;;) {
+			while (READ_ONCE(lock->locked)) {
+				cpu_relax();
+				if (need_resched())
+					schedule_out_curr_task();
+			}
+
+			if (cmpxchg(&lock->locked, 0, 1) == 0)
+				break;
+		}
+
+		if (cmpxchg(&lock->tail, curr_node, NULL) == curr_node)
+			goto irq_release;
+
+		while (!next) {
+			next = READ_ONCE(curr_node->next);
+
+			cpu_relax();
+			if (need_resched())
+				schedule_out_curr_task();
+		}
+		wake_up_waiter(next);
+		WRITE_ONCE(next->locked, 0);
+irq_release:
+		preempt_enable();
+		goto write_exit;
+	}
+
 	preempt_disable();
+	this_cpu_inc(mutex_tclock);
 	trace_contention_begin(lock, LCB_F_MUTEX);
 	__komb_mutex_lock(lock);
 
@@ -632,8 +694,9 @@ __attribute__((noipa)) noinline notrace void mutex_lock(struct mutex *lock)
 		}
 	}
 	trace_contention_end(lock, 0);
-	mutex_stat_lock_acquire(&lock->key);
 	preempt_enable();
+write_exit:
+	mutex_stat_lock_acquire(&lock->key);
 }
 EXPORT_SYMBOL(mutex_lock);
 
@@ -743,6 +806,7 @@ __attribute__((noipa)) noinline notrace void mutex_unlock(struct mutex *lock)
 	KOMB_BUG_ON(lock->combiner_task != current);
 
 	if (next_node == NULL || next_node->next == NULL ||
+	    check_irq_node(next_node) || check_irq_node(next_node->next) ||
 	    counter >= komb_batch_size) {
 		incoming_rsp_ptr = &(current->komb_stack_curr_ptr);
 		current->komb_prev_waiter_task = current->komb_curr_waiter_task;

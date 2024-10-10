@@ -264,7 +264,7 @@ void monitor_fds_stats(void)
 	struct lock_stat *tmp;
 
 	hash_for_each(write_stats_ht, bkt, tmp, hnode) {
-		if (tmp->counter > 1000000) {
+		if (tmp->counter > 500000) {
 			printk(KERN_ALERT
 			       "Flipping Name: %s, Counter: %ld initial: %d\n",
 			       tmp->name, tmp->counter, tmp->key->ptr->lockm);

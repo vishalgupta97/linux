@@ -29,7 +29,6 @@
 #endif
 
 #define SIZE_OF_SHADOW_STACK 8192L
-#define IRQ_NUMA_NODE 255
 
 //#define DEBUG_KOMB 1
 

@@ -56,8 +56,8 @@ void print_komb_stats(void)
 		total_counters[6] += per_cpu(mutex_combiner_count, i);
 		total_counters[7] += per_cpu(mutex_waiter_combined, i);
 		total_counters[8] += per_cpu(mutex_ooo_unlocks, i);
-		total_counters[9] += per_cpu(mutex_ooo_combiner_count, i);
-		total_counters[10] += per_cpu(mutex_ooo_waiter_combined, i);
+		total_counters[9] += per_cpu(mutex_qspinlock, i);
+		total_counters[10] += per_cpu(mutex_tclock, i);
 		total_counters[11] += per_cpu(rwsem_combiner_count, i);
 		total_counters[12] += per_cpu(rwsem_waiter_combined, i);
 		total_counters[13] += per_cpu(rwsem_ooo_unlocks, i);
@@ -75,16 +75,13 @@ void print_komb_stats(void)
 	printk(KERN_ALERT "mutex_Combiner_count: %ld\n", total_counters[6]);
 	printk(KERN_ALERT "mutex_waiter_combined: %ld\n", total_counters[7]);
 	printk(KERN_ALERT "mutex_ooo_unlocks: %ld\n", total_counters[8]);
-	printk(KERN_ALERT "mutex_ooo_combiner_count: %ld\n", total_counters[9]);
-	printk(KERN_ALERT "mutex_ooo_waiter_combined: %ld\n",
-	       total_counters[10]);
+	printk(KERN_ALERT "mutex_qspinlock: %ld\n", total_counters[9]);
+	printk(KERN_ALERT "mutex_tclock: %ld\n", total_counters[10]);
 	printk(KERN_ALERT "rwsem_Combiner_count: %ld\n", total_counters[11]);
 	printk(KERN_ALERT "rwsem_waiter_combined: %ld\n", total_counters[12]);
 	printk(KERN_ALERT "rwsem_ooo_unlocks: %ld\n", total_counters[13]);
-	printk(KERN_ALERT "rwsem_reads: %ld\n",
-	       total_counters[14]);
-	printk(KERN_ALERT "rwsem_writes: %ld\n",
-	       total_counters[15]);
+	printk(KERN_ALERT "rwsem_reads: %ld\n", total_counters[14]);
+	printk(KERN_ALERT "rwsem_writes: %ld\n", total_counters[15]);
 	printk(KERN_ALERT "rwsem_downgrade: %ld\n", total_counters[16]);
 }
 
@@ -109,8 +106,8 @@ SYSCALL_DEFINE0(komb_clear_stats)
 		*per_cpu_ptr(&mutex_combiner_count, i) = 0;
 		*per_cpu_ptr(&mutex_waiter_combined, i) = 0;
 		*per_cpu_ptr(&mutex_ooo_unlocks, i) = 0;
-		*per_cpu_ptr(&mutex_ooo_combiner_count, i) = 0;
-		*per_cpu_ptr(&mutex_ooo_waiter_combined, i) = 0;
+		*per_cpu_ptr(&mutex_qspinlock, i) = 0;
+		*per_cpu_ptr(&mutex_tclock, i) = 0;
 		*per_cpu_ptr(&rwsem_combiner_count, i) = 0;
 		*per_cpu_ptr(&rwsem_waiter_combined, i) = 0;
 		*per_cpu_ptr(&rwsem_ooo_unlocks, i) = 0;
