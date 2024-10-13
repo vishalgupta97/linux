@@ -10,6 +10,8 @@
 #include <linux/module.h>
 #include <linux/combiner.h>
 
+static bool fds_running = false;
+
 /*
 	------------------------- Lock Stat Collector -------------------
 */
@@ -28,7 +30,7 @@ DEFINE_PER_CPU_ALIGNED(uint64_t, collisions);
 
 void __stat_lock_acquire(struct fds_lock_key *key, bool read)
 {
-	if (key == NULL || key->ptr == NULL)
+	if (!fds_running || key == NULL || key->ptr == NULL)
 		return;
 
 	uint64_t bucket = (((uint64_t)key->ptr) & (0x1fff));
@@ -43,7 +45,7 @@ void __stat_lock_acquire(struct fds_lock_key *key, bool read)
 				this_cpu_inc(collisions);
 			stat_ptr->key = key->ptr;
 			stat_ptr->counter = 1;
-			stat_ptr->name = key->name;
+			stat_ptr->name = kstrdup(key->name, GFP_KERNEL);
 			goto out;
 		} else if (stat_ptr->key == key->ptr) {
 			stat_ptr->counter++;
@@ -268,10 +270,10 @@ void monitor_fds_stats(void)
 			printk(KERN_ALERT
 			       "Flipping Name: %s, Counter: %ld initial: %d\n",
 			       tmp->name, tmp->counter, tmp->key->ptr->lockm);
-			if(tmp->key->ptr->lockm == FDS_QSPINLOCK)
-			 	tmp->key->ptr->lockm = FDS_TCLOCK;
+			if (tmp->key->ptr->lockm == FDS_QSPINLOCK)
+				tmp->key->ptr->lockm = FDS_TCLOCK;
 			else
-			 	tmp->key->ptr->lockm = FDS_QSPINLOCK;
+				tmp->key->ptr->lockm = FDS_QSPINLOCK;
 		}
 	}
 }
@@ -284,11 +286,11 @@ int fds_monitor(void *args)
 		preempt_disable();
 		print_komb_stats();
 		collect_fds_stats();
-		//print_fds_stats();
+		print_fds_stats();
 		monitor_fds_stats();
 		reset_fds_stats();
 		preempt_enable();
-		if (need_resched)
+		if (need_resched())
 			cond_resched();
 	}
 
@@ -297,6 +299,7 @@ int fds_monitor(void *args)
 
 static int __init feedback_sync_init(void)
 {
+	fds_running = true;
 	proc_mkdir("fds", NULL);
 	proc_create("fds/value", 0222, NULL, &value_proc_ops);
 	proc_create("fds/direction", 0222, NULL, &direction_proc_ops);

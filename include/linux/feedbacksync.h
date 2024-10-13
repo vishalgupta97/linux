@@ -18,18 +18,19 @@ struct fds_lock_key {
 	enum fds_lock_mechanisms lockm;
 };
 
-#define init_fds_lock_key(key, name)                \
-	{                                           \
-		if (key->ptr == NULL) {             \
-			key->ptr = key;             \
-			key->name = name;           \
+#define init_fds_lock_key(key, name)             \
+	{                                        \
+		if (key->ptr == NULL) {          \
+			key->ptr = key;          \
+			key->name = name;        \
 			key->lockm = FDS_TCLOCK; \
-		}                                   \
+		}                                \
 	}
 
 void read_stat_lock_acquire(struct fds_lock_key *key);
 void write_stat_lock_acquire(struct fds_lock_key *key);
 void mutex_stat_lock_acquire(struct fds_lock_key *key);
+void spin_stat_lock_acquire(struct fds_lock_key *key);
 void print_fds_stats(void);
 
 #endif

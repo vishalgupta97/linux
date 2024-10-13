@@ -10,36 +10,40 @@
  */
 
 #include <linux/spinlock_types_raw.h>
+#include <linux/feedbacksync.h>
 
 #ifndef CONFIG_PREEMPT_RT
 
 /* Non PREEMPT_RT kernels map spinlock to raw_spinlock */
 typedef struct spinlock {
 	union {
-		struct raw_spinlock rlock;
-#ifdef CONFIG_DEBUG_LOCK_ALLOC
-# define LOCK_PADSIZE (offsetof(struct raw_spinlock, dep_map))
+	struct raw_spinlock rlock;
+# define LOCK_PADSIZE (offsetof(struct raw_spinlock, key))
 		struct {
 			u8 __padding[LOCK_PADSIZE];
-			struct lockdep_map dep_map;
+			struct fds_lock_key key;
 		};
-#endif
 	};
 } spinlock_t;
 
-#define ___SPIN_LOCK_INITIALIZER(lockname)	\
-	{					\
-	.raw_lock = __ARCH_SPIN_LOCK_UNLOCKED,	\
-	SPIN_DEBUG_INIT(lockname)		\
-	SPIN_DEP_MAP_INIT(lockname) }
+#define ___SPIN_LOCK_INITIALIZER(lockname)             \
+	{                                              \
+		.raw_lock = __ARCH_SPIN_LOCK_UNLOCKED, \
+	}
 
-#define __SPIN_LOCK_INITIALIZER(lockname) \
-	{ { .rlock = ___SPIN_LOCK_INITIALIZER(lockname) } }
+#define __SPIN_LOCK_INITIALIZER(lockname)                    \
+	{                                                    \
+		.rlock = ___SPIN_LOCK_INITIALIZER(lockname), \
+		.key = {                                     \
+			.name = #lockname,                   \
+			.ptr = NULL,                         \
+		},                                           \
+	}
 
 #define __SPIN_LOCK_UNLOCKED(lockname) \
 	(spinlock_t) __SPIN_LOCK_INITIALIZER(lockname)
 
-#define DEFINE_SPINLOCK(x)	spinlock_t x = __SPIN_LOCK_UNLOCKED(x)
+#define DEFINE_SPINLOCK(x) spinlock_t x = __SPIN_LOCK_UNLOCKED(x)
 
 #else /* !CONFIG_PREEMPT_RT */
 
@@ -47,26 +51,25 @@ typedef struct spinlock {
 #include <linux/rtmutex.h>
 
 typedef struct spinlock {
-	struct rt_mutex_base	lock;
+	struct rt_mutex_base lock;
 #ifdef CONFIG_DEBUG_LOCK_ALLOC
-	struct lockdep_map	dep_map;
+	struct lockdep_map dep_map;
 #endif
 } spinlock_t;
 
-#define __SPIN_LOCK_UNLOCKED(name)				\
-	{							\
-		.lock = __RT_MUTEX_BASE_INITIALIZER(name.lock),	\
-		SPIN_DEP_MAP_INIT(name)				\
+#define __SPIN_LOCK_UNLOCKED(name)                              \
+	{                                                       \
+		.lock = __RT_MUTEX_BASE_INITIALIZER(name.lock), \
+		SPIN_DEP_MAP_INIT(name)                         \
 	}
 
-#define __LOCAL_SPIN_LOCK_UNLOCKED(name)			\
-	{							\
-		.lock = __RT_MUTEX_BASE_INITIALIZER(name.lock),	\
-		LOCAL_SPIN_DEP_MAP_INIT(name)			\
+#define __LOCAL_SPIN_LOCK_UNLOCKED(name)                        \
+	{                                                       \
+		.lock = __RT_MUTEX_BASE_INITIALIZER(name.lock), \
+		LOCAL_SPIN_DEP_MAP_INIT(name)                   \
 	}
 
-#define DEFINE_SPINLOCK(name)					\
-	spinlock_t name = __SPIN_LOCK_UNLOCKED(name)
+#define DEFINE_SPINLOCK(name) spinlock_t name = __SPIN_LOCK_UNLOCKED(name)
 
 #endif /* CONFIG_PREEMPT_RT */
 

@@ -16,6 +16,7 @@
 #include <linux/percpu-defs.h>
 #include <linux/kernel.h>
 #include <linux/syscalls.h>
+#include <linux/feedbacksync.h>
 
 //#define DSM_DEBUG 1
 #ifdef DSM_DEBUG
