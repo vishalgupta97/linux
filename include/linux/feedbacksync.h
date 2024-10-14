@@ -10,6 +10,7 @@ enum fds_lock_mechanisms {
 	FDS_TAS,
 	FDS_QSPINLOCK,
 	FDS_TCLOCK,
+	FDS_TDLOCK,
 	FDS_LOCKM_MAX
 };
 

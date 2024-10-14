@@ -10,6 +10,8 @@
 #include <linux/kernel.h>
 #include <linux/percpu.h>
 
+#define KOMB_STATS 1
+
 #define NUM_PREFETCH_LINES 6
 
 #define IRQ_NUMA_NODE 255
