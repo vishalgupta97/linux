@@ -78,22 +78,20 @@
 	})
 
 #ifndef smp_cond_load_relaxed_sched
-#define smp_cond_load_relaxed_sched(ptr, cond_expr) \
-	({                                          \
-		typeof(ptr) __PTR = (ptr);          \
-		__unqual_scalar_typeof(*ptr) VAL;   \
-		for (;;) {                          \
-			VAL = READ_ONCE(*__PTR);    \
-			if (cond_expr)              \
-				break;              \
-			cpu_relax();                \
-			if (need_resched()) {       \
-				preempt_enable();   \
-				schedule();         \
-				preempt_disable();  \
-			}                           \
-		}                                   \
-		(typeof(*ptr))VAL;                  \
+#define smp_cond_load_relaxed_sched(ptr, cond_expr)       \
+	({                                                \
+		typeof(ptr) __PTR = (ptr);                \
+		__unqual_scalar_typeof(*ptr) VAL;         \
+		for (;;) {                                \
+			VAL = READ_ONCE(*__PTR);          \
+			if (cond_expr)                    \
+				break;                    \
+			cpu_relax();                      \
+			if (need_resched()) {             \
+				schedule_out_curr_task(); \
+			}                                 \
+		}                                         \
+		(typeof(*ptr))VAL;                        \
 	})
 #endif
 
@@ -127,9 +125,11 @@ DEFINE_PER_CPU_ALIGNED(uint64_t, mutex_ooo_unlocks);
 
 static inline void schedule_out_curr_task(void)
 {
-	preempt_enable();
-	schedule();
-	preempt_disable();
+	// preempt_enable();
+	// schedule();
+	// preempt_disable();
+        __set_current_state(TASK_RUNNING);
+	schedule_preempt_disabled();
 }
 
 static inline void park_waiter(struct mutex_node *node)
@@ -141,7 +141,7 @@ static inline void park_waiter(struct mutex_node *node)
 		__set_current_state(TASK_RUNNING);
 		return;
 	}
-	schedule_out_curr_task();
+        schedule_preempt_disabled();
 	__set_current_state(TASK_RUNNING);
 }
 
@@ -602,7 +602,8 @@ __attribute__((noipa)) noinline notrace void mutex_lock(struct mutex *lock)
 
 	might_sleep();
 
-	if (lock->key.ptr == NULL || lock->key.ptr->lockm == FDS_QSPINLOCK) {
+	//if (lock->key.ptr == NULL || lock->key.ptr->lockm == FDS_QSPINLOCK) {
+	if (false) {
 		preempt_disable();
 		this_cpu_inc(mutex_qspinlock);
 

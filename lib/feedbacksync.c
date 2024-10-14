@@ -113,15 +113,53 @@ inline bool __collect_fds_stats(struct lock_stat *stat, struct lock_stat *tmp)
 	return false;
 }
 
+// void __collect_fds_stats(struct hlist_head (*p)[32], struct lock_stat *stat) {
+// 	int bkt;
+// 	struct lock_stat *tmp;
+
+// 	if (stat->counter > 0) {
+// 		hash_for_each(*p, bkt, tmp, hnode) {
+// 			if (stat == tmp)
+// 				return;
+
+// 			if (stat->key != NULL && tmp->key != NULL) {
+// 				if (stat->key == tmp->key) {
+// 					tmp->counter += stat->counter;
+// 					stat->counter = 0;
+// 					return;
+// 				}
+// 			}
+// 		}
+// 		hash_add(*p, &stat->hnode, stat->key);
+// 	}
+// }
+
 void collect_fds_stats(void)
 {
 	int i, j, bkt;
-	struct lock_stat *tmp;
+	struct lock_stat *stat, *tmp;
+
+	// for (j = 0; j < NUM_BUCKETS; j++) {
+	// 	for_each_online_cpu(i) {
+	// 		stat = per_cpu_ptr(&read_lock_stats[j], i);
+	// 		__collect_fds_stats(&read_stats_ht, stat);
+	// 		stat = per_cpu_ptr(&write_lock_stats[j], i);
+	// 		__collect_fds_stats(&write_stats_ht, stat);
+	// 		stat = per_cpu_ptr(&spin_lock_stats[j], i);
+	// 		__collect_fds_stats(&spin_stats_ht, stat);
+	// 		stat = per_cpu_ptr(&mutex_lock_stats[j], i);
+	// 		__collect_fds_stats(&mutex_stats_ht, stat);
+	// 	}
+	// }
+
+	// __collect_fds_stats(&read_stats_ht, &read_lock_stats);
+	// __collect_fds_stats(&write_stats_ht, &write_lock_stats);
+	// __collect_fds_stats(&spin_stats_ht, &spin_lock_stats);
+	// __collect_fds_stats(&mutex_stats_ht, &mutex_lock_stats);
 
 	for (j = 0; j < NUM_BUCKETS; j++) {
 		for_each_online_cpu(i) {
-			struct lock_stat *stat =
-				per_cpu_ptr(&read_lock_stats[j], i);
+			stat = per_cpu_ptr(&read_lock_stats[j], i);
 			if (stat->counter > 0) {
 				bool found = false;
 				hash_for_each(read_stats_ht, bkt, tmp, hnode) {
@@ -176,8 +214,23 @@ void collect_fds_stats(void)
 	}
 }
 
+// void __reset_fds_stats(struct hlist_head (*p)[32]) {
+// 	int bkt;
+// 	struct lock_stat *tmp;
+
+// 	hash_for_each(*p, bkt, tmp, hnode) {
+// 		tmp->counter = 0;
+// 	}
+// }
+
+
 void reset_fds_stats(void)
 {
+	// __reset_fds_stats(&read_stats_ht);
+	// __reset_fds_stats(&write_stats_ht);
+	// __reset_fds_stats(&spin_stats_ht);
+	// __reset_fds_stats(&mutex_stats_ht);
+
 	int bkt;
 	struct lock_stat *tmp;
 
@@ -193,6 +246,7 @@ void reset_fds_stats(void)
 	hash_for_each(mutex_stats_ht, bkt, tmp, hnode) {
 		tmp->counter = 0;
 	}
+
 }
 
 #define PRINT_COUNT_LIMIT 1000
@@ -270,9 +324,6 @@ void print_fds_stats(void)
 uint64_t value = 0;
 uint64_t direction = 0;
 
-bool do_fds_fallback = false;
-bool do_tas_fallback = false;
-
 static struct task_struct *fdsthreads;
 
 static ssize_t fds_write(const char __user *buffer, size_t count, int type)
@@ -297,16 +348,7 @@ static ssize_t fds_write(const char __user *buffer, size_t count, int type)
 	printk(KERN_ALERT "value: %lld, direction: %lld\n", value, direction);
 
 	if (IS_VALUE) {
-		if (value == 0) {
-			do_fds_fallback = false;
-			do_tas_fallback = false;
-		} else if (value == 1) {
-			do_fds_fallback = true;
-			do_tas_fallback = false;
-		} else if (value == 2) {
-			do_tas_fallback = true;
-			do_fds_fallback = true;
-		}
+		
 	}
 
 	return count;
@@ -344,6 +386,19 @@ void monitor_fds_stats(void)
 				tmp->key->ptr->lockm = FDS_TCLOCK;
 			else
 				tmp->key->ptr->lockm = FDS_QSPINLOCK;
+		}
+	}
+
+	hash_for_each(spin_stats_ht, bkt, tmp, hnode) {
+		if (tmp->counter > 500000) {
+			printk(KERN_ALERT
+			       "Flipping Name: %s, Counter: %ld initial: %d\n",
+			       tmp->name, tmp->counter, tmp->key->ptr->lockm);
+			tmp->key->ptr->lockm = (tmp->key->ptr->lockm + 1) % (FDS_LOCKM_MAX);
+			// if (tmp->key->ptr->lockm == FDS_QSPINLOCK)
+			// 	tmp->key->ptr->lockm = FDS_TCLOCK;
+			// else
+			// 	tmp->key->ptr->lockm = FDS_QSPINLOCK;
 		}
 	}
 }

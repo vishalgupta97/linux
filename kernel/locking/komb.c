@@ -7,7 +7,6 @@
  * Currently nested locking becomes TTAS lock.
  * irqs_disabled() will hurt performance when running in VM.
  */
-#include <asm-generic/qspinlock.h>
 #include <linux/sched.h>
 #include <linux/combiner.h>
 #include <linux/topology.h>
@@ -17,6 +16,7 @@
 #include <linux/kernel.h>
 #include <linux/syscalls.h>
 #include <linux/feedbacksync.h>
+#include <asm-generic/qspinlock.h>
 
 //#define DSM_DEBUG 1
 #ifdef DSM_DEBUG
@@ -88,9 +88,6 @@ DEFINE_PER_CPU_ALIGNED(uint64_t, ooo_combiner_count);
 DEFINE_PER_CPU_ALIGNED(uint64_t, ooo_waiter_combined);
 DEFINE_PER_CPU_ALIGNED(uint64_t, ooo_unlocks);
 #endif
-
-extern bool do_fds_fallback;
-extern bool do_tas_fallback;
 
 static DEFINE_PER_CPU_SHARED_ALIGNED(struct komb_node, komb_nodes[MAX_NODES]);
 static DEFINE_PER_CPU_SHARED_ALIGNED(struct shadow_stack, local_shadow_stack);
@@ -643,7 +640,7 @@ komb_spin_lock_slowpath(struct qspinlock *lock)
 #pragma GCC pop_options
 
 __attribute__((noipa)) noinline notrace void
-komb_spin_lock(struct qspinlock *lock)
+__komb_spin_lock(struct qspinlock *lock, enum fds_lock_mechanisms lockm)
 {
 	u32 val, cnt;
 	struct komb_node *curr_node = NULL;
@@ -651,6 +648,12 @@ komb_spin_lock(struct qspinlock *lock)
 	val = atomic_cmpxchg_acquire(&lock->val, 0, _Q_LOCKED_VAL);
 	if (val == 0)
 		return;
+
+	if(lockm == FDS_TAS) {
+		while (!komb_spin_trylock(lock))
+			cpu_relax();
+		return;
+	}
 
 	if (val == _Q_PENDING_VAL) {
 		cnt = _Q_PENDING_LOOPS;
@@ -683,13 +686,13 @@ queue:
 	KOMB_BUG_ON(curr_node == NULL);
 
 	if (curr_node->count > 0 || !in_task() || irqs_disabled() ||
-	    current->migration_disabled || do_fds_fallback) {
+	    current->migration_disabled || lockm == FDS_QSPINLOCK) {
 		struct komb_node *prev_node, *next_node;
 		u32 tail, idx;
 
 		idx = curr_node->count++;
 
-		if (do_tas_fallback || unlikely(idx >= MAX_NODES)) {
+		if (unlikely(idx >= MAX_NODES)) {
 			while (!komb_spin_trylock(lock))
 				cpu_relax();
 			goto irq_release;
@@ -794,6 +797,7 @@ irq_release:
 				struct komb_node *prev_node =
 					per_cpu_ptr(&komb_nodes[0], prev_cpuid);
 
+
 				KOMB_BUG_ON(prev_node->lock != lock);
 
 				print_debug("Waking up prev waiter: %d\n",
@@ -804,7 +808,15 @@ irq_release:
 		}
 	}
 }
+
+void komb_spin_lock(struct qspinlock *lock) {
+	__komb_spin_lock(lock, FDS_TCLOCK);
+}
 EXPORT_SYMBOL_GPL(komb_spin_lock);
+
+void komb_spin_lock_fds(struct qspinlock *lock, enum fds_lock_mechanisms lockm) {
+	__komb_spin_lock(lock, lockm);
+}
 
 __attribute__((noipa)) noinline notrace void
 komb_spin_unlock(struct qspinlock *lock)
@@ -892,7 +904,8 @@ komb_spin_unlock(struct qspinlock *lock)
 	KOMB_BUG_ON(incoming_rsp_ptr == 0xdeadbeef);
 	KOMB_BUG_ON(outgoing_rsp_ptr == 0xdeadbeef);
 
-	curr_node->irqs_disabled = irqs_disabled();
+	//curr_node->irqs_disabled = irqs_disabled();
+        BUG_ON(irqs_disabled());
 	komb_context_switch(incoming_rsp_ptr, outgoing_rsp_ptr);
 	ptr = this_cpu_ptr(&local_shadow_stack);
 	if (ptr->irqs_disabled) {

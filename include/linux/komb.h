@@ -58,5 +58,6 @@ extern int komb_spin_value_unlocked(struct qspinlock lock);
 extern int komb_spin_is_contended(struct qspinlock *lock);
 extern int komb_spin_trylock(struct qspinlock *lock);
 extern void komb_spin_lock(struct qspinlock *lock);
+extern void komb_spin_lock_fds(struct qspinlock *lock, enum fds_lock_mechanisms lockm);
 extern void komb_spin_unlock(struct qspinlock *lock);
 #endif

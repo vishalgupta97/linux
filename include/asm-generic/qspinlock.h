@@ -146,6 +146,7 @@ static __always_inline bool virt_spin_lock(struct qspinlock *lock)
 #define arch_spin_is_contended(l)	komb_spin_is_contended(l)
 #define arch_spin_value_unlocked(l)	komb_spin_value_unlocked(l)
 #define arch_spin_lock(l)		komb_spin_lock(l)
+#define arch_spin_lock_fds(l, t)	komb_spin_lock_fds(l, t)
 #define arch_spin_trylock(l)		komb_spin_trylock(l)
 #define arch_spin_unlock(l)		komb_spin_unlock(l)
 
