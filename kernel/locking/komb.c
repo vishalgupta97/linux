@@ -818,12 +818,6 @@ komb_spin_unlock(struct qspinlock *lock)
 	max_idx = -1;
 	my_idx = -1;
 
-	if (lock->locked == _Q_LOCKED_VAL ||
-	    lock->locked == _Q_LOCKED_IRQ_VAL) {
-		lock->locked = false;
-		return;
-	}
-
 	for (j = 0; j < 8; j++) {
 		temp_lock_addr = ptr->lock_addr[j];
 		if (temp_lock_addr != NULL)
