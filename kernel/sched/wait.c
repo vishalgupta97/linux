@@ -234,6 +234,8 @@ prepare_to_wait(struct wait_queue_head *wq_head, struct wait_queue_entry *wq_ent
 	spin_lock_irqsave(&wq_head->lock, flags);
 	if (list_empty(&wq_entry->entry))
 		__add_wait_queue(wq_head, wq_entry);
+	// shmem_falloc_wait takes inode lock and calls this function
+	//komb_set_current_state(state);
 	set_current_state(state);
 	spin_unlock_irqrestore(&wq_head->lock, flags);
 }

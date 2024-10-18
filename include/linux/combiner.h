@@ -79,7 +79,7 @@ void komb_context_switch(void *incoming_rsp_ptr, void *outgoing_rsp_ptr);
 DECLARE_PER_CPU_ALIGNED(u64, combiner_count);
 DECLARE_PER_CPU_ALIGNED(u64, waiter_combined);
 DECLARE_PER_CPU_ALIGNED(u64, ooo_combiner_count);
-DECLARE_PER_CPU_ALIGNED(u64, ooo_waiter_combined);
+DECLARE_PER_CPU_ALIGNED(u64, fixing_preempt_count);
 DECLARE_PER_CPU_ALIGNED(u64, ooo_unlocks);
 DECLARE_PER_CPU_ALIGNED(u64, lock_not_in_task);
 DECLARE_PER_CPU_ALIGNED(u64, mutex_combiner_count);

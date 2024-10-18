@@ -128,7 +128,7 @@ static inline void schedule_out_curr_task(void)
 	// preempt_enable();
 	// schedule();
 	// preempt_disable();
-        __set_current_state(TASK_RUNNING);
+	__set_current_state(TASK_RUNNING);
 	schedule_preempt_disabled();
 }
 
@@ -141,7 +141,7 @@ static inline void park_waiter(struct mutex_node *node)
 		__set_current_state(TASK_RUNNING);
 		return;
 	}
-        schedule_preempt_disabled();
+	schedule_preempt_disabled();
 	__set_current_state(TASK_RUNNING);
 }
 
@@ -602,8 +602,8 @@ __attribute__((noipa)) noinline notrace void mutex_lock(struct mutex *lock)
 
 	might_sleep();
 
-	//if (lock->key.ptr == NULL || lock->key.ptr->lockm == FDS_QSPINLOCK) {
-	if (false) {
+	if (lock->key.ptr == NULL || lock->key.ptr->lockm == FDS_QSPINLOCK) {
+		//if (true) {
 		preempt_disable();
 		this_cpu_inc(mutex_qspinlock);
 

@@ -223,7 +223,6 @@ void collect_fds_stats(void)
 // 	}
 // }
 
-
 void reset_fds_stats(void)
 {
 	// __reset_fds_stats(&read_stats_ht);
@@ -246,10 +245,9 @@ void reset_fds_stats(void)
 	hash_for_each(mutex_stats_ht, bkt, tmp, hnode) {
 		tmp->counter = 0;
 	}
-
 }
 
-#define PRINT_COUNT_LIMIT 1000
+#define PRINT_COUNT_LIMIT 100000
 
 void print_fds_stats(void)
 {
@@ -348,7 +346,6 @@ static ssize_t fds_write(const char __user *buffer, size_t count, int type)
 	printk(KERN_ALERT "value: %lld, direction: %lld\n", value, direction);
 
 	if (IS_VALUE) {
-		
 	}
 
 	return count;
@@ -372,34 +369,44 @@ static const struct proc_ops direction_proc_ops = {
 	.proc_write = fds_direction_write,
 };
 
+#define QSPINLOCK_LIMIT 1000000
+
+inline bool __monitor_fds_stats(struct lock_stat *tmp, const char *type)
+{
+	if (tmp->counter > QSPINLOCK_LIMIT) {
+		printk(KERN_ALERT
+		       "Over Qspinlock limit %s write Name: %s, Counter: %ld initial: %d\n",
+		       type, tmp->name, tmp->counter, tmp->key->ptr->lockm);
+		if (tmp->key->ptr->lockm == FDS_QSPINLOCK) {
+			printk(KERN_ALERT
+			       "Flipping %s write Name: %s, Counter: %ld initial: %d\n",
+			       type, tmp->name, tmp->counter,
+			       tmp->key->ptr->lockm);
+			tmp->key->ptr->lockm = FDS_TCLOCK;
+			return false;
+		}
+	}
+	return false;
+}
+
 void monitor_fds_stats(void)
 {
 	int bkt;
 	struct lock_stat *tmp;
 
 	hash_for_each(write_stats_ht, bkt, tmp, hnode) {
-		if (tmp->counter > 500000) {
-			printk(KERN_ALERT
-			       "Flipping Name: %s, Counter: %ld initial: %d\n",
-			       tmp->name, tmp->counter, tmp->key->ptr->lockm);
-			if (tmp->key->ptr->lockm == FDS_QSPINLOCK)
-				tmp->key->ptr->lockm = FDS_TCLOCK;
-			else
-				tmp->key->ptr->lockm = FDS_QSPINLOCK;
-		}
+		if (__monitor_fds_stats(tmp, "RWSEM"))
+			break;
 	}
 
 	hash_for_each(spin_stats_ht, bkt, tmp, hnode) {
-		if (tmp->counter > 500000) {
-			printk(KERN_ALERT
-			       "Flipping Name: %s, Counter: %ld initial: %d\n",
-			       tmp->name, tmp->counter, tmp->key->ptr->lockm);
-			tmp->key->ptr->lockm = (tmp->key->ptr->lockm + 1) % (FDS_LOCKM_MAX);
-			// if (tmp->key->ptr->lockm == FDS_QSPINLOCK)
-			// 	tmp->key->ptr->lockm = FDS_TCLOCK;
-			// else
-			// 	tmp->key->ptr->lockm = FDS_QSPINLOCK;
-		}
+		if (__monitor_fds_stats(tmp, "SPINLOCK"))
+			break;
+	}
+
+	hash_for_each(mutex_stats_ht, bkt, tmp, hnode) {
+		if (__monitor_fds_stats(tmp, "MUTEX"))
+			break;
 	}
 }
 

@@ -731,7 +731,8 @@ void down_write(struct rw_semaphore *lock)
 	}
 #endif
 
-	if (lock->key.ptr == NULL || lock->key.ptr->lockm == FDS_QSPINLOCK) {
+	// if (lock->key.ptr == NULL || lock->key.ptr->lockm == FDS_QSPINLOCK) {
+	if (true) {
 		preempt_disable();
 
 		struct mutex_node *prev, *next;

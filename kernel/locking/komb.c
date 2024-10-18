@@ -14,7 +14,7 @@
 DEFINE_PER_CPU_ALIGNED(uint64_t, combiner_count);
 DEFINE_PER_CPU_ALIGNED(uint64_t, waiter_combined);
 DEFINE_PER_CPU_ALIGNED(uint64_t, ooo_combiner_count);
-DEFINE_PER_CPU_ALIGNED(uint64_t, ooo_waiter_combined);
+DEFINE_PER_CPU_ALIGNED(uint64_t, fixing_preempt_count);
 DEFINE_PER_CPU_ALIGNED(uint64_t, ooo_unlocks);
 #endif
 
@@ -127,8 +127,7 @@ __always_inline void add_to_local_queue(struct komb_node *node)
 	ptr->is_local_queue_tail_last = true;
 }
 
-__always_inline struct komb_node *
-get_next_node(struct komb_node *my_node)
+__always_inline struct komb_node *get_next_node(struct komb_node *my_node)
 {
 	struct komb_node *curr_node, *next_node;
 
@@ -141,7 +140,7 @@ get_next_node(struct komb_node *my_node)
 		else if (check_irq_node(next_node) ||
 			 check_irq_node(next_node->next))
 			goto next_node_null;
-		
+
 		// TODO: From Komb delegation, check if needed.
 		if (next_node->socket_id == -1) {
 			curr_node->next = NULL;
@@ -185,6 +184,7 @@ execute_cs(struct qspinlock *lock, struct komb_node *curr_node)
 	struct shadow_stack *ptr = this_cpu_ptr(&local_shadow_stack);
 
 	ptr->curr_cs_cpu = curr_node->cpuid;
+	ptr->curr_preempt_count = preempt_count();
 
 	KOMB_BUG_ON(curr_node->cpuid == smp_processor_id());
 	KOMB_BUG_ON((ptr->ptr - (ptr->local_shadow_stack_ptr)) >
@@ -211,7 +211,6 @@ execute_cs(struct qspinlock *lock, struct komb_node *curr_node)
 		print_debug("Combiner got control back OOO unlock\n");
 
 #ifdef KOMB_STATS
-		this_cpu_add(ooo_waiter_combined, ptr->counter_val);
 		this_cpu_inc(ooo_combiner_count);
 #endif
 
@@ -327,8 +326,16 @@ __komb_spin_lock_longjmp(struct qspinlock *lock, int tail,
 		struct shadow_stack *ptr = this_cpu_ptr(&local_shadow_stack);
 
 		if (curr_node->completed) {
-			if (curr_node->irqs_disabled)
+			if (curr_node->irqs_disabled) {
 				ptr->irqs_disabled = curr_node->irqs_disabled;
+				curr_node->irqs_disabled = 0;
+			}
+
+			if (curr_node->diff_preempt_count) {
+				__preempt_count_add(
+					curr_node->diff_preempt_count);
+				curr_node->diff_preempt_count = 0;
+			}
 
 			for (j = 7; j >= 0; j--)
 				if (ptr->lock_addr[j] != NULL)
@@ -455,6 +462,7 @@ __komb_spin_lock_slowpath(struct qspinlock *lock)
 	curr_node->irqs_disabled = false;
 	curr_node->lock = lock;
 	curr_node->task_struct_ptr = current;
+	curr_node->diff_preempt_count = 0;
 
 	return __komb_spin_lock_longjmp(lock, tail, curr_node);
 }
@@ -497,16 +505,14 @@ void komb_spin_lock_init(struct qspinlock *lock)
 	atomic_set(&lock->val, 0);
 }
 
-__attribute__((noipa)) noinline notrace void*
-get_shadow_stack_ptr(void)
+__attribute__((noipa)) noinline notrace void *get_shadow_stack_ptr(void)
 {
 	struct shadow_stack *ptr = this_cpu_ptr(&local_shadow_stack);
 
 	return &(ptr->local_shadow_stack_ptr);
 }
 
-__attribute__((noipa)) noinline notrace struct komb_node *
-get_komb_node(void)
+__attribute__((noipa)) noinline notrace struct komb_node *get_komb_node(void)
 {
 	return this_cpu_ptr(&komb_nodes[0]);
 }
@@ -590,7 +596,7 @@ __komb_spin_lock(struct qspinlock *lock, enum fds_lock_mechanisms lockm)
 	if (val == 0)
 		return;
 
-	if(lockm == FDS_TAS) {
+	if (lockm == FDS_TAS) {
 		while (!komb_spin_trylock(lock))
 			cpu_relax();
 		return;
@@ -653,6 +659,7 @@ queue:
 		curr_node->irqs_disabled = false;
 		curr_node->lock = lock;
 		curr_node->task_struct_ptr = current;
+		curr_node->diff_preempt_count = 0;
 
 		uint64_t prev_rsp = curr_node->rsp;
 		curr_node->rsp = 0xdeadbeef;
@@ -738,7 +745,6 @@ irq_release:
 				struct komb_node *prev_node =
 					per_cpu_ptr(&komb_nodes[0], prev_cpuid);
 
-
 				KOMB_BUG_ON(prev_node->lock != lock);
 
 				print_debug("Waking up prev waiter: %d\n",
@@ -750,16 +756,21 @@ irq_release:
 	}
 }
 
-void komb_spin_lock(struct qspinlock *lock) {
-	__komb_spin_lock(lock, FDS_TCLOCK);
+void komb_spin_lock(struct qspinlock *lock)
+{
+	__komb_spin_lock(lock, FDS_QSPINLOCK);
 }
 EXPORT_SYMBOL_GPL(komb_spin_lock);
 
-void komb_spin_lock_fds(struct qspinlock *lock, enum fds_lock_mechanisms lockm) {
-	if(lockm == FDS_TDLOCK)
+void komb_spin_lock_fds(struct qspinlock *lock, struct fds_lock_key *key)
+{
+	/*if(lockm == FDS_TDLOCK)
 		kd_spin_lock(lock);
+	else*/
+	if (strcmp(key->name, "&futex_queues[i].lock") == 0)
+		__komb_spin_lock(lock, FDS_QSPINLOCK);
 	else
-		__komb_spin_lock(lock, lockm);
+		__komb_spin_lock(lock, key->lockm);
 }
 
 __attribute__((noipa)) noinline notrace void
@@ -769,7 +780,7 @@ komb_spin_unlock(struct qspinlock *lock)
 	int from_cpuid = ptr->curr_cs_cpu;
 	void *incoming_rsp_ptr, *outgoing_rsp_ptr;
 
-	int j, max_idx, my_idx;
+	int j, max_idx, my_idx, waiter_preempt_count;
 
 	uint64_t temp_lock_addr;
 
@@ -844,13 +855,28 @@ komb_spin_unlock(struct qspinlock *lock)
 
 	outgoing_rsp_ptr = &(curr_node->rsp);
 
+	waiter_preempt_count = preempt_count();
+	if (ptr->curr_preempt_count != waiter_preempt_count) {
+		BUG_ON(irq_count() > 0);
+		if (waiter_preempt_count < ptr->curr_preempt_count) {
+			printk(KERN_ALERT "preempt_count prev: %d curr: %d\n",
+			       waiter_preempt_count, ptr->curr_preempt_count);
+			BUG_ON(true);
+		}
+		curr_node->diff_preempt_count =
+			(waiter_preempt_count - ptr->curr_preempt_count);
+		this_cpu_inc(fixing_preempt_count);
+		__preempt_count_sub(curr_node->diff_preempt_count);
+		BUG_ON(preempt_count() != ptr->curr_preempt_count);
+	}
+
 	KOMB_BUG_ON(incoming_rsp_ptr == NULL);
 	KOMB_BUG_ON(outgoing_rsp_ptr == NULL);
 	KOMB_BUG_ON(incoming_rsp_ptr == 0xdeadbeef);
 	KOMB_BUG_ON(outgoing_rsp_ptr == 0xdeadbeef);
 
 	//curr_node->irqs_disabled = irqs_disabled();
-        BUG_ON(irqs_disabled());
+	BUG_ON(irqs_disabled());
 	komb_context_switch(incoming_rsp_ptr, outgoing_rsp_ptr);
 	ptr = this_cpu_ptr(&local_shadow_stack);
 	if (ptr->irqs_disabled) {
@@ -905,16 +931,28 @@ struct task_struct *komb_get_current(spinlock_t *lock)
 
 	int j, my_idx;
 
+	if (current->komb_curr_waiter_task) {
+		printk(KERN_ALERT "Mutex/rwsem running with current\n");
+		BUG_ON(true);
+	}
+
 	j = 0;
 	my_idx = -1;
 
 	for (j = 0; j < 8; j++) {
 		if (ptr->lock_addr[j] == lock) {
-			KOMB_BUG_ON(ptr->curr_cs_cpu < 0);
-			return per_cpu_ptr(&komb_nodes[0], ptr->curr_cs_cpu)
-				->task_struct_ptr;
+			if (lock->key.ptr)
+				printk(KERN_ALERT "lock_name: %s\n",
+				       lock->key.ptr->name);
+			BUG_ON(true);
+			// KOMB_BUG_ON(ptr->curr_cs_cpu < 0);
+			// return per_cpu_ptr(&komb_nodes[0], ptr->curr_cs_cpu)
+			// 	->task_struct_ptr;
 		}
 	}
+
+	// if (lock->rlock.raw_lock.locked == _Q_LOCKED_COMBINER_VAL)
+	// 	BUG_ON(true);
 
 	return current;
 }

@@ -14,16 +14,17 @@
 struct komb_node {
 	union {
 		struct {
+			void *rsp;
 			struct komb_node *next;
 			struct komb_node *prev;
+			struct qspinlock *lock;
+			struct task_struct *task_struct_ptr;
 			int tail;
 			int count;
 			int socket_id;
 			int cpuid;
-			void *rsp;
-			struct qspinlock *lock;
 			int irqs_disabled;
-			struct task_struct *task_struct_ptr;
+			int diff_preempt_count;
 		};
 		char alignment1[128];
 	};
@@ -53,6 +54,7 @@ struct shadow_stack {
 			struct komb_node *local_queue_head;
 			struct komb_node *local_queue_tail;
 			int irqs_disabled;
+			int curr_preempt_count;
 			bool is_local_queue_tail_last;
 		};
 		char dummy[128];
@@ -79,7 +81,8 @@ extern int komb_spin_value_unlocked(struct qspinlock lock);
 extern int komb_spin_is_contended(struct qspinlock *lock);
 extern int komb_spin_trylock(struct qspinlock *lock);
 extern void komb_spin_lock(struct qspinlock *lock);
-extern void komb_spin_lock_fds(struct qspinlock *lock, enum fds_lock_mechanisms lockm);
+extern void komb_spin_lock_fds(struct qspinlock *lock,
+			       struct fds_lock_key *key);
 extern void komb_spin_unlock(struct qspinlock *lock);
 
 extern void kd_spin_lock(struct qspinlock *lock);

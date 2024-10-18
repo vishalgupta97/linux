@@ -20,13 +20,13 @@ struct fds_lock_key {
 	enum fds_lock_mechanisms lockm;
 };
 
-#define init_fds_lock_key(key, name)             \
-	{                                        \
-		if (key->ptr == NULL) {          \
-			key->ptr = key;          \
-			key->name = name;        \
-			key->lockm = FDS_TCLOCK; \
-		}                                \
+#define init_fds_lock_key(key, name)                \
+	{                                           \
+		if (key->ptr == NULL) {             \
+			key->ptr = key;             \
+			key->name = name;           \
+			key->lockm = FDS_QSPINLOCK; \
+		}                                   \
 	}
 
 void read_stat_lock_acquire(struct fds_lock_key *key);
