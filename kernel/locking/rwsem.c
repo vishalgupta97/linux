@@ -114,7 +114,7 @@ DEFINE_PER_CPU_ALIGNED(uint64_t, rwsem_combiner_count);
 DEFINE_PER_CPU_ALIGNED(uint64_t, rwsem_waiter_combined);
 DEFINE_PER_CPU_ALIGNED(uint64_t, rwsem_reads);
 DEFINE_PER_CPU_ALIGNED(uint64_t, rwsem_writes);
-DEFINE_PER_CPU_ALIGNED(uint64_t, rwsem_ooo_unlocks);
+DEFINE_PER_CPU_ALIGNED(uint64_t, rwsem_bravo_reads);
 DEFINE_PER_CPU_ALIGNED(uint64_t, rwsem_downgrade);
 #endif
 
@@ -149,8 +149,22 @@ static inline void wait_for_visible_readers(struct rw_semaphore *lock)
 		vr_table = global_vr_table;
 		start = rdtsc();
 		for (i = 0; i < NUM_SLOT; i += 8) {
-			smp_cond_load_relaxed_sched(&vr_table[V(i)],
-						    (VAL == 0));
+			uint64_t value = (uint64_t)vr_table[V(i)] |
+					 (uint64_t)vr_table[V(i + 1)] |
+					 (uint64_t)vr_table[V(i + 2)] |
+					 (uint64_t)vr_table[V(i + 3)] |
+					 (uint64_t)vr_table[V(i + 4)] |
+					 (uint64_t)vr_table[V(i + 5)] |
+					 (uint64_t)vr_table[V(i + 6)] |
+					 (uint64_t)vr_table[V(i + 7)];
+			if (value) {
+				for (j = 0; j < 8; j++) {
+					smp_cond_load_acquire_sched(
+						&vr_table[V(i + j)],
+						(((uint64_t)(VAL)) !=
+						 (uint64_t)lock));
+				}
+			}
 		}
 		now = rdtsc();
 		lock->inhibit_until = now + ((now - start) * MULTIPLIER);
@@ -291,13 +305,15 @@ void down_read(struct rw_semaphore *lock)
 #ifdef BRAVO
 	if (READ_ONCE(lock->rbias)) {
 		uint64_t **slot = NULL;
-		uint64_t new_val = (uint64_t)current;
+		uint64_t new_val = (uint64_t)lock;
 		u32 id = hash(new_val);
 		slot = &global_vr_table[V(id)];
 
-		if (cmpxchg(slot, 0, new_val) == 0) {
-			if (READ_ONCE(lock->rbias))
+		if (cmpxchg(slot, NULL, new_val) == NULL) {
+			if (READ_ONCE(lock->rbias)) {
+				this_cpu_inc(rwsem_bravo_reads);
 				goto read_exit;
+			}
 			(void)xchg(slot, NULL);
 		}
 	}
@@ -871,10 +887,10 @@ void up_read(struct rw_semaphore *lock)
 
 #ifdef BRAVO
 		uint64_t **slot = NULL;
-		uint64_t new_val = (uint64_t)current;
+		uint64_t new_val = (uint64_t)lock;
 		u32 id = hash(new_val);
 		slot = &global_vr_table[V(id)];
-		if (cmpxchg(slot, new_val, 0) == new_val)
+		if (cmpxchg(slot, new_val, NULL) == new_val)
 			return;
 #endif
 
@@ -919,7 +935,7 @@ __attribute__((noipa)) noinline notrace void up_write(struct rw_semaphore *lock)
 			WRITE_ONCE(lock->wlocked, 0);
 		else if (lock->wlocked == _KOMB_RWSEM_W_COMBINER) {
 #ifdef KOMB_STATS
-			this_cpu_inc(rwsem_ooo_unlocks);
+			// this_cpu_inc(rwsem_ooo_unlocks);
 #endif
 
 			lock->wlocked = _KOMB_RWSEM_W_OOO;
@@ -937,7 +953,7 @@ __attribute__((noipa)) noinline notrace void up_write(struct rw_semaphore *lock)
 
 	if (my_idx < max_idx) {
 #ifdef KOMB_STATS
-		this_cpu_inc(rwsem_ooo_unlocks);
+		// this_cpu_inc(rwsem_ooo_unlocks);
 #endif
 		lock->wlocked = _KOMB_RWSEM_W_OOO;
 		return;
@@ -1022,13 +1038,15 @@ int down_read_trylock(struct rw_semaphore *lock)
 #ifdef BRAVO
 	if (READ_ONCE(lock->rbias)) {
 		uint64_t **slot = NULL;
-		uint64_t new_val = (uint64_t)current;
+		uint64_t new_val = (uint64_t)lock;
 		u32 id = hash(new_val);
 		slot = &global_vr_table[V(id)];
 
-		if (cmpxchg(slot, 0, new_val) == 0) {
-			if (READ_ONCE(lock->rbias))
+		if (cmpxchg(slot, NULL, new_val) == NULL) {
+			if (READ_ONCE(lock->rbias)) {
+				this_cpu_inc(rwsem_bravo_reads);
 				return 1;
+			}
 			(void)xchg(slot, NULL);
 		}
 	}

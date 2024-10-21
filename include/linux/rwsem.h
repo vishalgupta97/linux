@@ -16,7 +16,7 @@
 #include <linux/mutex.h>
 #include <linux/feedbacksync.h>
 
-//#define BRAVO 1
+#define BRAVO 1
 
 /*
  * Writer states & reader shift and bias.
@@ -35,8 +35,8 @@
 #define _Q_COMPLETED_MASK _Q_SET_MASK(COMPLETED)
 
 #define NUM_SLOT (1024)
-#define TABLE_SIZE ((NUM_SLOT))
-#define V(i) ((i))
+#define TABLE_SIZE ((NUM_SLOT * 8))
+#define V(i) ((i * 8))
 
 #define CHECK_FOR_BIAS 16
 #define MULTIPLIER 9

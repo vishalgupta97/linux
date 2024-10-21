@@ -91,7 +91,7 @@ DECLARE_PER_CPU_ALIGNED(u64, rwsem_combiner_count);
 DECLARE_PER_CPU_ALIGNED(u64, rwsem_waiter_combined);
 DECLARE_PER_CPU_ALIGNED(u64, rwsem_reads);
 DECLARE_PER_CPU_ALIGNED(u64, rwsem_writes);
-DECLARE_PER_CPU_ALIGNED(u64, rwsem_ooo_unlocks);
+DECLARE_PER_CPU_ALIGNED(u64, rwsem_bravo_reads);
 DECLARE_PER_CPU_ALIGNED(u64, rwsem_downgrade);
 
 void print_komb_stats(void);
