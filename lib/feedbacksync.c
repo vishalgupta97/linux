@@ -249,6 +249,17 @@ void reset_fds_stats(void)
 
 #define PRINT_COUNT_LIMIT 100000
 
+inline void __print_fds_stats(struct lock_stat *tmp, const char *type,
+			      uint64_t *count)
+{
+	if (tmp->counter) {
+		if (tmp->counter > PRINT_COUNT_LIMIT)
+			printk(KERN_ALERT "%s Name: %s, Counter: %ld\n", type,
+			       tmp->name, tmp->counter);
+		*count++;
+	}
+}
+
 void print_fds_stats(void)
 {
 	printk(KERN_ALERT "======== Feedback sync stats ========\n");
@@ -260,43 +271,19 @@ void print_fds_stats(void)
 
 	printk(KERN_ALERT "Traversal done\n");
 	hash_for_each(read_stats_ht, bkt, tmp, hnode) {
-		if (tmp->counter) {
-			if (tmp->counter > PRINT_COUNT_LIMIT)
-				printk(KERN_ALERT
-				       "Read Name: %s, Counter: %ld\n",
-				       tmp->name, tmp->counter);
-			rcount++;
-		}
+		__print_fds_stats(tmp, "READ", &rcount);
 	}
 
 	hash_for_each(write_stats_ht, bkt, tmp, hnode) {
-		if (tmp->counter) {
-			if (tmp->counter > PRINT_COUNT_LIMIT)
-				printk(KERN_ALERT
-				       "Write Name: %s, Counter: %ld\n",
-				       tmp->name, tmp->counter);
-			wcount++;
-		}
+		__print_fds_stats(tmp, "WRITE", &wcount);
 	}
 
 	hash_for_each(spin_stats_ht, bkt, tmp, hnode) {
-		if (tmp->counter) {
-			if (tmp->counter > PRINT_COUNT_LIMIT)
-				printk(KERN_ALERT
-				       "Spin Name: %s, Counter: %ld\n",
-				       tmp->name, tmp->counter);
-			scount++;
-		}
+		__print_fds_stats(tmp, "SPIN", &scount);
 	}
 
 	hash_for_each(mutex_stats_ht, bkt, tmp, hnode) {
-		if (tmp->counter) {
-			if (tmp->counter > PRINT_COUNT_LIMIT)
-				printk(KERN_ALERT
-				       "Mutex Name: %s, Counter: %ld\n",
-				       tmp->name, tmp->counter);
-			mcount++;
-		}
+		__print_fds_stats(tmp, "MUTEX", &mcount);
 	}
 
 	printk(KERN_ALERT
@@ -372,18 +359,35 @@ static const struct proc_ops direction_proc_ops = {
 	.proc_write = fds_direction_write,
 };
 
+enum fds_lock_type {
+	FDS_SPINLOCK,
+	FDS_MUTEX,
+	FDS_READ_SEM,
+	FDS_WRITE_SEM,
+};
+
 inline void __monitor_fds_stats(struct lock_stat *tmp, const char *type,
-				bool is_spinlock)
+				enum fds_lock_type ltype)
 {
 	if (tmp->counter > QSPINLOCK_LIMIT) {
 		printk(KERN_ALERT
 		       "Flipping %s write Name: %s, Counter: %ld initial: %d\n",
 		       type, tmp->name, tmp->counter, tmp->key->ptr->lockm);
-		if (is_spinlock) {
-			tmp->key->ptr->lockm = ((tmp->key->ptr->lockm + 1) %
-						FDS_TDLOCK); //FDS_LOCKM_MAX
-		} else if (tmp->key->ptr->lockm == FDS_QSPINLOCK) {
-			tmp->key->ptr->lockm = FDS_TCLOCK;
+		switch (ltype) {
+		// case FDS_SPINLOCK:
+		// 	tmp->key->ptr->lockm = ((tmp->key->ptr->lockm + 1) %
+		// 				FDS_TDLOCK); //FDS_LOCKM_MAX
+		// 	break;
+		case FDS_READ_SEM:
+			if (tmp->key->ptr->lockm == FDS_QSPINLOCK)
+				tmp->key->ptr->lockm = FDS_BRAVO;
+			break;
+		case FDS_SPINLOCK:
+		case FDS_WRITE_SEM:
+		case FDS_MUTEX:
+			if (tmp->key->ptr->lockm == FDS_QSPINLOCK)
+				tmp->key->ptr->lockm = FDS_TCLOCK;
+			break;
 		}
 	}
 }
@@ -393,16 +397,20 @@ void monitor_fds_stats(void)
 	int bkt;
 	struct lock_stat *tmp;
 
+	hash_for_each(read_stats_ht, bkt, tmp, hnode) {
+		__monitor_fds_stats(tmp, "READ SEM", FDS_READ_SEM);
+	}
+
 	hash_for_each(write_stats_ht, bkt, tmp, hnode) {
-		__monitor_fds_stats(tmp, "RWSEM", false);
+		__monitor_fds_stats(tmp, "WRITE SEM", FDS_WRITE_SEM);
 	}
 
 	hash_for_each(spin_stats_ht, bkt, tmp, hnode) {
-		__monitor_fds_stats(tmp, "SPINLOCK", true);
+		__monitor_fds_stats(tmp, "SPINLOCK", FDS_SPINLOCK);
 	}
 
 	hash_for_each(mutex_stats_ht, bkt, tmp, hnode) {
-		__monitor_fds_stats(tmp, "MUTEX", false);
+		__monitor_fds_stats(tmp, "MUTEX", FDS_MUTEX);
 	}
 }
 

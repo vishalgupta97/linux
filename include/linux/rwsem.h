@@ -16,8 +16,6 @@
 #include <linux/mutex.h>
 #include <linux/feedbacksync.h>
 
-#define BRAVO 1
-
 /*
  * Writer states & reader shift and bias.
  */
@@ -38,9 +36,6 @@
 #define TABLE_SIZE ((NUM_SLOT * 8))
 #define V(i) ((i * 8))
 
-#define CHECK_FOR_BIAS 16
-#define MULTIPLIER 9
-
 struct rw_semaphore {
 	union {
 		union {
@@ -55,10 +50,7 @@ struct rw_semaphore {
 	union {
 		struct {
 			struct aqm_mutex reader_wait_lock;
-#ifdef BRAVO
 			int rbias;
-			u64 inhibit_until;
-#endif
 		};
 		char __padding3[128];
 	};

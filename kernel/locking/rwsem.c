@@ -118,10 +118,7 @@ DEFINE_PER_CPU_ALIGNED(uint64_t, rwsem_bravo_reads);
 DEFINE_PER_CPU_ALIGNED(uint64_t, rwsem_downgrade);
 #endif
 
-#ifdef BRAVO
-
-uint64_t **global_vr_table = NULL;
-static DEFINE_PER_CPU(u32, check_bias);
+static struct rw_semaphore **global_vr_table = NULL;
 
 static inline uint32_t mix32a(uint32_t v)
 {
@@ -140,14 +137,12 @@ static inline void wait_for_visible_readers(struct rw_semaphore *lock)
 {
 	if (READ_ONCE(lock->rbias)) {
 		int i, j;
-		unsigned long start, now;
-		uint64_t **vr_table;
+		struct rw_semaphore **vr_table;
 
 		smp_mb();
 		WRITE_ONCE(lock->rbias, 0);
 
 		vr_table = global_vr_table;
-		start = rdtsc();
 		for (i = 0; i < NUM_SLOT; i += 8) {
 			uint64_t value = (uint64_t)vr_table[V(i)] |
 					 (uint64_t)vr_table[V(i + 1)] |
@@ -161,16 +156,12 @@ static inline void wait_for_visible_readers(struct rw_semaphore *lock)
 				for (j = 0; j < 8; j++) {
 					smp_cond_load_acquire_sched(
 						&vr_table[V(i + j)],
-						(((uint64_t)(VAL)) !=
-						 (uint64_t)lock));
+						((VAL) != lock));
 				}
 			}
 		}
-		now = rdtsc();
-		lock->inhibit_until = now + ((now - start) * MULTIPLIER);
 	}
 }
-#endif //BRAVO
 
 __attribute__((noipa)) noinline notrace static uint64_t
 get_shadow_stack_ptr(struct rw_semaphore *lock)
@@ -302,14 +293,12 @@ static inline void komb_read_lock_slowpath(struct rw_semaphore *lock)
 
 void down_read(struct rw_semaphore *lock)
 {
-#ifdef BRAVO
 	if (READ_ONCE(lock->rbias)) {
-		uint64_t **slot = NULL;
-		uint64_t new_val = (uint64_t)lock;
-		u32 id = hash(new_val);
+		struct rw_semaphore **slot = NULL;
+		u32 id = hash((uint64_t)lock);
 		slot = &global_vr_table[V(id)];
 
-		if (cmpxchg(slot, NULL, new_val) == NULL) {
+		if (cmpxchg(slot, NULL, lock) == NULL) {
 			if (READ_ONCE(lock->rbias)) {
 				this_cpu_inc(rwsem_bravo_reads);
 				goto read_exit;
@@ -317,7 +306,6 @@ void down_read(struct rw_semaphore *lock)
 			(void)xchg(slot, NULL);
 		}
 	}
-#endif
 
 	u64 cnts;
 
@@ -331,12 +319,9 @@ void down_read(struct rw_semaphore *lock)
 	preempt_disable();
 	komb_read_lock_slowpath(lock);
 
-#ifdef BRAVO
-	if (((this_cpu_inc_return(check_bias) % CHECK_FOR_BIAS) == 0) &&
-	    (!READ_ONCE(lock->rbias) && rdtsc() >= lock->inhibit_until) &&
-	    global_vr_table != NULL)
+	if (!READ_ONCE(lock->rbias) && global_vr_table != NULL &&
+	    (lock->key.ptr && lock->key.ptr->lockm == FDS_BRAVO))
 		WRITE_ONCE(lock->rbias, 1);
-#endif
 
 	preempt_enable();
 read_exit:
@@ -539,9 +524,7 @@ unlock:
 	print_debug("Writer got the lock slowpath\n");
 	aqm_unlock(&lock->reader_wait_lock);
 
-#ifdef BRAVO
 	wait_for_visible_readers(lock);
-#endif
 
 	if (cmpxchg(&lock->writer_tail, curr_node, NULL) == curr_node)
 		goto release;
@@ -723,9 +706,7 @@ void down_write(struct rw_semaphore *lock)
 	u64 val, cnt;
 	val = atomic_long_cmpxchg_acquire(&lock->cnts, 0, _KOMB_RWSEM_W_LOCKED);
 	if (val == 0) {
-#ifdef BRAVO
 		wait_for_visible_readers(lock);
-#endif
 		goto write_exit;
 	}
 
@@ -740,9 +721,7 @@ void down_write(struct rw_semaphore *lock)
 		val = atomic_long_cmpxchg_acquire(&lock->cnts, 0,
 						  _KOMB_RWSEM_W_LOCKED);
 		if (val == 0) {
-#ifdef BRAVO
 			wait_for_visible_readers(lock);
-#endif
 			goto write_exit;
 		}
 	}
@@ -794,9 +773,7 @@ void down_write(struct rw_semaphore *lock)
 irq_unlock:
 		aqm_unlock(&lock->reader_wait_lock);
 
-#ifdef BRAVO
 		wait_for_visible_readers(lock);
-#endif
 
 		if (cmpxchg(&lock->writer_tail, curr_node, NULL) == curr_node)
 			goto irq_release;
@@ -885,14 +862,11 @@ void up_read(struct rw_semaphore *lock)
 	if (my_idx == -1) {
 		KOMB_BUG_ON(lock->wlocked != 0);
 
-#ifdef BRAVO
-		uint64_t **slot = NULL;
-		uint64_t new_val = (uint64_t)lock;
-		u32 id = hash(new_val);
+		struct rw_semaphore **slot = NULL;
+		u32 id = hash((uint64_t)lock);
 		slot = &global_vr_table[V(id)];
-		if (cmpxchg(slot, new_val, NULL) == new_val)
+		if (cmpxchg(slot, lock, NULL) == lock)
 			return;
-#endif
 
 		atomic_long_sub_return_release(_KOMB_RWSEM_R_BIAS, &lock->cnts);
 	} else {
@@ -931,9 +905,11 @@ __attribute__((noipa)) noinline notrace void up_write(struct rw_semaphore *lock)
 	}
 
 	if (my_idx == -1) {
-		if (lock->wlocked == _KOMB_RWSEM_W_LOCKED)
+		if (lock->wlocked == _KOMB_RWSEM_W_LOCKED) {
+			if (lock->key.ptr && lock->key.ptr->lockm == FDS_BRAVO)
+				WRITE_ONCE(lock->rbias, 1);
 			WRITE_ONCE(lock->wlocked, 0);
-		else if (lock->wlocked == _KOMB_RWSEM_W_COMBINER) {
+		} else if (lock->wlocked == _KOMB_RWSEM_W_COMBINER) {
 #ifdef KOMB_STATS
 			// this_cpu_inc(rwsem_ooo_unlocks);
 #endif
@@ -997,9 +973,7 @@ EXPORT_SYMBOL(up_write);
 
 void komb_rwsem_init(void)
 {
-#ifdef BRAVO
 	global_vr_table = vzalloc(TABLE_SIZE * sizeof(struct komb_rwsem *));
-#endif
 }
 
 void __init_rwsem(struct rw_semaphore *lock, const char *name,
@@ -1009,10 +983,7 @@ void __init_rwsem(struct rw_semaphore *lock, const char *name,
 	atomic_set(&lock->reader_wait_lock.val, 0);
 	lock->reader_wait_lock.tail = NULL;
 	lock->writer_tail = NULL;
-#ifdef BRAVO
 	lock->rbias = 0;
-	lock->inhibit_until = 0;
-#endif
 	lock->key.name = name;
 	lock->key.ptr = key;
 	init_fds_lock_key(key, name, DEFAULT_FDS_LOCK);
@@ -1035,14 +1006,12 @@ EXPORT_SYMBOL(down_read_interruptible);
 
 int down_read_trylock(struct rw_semaphore *lock)
 {
-#ifdef BRAVO
 	if (READ_ONCE(lock->rbias)) {
-		uint64_t **slot = NULL;
-		uint64_t new_val = (uint64_t)lock;
-		u32 id = hash(new_val);
+		struct rw_semaphore **slot = NULL;
+		u32 id = hash((uint64_t)lock);
 		slot = &global_vr_table[V(id)];
 
-		if (cmpxchg(slot, NULL, new_val) == NULL) {
+		if (cmpxchg(slot, NULL, lock) == NULL) {
 			if (READ_ONCE(lock->rbias)) {
 				this_cpu_inc(rwsem_bravo_reads);
 				return 1;
@@ -1050,18 +1019,13 @@ int down_read_trylock(struct rw_semaphore *lock)
 			(void)xchg(slot, NULL);
 		}
 	}
-#endif
 
 	u64 cnts =
 		atomic_long_add_return_acquire(_KOMB_RWSEM_R_BIAS, &lock->cnts);
 	if (likely(!(cnts & _KOMB_RWSEM_W_WMASK))) {
-#ifdef BRAVO
-		if (((this_cpu_inc_return(check_bias) % CHECK_FOR_BIAS) == 0) &&
-		    (!READ_ONCE(lock->rbias) &&
-		     rdtsc() >= lock->inhibit_until) &&
-		    global_vr_table != NULL)
+		if (!READ_ONCE(lock->rbias) && global_vr_table != NULL &&
+		    (lock->key.ptr && lock->key.ptr->lockm == FDS_BRAVO))
 			WRITE_ONCE(lock->rbias, 1);
-#endif
 		this_cpu_inc(rwsem_reads);
 		read_stat_lock_acquire(&lock->key);
 		return 1;
@@ -1085,9 +1049,7 @@ int down_write_trylock(struct rw_semaphore *lock)
 					       _KOMB_RWSEM_W_LOCKED) == 0);
 
 	if (val) {
-#ifdef BRAVO
 		wait_for_visible_readers(lock);
-#endif
 		this_cpu_inc(rwsem_writes);
 		write_stat_lock_acquire(&lock->key);
 	}
