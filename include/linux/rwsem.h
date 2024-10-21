@@ -43,29 +43,31 @@
 
 struct rw_semaphore {
 	union {
-		struct {
+		union {
 			atomic_long_t cnts;
-			char __padding1[120];
-		};
-		struct {
-			u8 wlocked;
-			u8 rcount[7];
-			char __padding2[120];
+			struct {
+				u8 wlocked;
+				u8 rcount[7];
+			};
 		};
 		char __padding[128];
 	};
 	union {
-		struct aqm_mutex reader_wait_lock;
+		struct {
+			struct aqm_mutex reader_wait_lock;
 #ifdef BRAVO
-	int rbias;
-	u64 inhibit_until;
+			int rbias;
+			u64 inhibit_until;
 #endif
-	char __padding3[128];
+		};
+		char __padding3[128];
 	};
 	union {
-	struct mutex_node *writer_tail;
-	struct fds_lock_key key;
-	char __padding4[128];
+		struct {
+			struct mutex_node *writer_tail;
+			struct fds_lock_key key;
+		};
+		char __padding4[128];
 	};
 };
 
@@ -94,11 +96,11 @@ static inline int rwsem_is_locked(struct rw_semaphore *sem)
 extern void __init_rwsem(struct rw_semaphore *sem, const char *name,
 			 struct fds_lock_key *key);
 
-#define init_rwsem(sem)                             \
-	do {                                        \
-		static struct fds_lock_key __key; \
-                                                    \
-		__init_rwsem((sem), #sem, &__key);  \
+#define init_rwsem(sem)                            \
+	do {                                       \
+		static struct fds_lock_key __key;  \
+                                                   \
+		__init_rwsem((sem), #sem, &__key); \
 	} while (0)
 
 extern void komb_rwsem_init(void);

@@ -120,7 +120,7 @@ DEFINE_PER_CPU_ALIGNED(uint64_t, rwsem_downgrade);
 
 #ifdef BRAVO
 
-uint64_t **global_vr_table;
+uint64_t **global_vr_table = NULL;
 static DEFINE_PER_CPU(u32, check_bias);
 
 static inline uint32_t mix32a(uint32_t v)
@@ -317,7 +317,8 @@ void down_read(struct rw_semaphore *lock)
 
 #ifdef BRAVO
 	if (((this_cpu_inc_return(check_bias) % CHECK_FOR_BIAS) == 0) &&
-	    (!READ_ONCE(lock->rbias) && rdtsc() >= lock->inhibit_until))
+	    (!READ_ONCE(lock->rbias) && rdtsc() >= lock->inhibit_until) &&
+	    global_vr_table != NULL)
 		WRITE_ONCE(lock->rbias, 1);
 #endif
 
@@ -732,7 +733,6 @@ void down_write(struct rw_semaphore *lock)
 #endif
 
 	if (lock->key.ptr == NULL || lock->key.ptr->lockm == FDS_QSPINLOCK) {
-		// if (true) {
 		preempt_disable();
 
 		struct mutex_node *prev, *next;
@@ -993,6 +993,10 @@ void __init_rwsem(struct rw_semaphore *lock, const char *name,
 	atomic_set(&lock->reader_wait_lock.val, 0);
 	lock->reader_wait_lock.tail = NULL;
 	lock->writer_tail = NULL;
+#ifdef BRAVO
+	lock->rbias = 0;
+	lock->inhibit_until = 0;
+#endif
 	lock->key.name = name;
 	lock->key.ptr = key;
 	init_fds_lock_key(key, name, DEFAULT_FDS_LOCK);
@@ -1035,7 +1039,9 @@ int down_read_trylock(struct rw_semaphore *lock)
 	if (likely(!(cnts & _KOMB_RWSEM_W_WMASK))) {
 #ifdef BRAVO
 		if (((this_cpu_inc_return(check_bias) % CHECK_FOR_BIAS) == 0) &&
-		    (!READ_ONCE(lock->rbias) && rdtsc() >= lock->inhibit_until))
+		    (!READ_ONCE(lock->rbias) &&
+		     rdtsc() >= lock->inhibit_until) &&
+		    global_vr_table != NULL)
 			WRITE_ONCE(lock->rbias, 1);
 #endif
 		this_cpu_inc(rwsem_reads);
