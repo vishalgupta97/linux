@@ -79,6 +79,8 @@ __kd_spin_lock_slowpath(struct qspinlock *lock)
 	curr_node->irqs_disabled = false;
 	curr_node->lock = lock;
 	curr_node->task_struct_ptr = current;
+	curr_node->diff_preempt_count = 0;
+	curr_node->lockm = FDS_TDLOCK;
 
 	print_debug("my_tail: %x\n", tail);
 
@@ -443,6 +445,8 @@ queue:
 		curr_node->irqs_disabled = false;
 		curr_node->lock = lock;
 		curr_node->task_struct_ptr = current;
+		curr_node->diff_preempt_count = 0;
+		curr_node->lockm = FDS_QSPINLOCK;
 
 		uint64_t prev_rsp = curr_node->rsp;
 		curr_node->rsp = 0xdeadbeef;
@@ -622,18 +626,11 @@ irq_release:
 
 static int __init kd_init(void)
 {
-	int i, j;
-	struct komb_node *komb_node;
+	int i;
 
 	for_each_possible_cpu(i) {
 		*per_cpu_ptr(&lock_rq_tail, i) = 0;
 	}
-
-	komb_node = per_cpu_ptr(&komb_nodes[0], 0);
-	komb_node->next = NULL;
-	komb_node->rsp = (void *)0xdeadbeef;
-	komb_node->locked_completed = 0;
-	komb_node->socket_id = -1;
 
 	num_delegation_threads = num_online_nodes();
 	num_cores_per_socket = num_online_cpus() / num_online_nodes();
@@ -657,4 +654,4 @@ static int __init kd_init(void)
 	return 0;
 }
 
-//module_init(kd_init)
+module_init(kd_init)

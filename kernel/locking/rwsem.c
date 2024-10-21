@@ -731,8 +731,8 @@ void down_write(struct rw_semaphore *lock)
 	}
 #endif
 
-	// if (lock->key.ptr == NULL || lock->key.ptr->lockm == FDS_QSPINLOCK) {
-	if (true) {
+	if (lock->key.ptr == NULL || lock->key.ptr->lockm == FDS_QSPINLOCK) {
+		// if (true) {
 		preempt_disable();
 
 		struct mutex_node *prev, *next;
@@ -995,7 +995,7 @@ void __init_rwsem(struct rw_semaphore *lock, const char *name,
 	lock->writer_tail = NULL;
 	lock->key.name = name;
 	lock->key.ptr = key;
-	init_fds_lock_key(key, name);
+	init_fds_lock_key(key, name, DEFAULT_FDS_LOCK);
 }
 EXPORT_SYMBOL(__init_rwsem);
 

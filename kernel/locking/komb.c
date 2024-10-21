@@ -135,10 +135,12 @@ __always_inline struct komb_node *get_next_node(struct komb_node *my_node)
 	next_node = curr_node->next;
 
 	while (true) {
-		if (next_node == NULL || next_node->next == NULL)
+		if (next_node == NULL ||
+		    (my_node->lockm == FDS_TCLOCK && next_node->next == NULL))
 			goto next_node_null;
 		else if (check_irq_node(next_node) ||
-			 check_irq_node(next_node->next))
+			 (my_node->lockm == FDS_TCLOCK &&
+			  check_irq_node(next_node->next)))
 			goto next_node_null;
 
 		// TODO: From Komb delegation, check if needed.
@@ -227,6 +229,9 @@ execute_cs(struct qspinlock *lock, struct komb_node *curr_node)
 		lock->locked = _Q_LOCKED_COMBINER_VAL;
 
 		next_node = ptr->next_node_ptr;
+
+		// TODO: Fix below if condition for TDLock
+		BUG_ON(curr_node->lockm == FDS_TDLOCK);
 
 		if (next_node != NULL && next_node->next != NULL &&
 		    !check_irq_node(next_node) &&
@@ -463,6 +468,7 @@ __komb_spin_lock_slowpath(struct qspinlock *lock)
 	curr_node->lock = lock;
 	curr_node->task_struct_ptr = current;
 	curr_node->diff_preempt_count = 0;
+	curr_node->lockm = FDS_TCLOCK;
 
 	return __komb_spin_lock_longjmp(lock, tail, curr_node);
 }
@@ -597,8 +603,10 @@ __komb_spin_lock(struct qspinlock *lock, enum fds_lock_mechanisms lockm)
 		return;
 
 	if (lockm == FDS_TAS) {
-		while (!komb_spin_trylock(lock))
-			cpu_relax();
+		while (atomic_cmpxchg_acquire(&lock->val, 0, _Q_LOCKED_VAL)) {
+			atomic_cond_read_relaxed(&lock->val, !(VAL));
+		}
+
 		return;
 	}
 
@@ -628,12 +636,12 @@ __komb_spin_lock(struct qspinlock *lock, enum fds_lock_mechanisms lockm)
 	return;
 
 queue:
-
 	curr_node = this_cpu_ptr(&komb_nodes[0]);
 	KOMB_BUG_ON(curr_node == NULL);
 
 	if (curr_node->count > 0 || !in_task() || irqs_disabled() ||
-	    current->migration_disabled || lockm == FDS_QSPINLOCK) {
+	    current->migration_disabled || lockm == FDS_QSPINLOCK ||
+	    lockm == FDS_DISABLE) {
 		struct komb_node *prev_node, *next_node;
 		u32 tail, idx;
 
@@ -660,6 +668,7 @@ queue:
 		curr_node->lock = lock;
 		curr_node->task_struct_ptr = current;
 		curr_node->diff_preempt_count = 0;
+		curr_node->lockm = FDS_QSPINLOCK;
 
 		uint64_t prev_rsp = curr_node->rsp;
 		curr_node->rsp = 0xdeadbeef;
@@ -762,13 +771,14 @@ void komb_spin_lock(struct qspinlock *lock)
 }
 EXPORT_SYMBOL_GPL(komb_spin_lock);
 
-void komb_spin_lock_fds(struct qspinlock *lock, struct fds_lock_key *key)
+__always_inline void komb_spin_lock_fds(struct qspinlock *lock,
+					struct fds_lock_key *key)
 {
-	/*if(lockm == FDS_TDLOCK)
+	if (atomic_cmpxchg_acquire(&lock->val, 0, _Q_LOCKED_VAL) == 0)
+		return;
+
+	if (key->lockm == FDS_TDLOCK)
 		kd_spin_lock(lock);
-	else*/
-	if (strcmp(key->name, "&futex_queues[i].lock") == 0)
-		__komb_spin_lock(lock, FDS_QSPINLOCK);
 	else
 		__komb_spin_lock(lock, key->lockm);
 }
@@ -836,8 +846,11 @@ komb_spin_unlock(struct qspinlock *lock)
 
 	uint64_t counter = ptr->counter_val;
 
-	if (next_node == NULL || next_node->next == NULL ||
-	    check_irq_node(next_node) || check_irq_node(next_node->next) ||
+	if (next_node == NULL ||
+	    (curr_node->lockm == FDS_TCLOCK && next_node->next == NULL) ||
+	    check_irq_node(next_node) ||
+	    (curr_node->lockm == FDS_TCLOCK &&
+	     check_irq_node(next_node->next)) ||
 	    counter >= komb_batch_size || need_resched()) {
 		incoming_rsp_ptr = &(ptr->local_shadow_stack_ptr);
 		ptr->curr_cs_cpu = -1;

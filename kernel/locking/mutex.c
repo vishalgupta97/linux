@@ -868,7 +868,7 @@ void ___mutex_init(struct mutex *lock, const char *name,
 	lock->combiner_task = NULL;
 	lock->key.name = name;
 	lock->key.ptr = key;
-	init_fds_lock_key(key, name);
+	init_fds_lock_key(key, name, DEFAULT_FDS_LOCK);
 }
 EXPORT_SYMBOL(___mutex_init);
 

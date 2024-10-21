@@ -20,7 +20,16 @@ void __raw_spin_lock_init(raw_spinlock_t *lock, const char *name,
 	lock->raw_lock = (arch_spinlock_t)__ARCH_SPIN_LOCK_UNLOCKED;
 	lock->key.name = name;
 	lock->key.ptr = key;
-	init_fds_lock_key(key, name);
+	init_fds_lock_key(key, name, DEFAULT_FDS_LOCK);
+}
+
+void __raw_spin_lock_init_disable_fds(raw_spinlock_t *lock, const char *name,
+				      struct fds_lock_key *key)
+{
+	lock->raw_lock = (arch_spinlock_t)__ARCH_SPIN_LOCK_UNLOCKED;
+	lock->key.name = name;
+	lock->key.ptr = key;
+	init_fds_lock_key(key, name, FDS_DISABLE);
 }
 
 EXPORT_SYMBOL(__raw_spin_lock_init);

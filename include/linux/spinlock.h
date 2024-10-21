@@ -95,6 +95,9 @@
 
 extern void __raw_spin_lock_init(raw_spinlock_t *lock, const char *name,
 				 struct fds_lock_key *key);
+extern void __raw_spin_lock_init_disable_fds(raw_spinlock_t *lock,
+					     const char *name,
+					     struct fds_lock_key *key);
 
 #define raw_spin_lock_init(lock)                             \
 	do {                                                 \
@@ -326,6 +329,13 @@ static __always_inline raw_spinlock_t *spinlock_check(spinlock_t *lock)
 	do {                                                                 \
 		static struct fds_lock_key __key;                            \
 		__raw_spin_lock_init(spinlock_check(_lock), #_lock, &__key); \
+	} while (0)
+
+#define spin_lock_init_disable_fds(_lock)                               \
+	do {                                                            \
+		static struct fds_lock_key __key;                       \
+		__raw_spin_lock_init_disable_fds(spinlock_check(_lock), \
+						 #_lock, &__key);       \
 	} while (0)
 
 extern struct task_struct *komb_get_current(spinlock_t *lock);

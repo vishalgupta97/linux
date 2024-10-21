@@ -319,6 +319,9 @@ void print_fds_stats(void)
 #define IS_VALUE 1
 #define IS_DIRECTION 2
 
+#define QSPINLOCK_LIMIT 1000000
+#define MONITOR_TIME 20000 // In milliseconds
+
 uint64_t value = 0;
 uint64_t direction = 0;
 
@@ -369,24 +372,20 @@ static const struct proc_ops direction_proc_ops = {
 	.proc_write = fds_direction_write,
 };
 
-#define QSPINLOCK_LIMIT 1000000
-
-inline bool __monitor_fds_stats(struct lock_stat *tmp, const char *type)
+inline void __monitor_fds_stats(struct lock_stat *tmp, const char *type,
+				bool is_spinlock)
 {
 	if (tmp->counter > QSPINLOCK_LIMIT) {
 		printk(KERN_ALERT
-		       "Over Qspinlock limit %s write Name: %s, Counter: %ld initial: %d\n",
+		       "Flipping %s write Name: %s, Counter: %ld initial: %d\n",
 		       type, tmp->name, tmp->counter, tmp->key->ptr->lockm);
-		if (tmp->key->ptr->lockm == FDS_QSPINLOCK) {
-			printk(KERN_ALERT
-			       "Flipping %s write Name: %s, Counter: %ld initial: %d\n",
-			       type, tmp->name, tmp->counter,
-			       tmp->key->ptr->lockm);
+		if (is_spinlock) {
+			tmp->key->ptr->lockm = ((tmp->key->ptr->lockm + 1) %
+						FDS_TDLOCK); //FDS_LOCKM_MAX
+		} else if (tmp->key->ptr->lockm == FDS_QSPINLOCK) {
 			tmp->key->ptr->lockm = FDS_TCLOCK;
-			return false;
 		}
 	}
-	return false;
 }
 
 void monitor_fds_stats(void)
@@ -395,18 +394,15 @@ void monitor_fds_stats(void)
 	struct lock_stat *tmp;
 
 	hash_for_each(write_stats_ht, bkt, tmp, hnode) {
-		if (__monitor_fds_stats(tmp, "RWSEM"))
-			break;
+		__monitor_fds_stats(tmp, "RWSEM", false);
 	}
 
 	hash_for_each(spin_stats_ht, bkt, tmp, hnode) {
-		if (__monitor_fds_stats(tmp, "SPINLOCK"))
-			break;
+		__monitor_fds_stats(tmp, "SPINLOCK", true);
 	}
 
 	hash_for_each(mutex_stats_ht, bkt, tmp, hnode) {
-		if (__monitor_fds_stats(tmp, "MUTEX"))
-			break;
+		__monitor_fds_stats(tmp, "MUTEX", false);
 	}
 }
 
@@ -414,7 +410,7 @@ int fds_monitor(void *args)
 {
 	printk(KERN_ALERT "Starting fds monitor\n");
 	while (!kthread_should_stop()) {
-		msleep(10000);
+		msleep(MONITOR_TIME);
 		preempt_disable();
 		print_komb_stats();
 		collect_fds_stats();

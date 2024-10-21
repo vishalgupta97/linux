@@ -25,6 +25,7 @@ struct komb_node {
 			int cpuid;
 			int irqs_disabled;
 			int diff_preempt_count;
+			enum fds_lock_mechanisms lockm;
 		};
 		char alignment1[128];
 	};

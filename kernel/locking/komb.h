@@ -12,7 +12,7 @@
 #include <linux/feedbacksync.h>
 #include <asm-generic/qspinlock.h>
 
-#define DEBUG_KOMB 1
+#define DEBUG_KOMB 0
 #define DSM_DEBUG 0
 
 #if DEBUG_KOMB

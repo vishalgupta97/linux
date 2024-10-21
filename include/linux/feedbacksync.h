@@ -11,7 +11,8 @@ enum fds_lock_mechanisms {
 	FDS_QSPINLOCK,
 	FDS_TCLOCK,
 	FDS_TDLOCK,
-	FDS_LOCKM_MAX
+	FDS_LOCKM_MAX,
+	FDS_DISABLE,
 };
 
 struct fds_lock_key {
@@ -20,13 +21,15 @@ struct fds_lock_key {
 	enum fds_lock_mechanisms lockm;
 };
 
-#define init_fds_lock_key(key, name)                \
-	{                                           \
-		if (key->ptr == NULL) {             \
-			key->ptr = key;             \
-			key->name = name;           \
-			key->lockm = FDS_QSPINLOCK; \
-		}                                   \
+#define DEFAULT_FDS_LOCK FDS_QSPINLOCK
+
+#define init_fds_lock_key(key, _name, _lockm) \
+	{                                     \
+		if (key->ptr == NULL) {       \
+			key->ptr = key;       \
+			key->name = _name;    \
+			key->lockm = _lockm;  \
+		}                             \
 	}
 
 void read_stat_lock_acquire(struct fds_lock_key *key);

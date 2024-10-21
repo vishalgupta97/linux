@@ -43,25 +43,30 @@
 
 struct rw_semaphore {
 	union {
-		atomic_long_t cnts;
+		struct {
+			atomic_long_t cnts;
+			char __padding1[120];
+		};
 		struct {
 			u8 wlocked;
 			u8 rcount[7];
+			char __padding2[120];
 		};
+		char __padding[128];
 	};
-	char dummy1[128];
-	char dummy2[128];
-	struct aqm_mutex reader_wait_lock;
-	char dummy3[128];
-	struct mutex_node *writer_tail;
-	char dummy4[128];
-	struct mutex_node *komb_waiter_rsp_ptr;
-	struct mutex_node *komb_waiter_node;
+	union {
+		struct aqm_mutex reader_wait_lock;
 #ifdef BRAVO
 	int rbias;
 	u64 inhibit_until;
 #endif
+	char __padding3[128];
+	};
+	union {
+	struct mutex_node *writer_tail;
 	struct fds_lock_key key;
+	char __padding4[128];
+	};
 };
 
 static inline int rwsem_is_locked(struct rw_semaphore *sem)
