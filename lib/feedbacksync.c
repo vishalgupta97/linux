@@ -256,7 +256,7 @@ inline void __print_fds_stats(struct lock_stat *tmp, const char *type,
 		if (tmp->counter > PRINT_COUNT_LIMIT)
 			printk(KERN_ALERT "%s Name: %s, Counter: %ld\n", type,
 			       tmp->name, tmp->counter);
-		*count++;
+		*count = *count + 1;
 	}
 }
 
