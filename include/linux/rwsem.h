@@ -36,27 +36,22 @@
 #define TABLE_SIZE ((NUM_SLOT * 8))
 #define V(i) ((i * 8))
 
-#define RBIAS_DISABLE 0x0
-#define RBIAS_BRAVO 0x1
-#define RBIAS_PER_CPU 0x11
-
 struct rw_semaphore {
 	union {
-		struct {
-			union {
-				atomic_long_t cnts;
-				struct {
-					u8 wlocked;
-					u8 rcount[7];
-				};
+		union {
+			atomic_long_t cnts;
+			struct {
+				u8 wlocked;
+				u8 rcount[7];
 			};
-			uint64_t __percpu *per_cpu_cntr;
-			uint64_t rbias;
 		};
 		char __padding[128];
 	};
 	union {
-		struct aqm_mutex reader_wait_lock;
+		struct {
+			struct aqm_mutex reader_wait_lock;
+			int rbias;
+		};
 		char __padding3[128];
 	};
 	union {

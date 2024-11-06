@@ -45,7 +45,7 @@ void print_komb_stats(void)
 {
 	printk(KERN_ALERT "======== KOMB spinlock stats ========\n");
 	int i;
-	uint64_t total_counters[18] = { 0 };
+	uint64_t total_counters[17] = { 0 };
 	for_each_online_cpu(i) {
 		total_counters[0] += per_cpu(combiner_count, i);
 		total_counters[1] += per_cpu(waiter_combined, i);
@@ -64,7 +64,6 @@ void print_komb_stats(void)
 		total_counters[14] += per_cpu(rwsem_reads, i);
 		total_counters[15] += per_cpu(rwsem_writes, i);
 		total_counters[16] += per_cpu(rwsem_downgrade, i);
-		total_counters[17] += per_cpu(rwsem_per_cpu_reads, i);
 	}
 
 	printk(KERN_ALERT "Combiner_count: %ld\n", total_counters[0]);
@@ -84,7 +83,6 @@ void print_komb_stats(void)
 	printk(KERN_ALERT "rwsem_reads: %ld\n", total_counters[14]);
 	printk(KERN_ALERT "rwsem_writes: %ld\n", total_counters[15]);
 	printk(KERN_ALERT "rwsem_downgrade: %ld\n", total_counters[16]);
-	printk(KERN_ALERT "rwsem_per_cpu_reads: %ld\n", total_counters[17]);
 }
 
 SYSCALL_DEFINE0(komb_stats)
@@ -116,7 +114,6 @@ SYSCALL_DEFINE0(komb_clear_stats)
 		*per_cpu_ptr(&rwsem_reads, i) = 0;
 		*per_cpu_ptr(&rwsem_writes, i) = 0;
 		*per_cpu_ptr(&rwsem_downgrade, i) = 0;
-		*per_cpu_ptr(&rwsem_per_cpu_reads, i) = 0;
 	}
 	return 0;
 }
