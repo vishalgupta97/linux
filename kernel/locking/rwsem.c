@@ -722,7 +722,7 @@ void down_write(struct rw_semaphore *lock)
 						  _KOMB_RWSEM_W_LOCKED);
 		if (val == 0) {
 			wait_for_visible_readers(lock);
-			goto write_exit;
+			goto write_exit_slowpath;
 		}
 	}
 #endif
@@ -789,7 +789,7 @@ irq_unlock:
 		WRITE_ONCE(next->locked, 0);
 irq_release:
 		preempt_enable();
-		goto write_exit;
+		goto write_exit_slowpath;
 	}
 
 	preempt_disable();
@@ -833,9 +833,10 @@ irq_release:
 		}
 	}
 	preempt_enable();
+write_exit_slowpath:
+	write_stat_lock_acquire(&lock->key);
 write_exit:
 	this_cpu_inc(rwsem_writes);
-	write_stat_lock_acquire(&lock->key);
 	return;
 }
 EXPORT_SYMBOL(down_write);
@@ -1051,7 +1052,7 @@ int down_write_trylock(struct rw_semaphore *lock)
 	if (val) {
 		wait_for_visible_readers(lock);
 		this_cpu_inc(rwsem_writes);
-		write_stat_lock_acquire(&lock->key);
+		//write_stat_lock_acquire(&lock->key);
 	}
 	return val;
 }

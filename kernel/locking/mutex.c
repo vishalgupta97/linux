@@ -734,7 +734,7 @@ EXPORT_SYMBOL(mutex_is_locked);
 int mutex_trylock(struct mutex *lock)
 {
 	if (!lock->locked && cmpxchg(&lock->locked, 0, 1) == 0) {
-		mutex_stat_lock_acquire(&lock->key);
+		// mutex_stat_lock_acquire(&lock->key);
 		return 1;
 	}
 

@@ -654,4 +654,4 @@ static int __init kd_init(void)
 	return 0;
 }
 
-module_init(kd_init)
+//module_init(kd_init)

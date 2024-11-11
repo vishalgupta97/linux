@@ -7,8 +7,8 @@
 #define NUM_BUCKETS 8192
 
 enum fds_lock_mechanisms {
-	FDS_TAS,
 	FDS_QSPINLOCK,
+        FDS_TAS,
 	FDS_TCLOCK,
 	FDS_TDLOCK,
 	FDS_LOCKM_MAX,
