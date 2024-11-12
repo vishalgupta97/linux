@@ -58,7 +58,7 @@ struct shadow_stack {
 			int curr_preempt_count;
 			bool is_local_queue_tail_last;
 		};
-		char dummy[128];
+		char alignment[256];
 	};
 };
 

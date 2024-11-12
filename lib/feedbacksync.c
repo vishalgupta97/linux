@@ -329,6 +329,7 @@ void print_fds_stats(void)
 #define MONITOR_TIME 20000 // In milliseconds
 
 #define QSPINLOCK_PER_SECOND 200000
+#define MUTEX_PER_SECOND 150000
 
 uint64_t value = 0;
 uint64_t direction = 0;
@@ -476,17 +477,16 @@ static long num_contending_locks = 0;
 
 static struct contending_locks observed_locks[MAX_CONTENDING_LOCKS];
 
-static enum fds_lock_mechanisms fds_spinlock_implementations[] = {
-	FDS_QSPINLOCK, FDS_TAS
-}; //, FDS_TCLOCK};
-static enum fds_lock_mechanisms fds_mutex_implementations[] = { FDS_QSPINLOCK,
-								FDS_TCLOCK };
-static enum fds_lock_mechanisms fds_read_sem_implementations[] = {
-	FDS_QSPINLOCK, FDS_BRAVO
-};
-static enum fds_lock_mechanisms fds_write_sem_implementations[] = {
-	FDS_QSPINLOCK, FDS_TCLOCK
-};
+static enum fds_lock_mechanisms fds_spinlock_implementations[] = { FDS_TCLOCK, FDS_QSPINLOCK, FDS_TAS};
+	// FDS_QSPINLOCK, FDS_TAS, FDS_TCLOCK};
+static enum fds_lock_mechanisms fds_mutex_implementations[] = {FDS_TCLOCK, FDS_QSPINLOCK};
+        // { FDS_QSPINLOCK, FDS_TCLOCK };
+static enum fds_lock_mechanisms fds_read_sem_implementations[] = { FDS_BRAVO, FDS_QSPINLOCK};
+	// FDS_QSPINLOCK, FDS_BRAVO
+//};
+static enum fds_lock_mechanisms fds_write_sem_implementations[] = {FDS_TCLOCK, FDS_QSPINLOCK};
+	 // FDS_QSPINLOCK, FDS_TCLOCK
+//};
 
 #define NELEMS(x) (sizeof(x) / sizeof((x)[0]))
 
@@ -644,7 +644,17 @@ static void fds_oracle_restart(void)
 inline void __find_contending_locks(struct lock_stat *tmp, const char *type,
 				    enum fds_lock_type ltype, u64 elapsed_time)
 {
-	if ((tmp->counter / elapsed_time) > QSPINLOCK_PER_SECOND) {
+        bool is_lock_contending = false;
+
+        switch(ltype) {
+                case FDS_MUTEX:
+                        is_lock_contending = (tmp->counter / elapsed_time) > MUTEX_PER_SECOND;
+                        break;
+                default:
+                        is_lock_contending = (tmp->counter / elapsed_time) > QSPINLOCK_PER_SECOND;
+        }
+
+	if (is_lock_contending) {
 		printk(KERN_ALERT
 		       "Contending lock type: %s Name: %s, Counter: %ld lock_type: %s\n",
 		       type, tmp->name, tmp->counter,

@@ -135,13 +135,18 @@ __always_inline struct komb_node *get_next_node(struct komb_node *my_node)
 	next_node = curr_node->next;
 
 	while (true) {
-		if (next_node == NULL ||
-		    (my_node->lockm == FDS_TCLOCK && next_node->next == NULL))
-			goto next_node_null;
-		else if (check_irq_node(next_node) ||
-			 (my_node->lockm == FDS_TCLOCK &&
-			  check_irq_node(next_node->next)))
-			goto next_node_null;
+                if (next_node == NULL ||
+	                  (next_node->next == NULL) ||
+	                check_irq_node(next_node) ||
+	                (check_irq_node(next_node->next)))
+                        goto next_node_null;
+		// if (next_node == NULL ||
+		//     (my_node->lockm == FDS_TCLOCK && next_node->next == NULL))
+		// 	goto next_node_null;
+		// else if (check_irq_node(next_node) ||
+		// 	 (my_node->lockm == FDS_TCLOCK &&
+		// 	  check_irq_node(next_node->next)))
+		// 	goto next_node_null;
 
 		// TODO: From Komb delegation, check if needed.
 		if (next_node->socket_id == -1) {
@@ -610,14 +615,17 @@ __komb_spin_lock(struct qspinlock *lock, enum fds_lock_mechanisms lockm)
 		return;
 	}
 
+        goto queue;
+
 	if (val == _Q_PENDING_VAL) {
 		cnt = _Q_PENDING_LOOPS;
 		val = atomic_cond_read_relaxed(
 			&lock->val, (VAL != _Q_PENDING_VAL) || !cnt--);
 	}
 
-	if (val & ~_Q_LOCKED_MASK ||
-	    (val & _Q_LOCKED_MASK) == _Q_LOCKED_IRQ_VAL)
+        //TODO: Check if the below condition is correct
+	if ((val & ~_Q_LOCKED_MASK) ||
+	    ((val & _Q_LOCKED_MASK) == _Q_LOCKED_IRQ_VAL))
 		goto queue;
 
 	val = komb_fetch_set_pending_acquire(lock);
@@ -846,11 +854,17 @@ komb_spin_unlock(struct qspinlock *lock)
 
 	uint64_t counter = ptr->counter_val;
 
-	if (next_node == NULL ||
-	    (curr_node->lockm == FDS_TCLOCK && next_node->next == NULL) ||
+	// if (next_node == NULL ||
+	//     (next_node->lockm == FDS_TCLOCK && next_node->next == NULL) ||
+	//     check_irq_node(next_node) ||
+	//     (next_node->lockm == FDS_TCLOCK &&
+	//      check_irq_node(next_node->next)) ||
+	//     counter >= komb_batch_size || need_resched()) {
+
+        if (next_node == NULL ||
+	    (next_node->next == NULL) ||
 	    check_irq_node(next_node) ||
-	    (curr_node->lockm == FDS_TCLOCK &&
-	     check_irq_node(next_node->next)) ||
+	    (check_irq_node(next_node->next)) ||
 	    counter >= komb_batch_size || need_resched()) {
 		incoming_rsp_ptr = &(ptr->local_shadow_stack_ptr);
 		ptr->curr_cs_cpu = -1;
@@ -940,6 +954,8 @@ __always_inline int komb_spin_value_unlocked(struct qspinlock lock)
 
 struct task_struct *komb_get_current(spinlock_t *lock)
 {
+        return current;
+
 	struct shadow_stack *ptr = this_cpu_ptr(&local_shadow_stack);
 
 	int j, my_idx;
