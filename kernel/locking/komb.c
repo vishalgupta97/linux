@@ -39,11 +39,6 @@ inline __pure struct komb_node *decode_tail(u32 tail)
 	return per_cpu_ptr(&komb_nodes[idx], cpu);
 }
 
-inline __pure u32 get_cpu_from_tail(u32 tail)
-{
-	return ((tail >> _Q_TAIL_CPU_OFFSET) - 1);
-}
-
 static inline bool check_irq_node(struct komb_node *node)
 {
 	return (node->socket_id == IRQ_NUMA_NODE || node->rsp == 0xdeadbeef);
@@ -150,6 +145,7 @@ __always_inline struct komb_node *get_next_node(struct komb_node *my_node)
 
 		// TODO: From Komb delegation, check if needed.
 		if (next_node->socket_id == -1) {
+			BUG_ON(true);
 			curr_node->next = NULL;
 			curr_node = next_node;
 			next_node = curr_node->next;
@@ -193,6 +189,12 @@ execute_cs(struct qspinlock *lock, struct komb_node *curr_node)
 	ptr->curr_cs_cpu = curr_node->cpuid;
 	ptr->curr_preempt_count = preempt_count();
 
+	if(ptr->curr_preempt_count != curr_node->my_preempt_count) {
+		printk(KERN_ALERT "preempt_count combiner: %d next: %d\n",
+			       ptr->curr_preempt_count, curr_node->my_preempt_count);
+			BUG_ON(true);
+	}
+
 	KOMB_BUG_ON(curr_node->cpuid == smp_processor_id());
 	KOMB_BUG_ON((ptr->ptr - (ptr->local_shadow_stack_ptr)) >
 		    SIZE_OF_SHADOW_STACK);
@@ -223,6 +225,7 @@ execute_cs(struct qspinlock *lock, struct komb_node *curr_node)
 
 		if (ptr->curr_cs_cpu != -1) {
 			print_debug("OOO waking up %d\n", ptr->curr_cs_cpu);
+			BUG_ON(true); // Check if index needs to be checked here
 			curr_node =
 				per_cpu_ptr(&komb_nodes[0], ptr->curr_cs_cpu);
 			curr_node->rsp = this_cpu_ptr(&komb_nodes[0])->rsp;
@@ -351,7 +354,6 @@ __komb_spin_lock_longjmp(struct qspinlock *lock, int tail,
 				if (ptr->lock_addr[j] != NULL)
 					break;
 
-			curr_node->count--;
 
 			if (j >= 0) {
 				parent_lock = ptr->lock_addr[j];
@@ -359,6 +361,8 @@ __komb_spin_lock_longjmp(struct qspinlock *lock, int tail,
 				if (parent_lock->locked ==
 				    _Q_UNLOCKED_OOO_VAL) {
 					print_debug("Waiter unlocked OOO\n");
+					BUG_ON(true); // Check if count needs to be decremented here
+					curr_node->count--;
 					return 1;
 				}
 			}
@@ -369,7 +373,8 @@ __komb_spin_lock_longjmp(struct qspinlock *lock, int tail,
 			prefetchw(curr_node->rsp + 192);
 			prefetchw(curr_node->rsp + 256);
 			prefetchw(curr_node->rsp + 320);
-			return 0;
+
+			goto release;
 		}
 	}
 
@@ -393,7 +398,6 @@ __komb_spin_lock_longjmp(struct qspinlock *lock, int tail,
 	ptr->irqs_disabled = false;
 	KOMB_BUG_ON(ptr->prev_cs_cpu != -1);
 
-	curr_node->count--;
 	prev_locked_val = lock->locked;
 	KOMB_BUG_ON(prev_locked_val >= _Q_LOCKED_COMBINER_VAL);
 
@@ -437,6 +441,7 @@ __komb_spin_lock_longjmp(struct qspinlock *lock, int tail,
 	if (lock->locked == _Q_UNLOCKED_OOO_VAL) {
 		if (prev_cs_cpu != -1) {
 			print_debug("Waking up %d\n", prev_cs_cpu);
+			BUG_ON(true);
 			clear_locked_set_completed(
 				per_cpu_ptr(&komb_nodes[0], prev_cs_cpu));
 		}
@@ -446,7 +451,6 @@ __komb_spin_lock_longjmp(struct qspinlock *lock, int tail,
 	}
 	lock->locked = prev_locked_val;
 
-	return 0;
 release:
 	curr_node->count--;
 	return 0;
@@ -461,6 +465,9 @@ __komb_spin_lock_slowpath(struct qspinlock *lock)
 
 	curr_node = this_cpu_ptr(&komb_nodes[0]);
 	idx = curr_node->count++;
+
+	BUG_ON(idx != 0);
+
 	tail = encode_tail(smp_processor_id(), idx);
 
 	curr_node->locked = true;
@@ -472,6 +479,7 @@ __komb_spin_lock_slowpath(struct qspinlock *lock)
 	curr_node->irqs_disabled = false;
 	curr_node->lock = lock;
 	curr_node->task_struct_ptr = current;
+	curr_node->my_preempt_count = preempt_count();
 	curr_node->diff_preempt_count = 0;
 	curr_node->lockm = FDS_TCLOCK;
 
@@ -675,6 +683,7 @@ queue:
 		curr_node->irqs_disabled = false;
 		curr_node->lock = lock;
 		curr_node->task_struct_ptr = current;
+		curr_node->my_preempt_count = preempt_count();
 		curr_node->diff_preempt_count = 0;
 		curr_node->lockm = FDS_QSPINLOCK;
 
@@ -689,7 +698,7 @@ queue:
 			prev_node = decode_tail(old_tail);
 			WRITE_ONCE(prev_node->next, curr_node);
 
-			print_debug("IRQ going to waiting for lock\n");
+			//print_debug("IRQ going to waiting for lock\n");
 			smp_cond_load_relaxed_sched(&curr_node->locked, !(VAL));
 		}
 
@@ -697,7 +706,7 @@ queue:
 
 		u32 val, new_val;
 
-		print_debug("IRQ spinning on the locked field\n");
+		//print_debug("IRQ spinning on the locked field\n");
 
 		val = atomic_cond_read_acquire(&lock->val,
 					       !(VAL & _Q_LOCKED_PENDING_MASK));
@@ -705,7 +714,7 @@ queue:
 		if (((val & _Q_TAIL_MASK) == tail) &&
 		    atomic_try_cmpxchg_relaxed(&lock->val, &val,
 					       _Q_LOCKED_IRQ_VAL)) {
-			print_debug("IRQ only one in the queue unlocked\n");
+			//print_debug("IRQ only one in the queue unlocked\n");
 			goto irq_release;
 		}
 
@@ -724,7 +733,7 @@ queue:
 				break;
 		}
 
-		print_debug("IRQ got the lock\n");
+		//print_debug("IRQ got the lock\n");
 
 		smp_cond_load_relaxed_sched(&curr_node->next, (VAL));
 		next_node = curr_node->next;
@@ -733,14 +742,17 @@ queue:
 
 		WRITE_ONCE(next_node->locked, false);
 
-		print_debug("IRQ passing lock next node: %d\n",
-			    next_node->cpuid);
+		//print_debug("IRQ passing lock next node: %d\n",
+		//	    next_node->cpuid);
 
 irq_release:
 		curr_node = this_cpu_ptr(&komb_nodes[0]);
 		curr_node->count--;
 		return;
 	} else {
+		curr_node = this_cpu_ptr(&komb_nodes[0]);
+		BUG_ON(curr_node->count != 0);
+
 		komb_spin_lock_slowpath(lock);
 
 		struct shadow_stack *ptr = this_cpu_ptr(&local_shadow_stack);
@@ -883,18 +895,28 @@ komb_spin_unlock(struct qspinlock *lock)
 	outgoing_rsp_ptr = &(curr_node->rsp);
 
 	waiter_preempt_count = preempt_count();
+
 	if (ptr->curr_preempt_count != waiter_preempt_count) {
+		BUG_ON(true);
 		BUG_ON(irq_count() > 0);
 		if (waiter_preempt_count < ptr->curr_preempt_count) {
 			printk(KERN_ALERT "preempt_count prev: %d curr: %d\n",
 			       waiter_preempt_count, ptr->curr_preempt_count);
 			BUG_ON(true);
 		}
+		printk(KERN_ALERT "preempt_count prev: %d curr: %d\n",
+			       waiter_preempt_count, ptr->curr_preempt_count);
 		curr_node->diff_preempt_count =
-			(waiter_preempt_count - ptr->curr_preempt_count);
+		 	(waiter_preempt_count - ptr->curr_preempt_count);
 		this_cpu_inc(fixing_preempt_count);
 		__preempt_count_sub(curr_node->diff_preempt_count);
 		BUG_ON(preempt_count() != ptr->curr_preempt_count);
+	}
+
+	if(preempt_count() != next_node->my_preempt_count) {
+		printk(KERN_ALERT "preempt_count current: %d next: %d\n",
+			       preempt_count(), next_node->my_preempt_count);
+			BUG_ON(true);
 	}
 
 	KOMB_BUG_ON(incoming_rsp_ptr == NULL);
@@ -952,41 +974,20 @@ __always_inline int komb_spin_value_unlocked(struct qspinlock lock)
 	return !atomic_read(&lock.val);
 }
 
-struct task_struct *komb_get_current(spinlock_t *lock)
+__always_inline struct task_struct *komb_get_current(void)
 {
-        return current;
-
 	struct shadow_stack *ptr = this_cpu_ptr(&local_shadow_stack);
 
-	int j, my_idx;
-
-	if (current->komb_curr_waiter_task) {
+	if (get_current()->komb_curr_waiter_task) {
 		printk(KERN_ALERT "Mutex/rwsem running with current\n");
 		BUG_ON(true);
 	}
 
-	j = 0;
-	my_idx = -1;
-
-	for (j = 0; j < 8; j++) {
-		if (ptr->lock_addr[j] == lock) {
-			if (lock->key.ptr)
-				printk(KERN_ALERT "lock_name: %s\n",
-				       lock->key.ptr->name);
-			BUG_ON(true);
-			// KOMB_BUG_ON(ptr->curr_cs_cpu < 0);
-			// return per_cpu_ptr(&komb_nodes[0], ptr->curr_cs_cpu)
-			// 	->task_struct_ptr;
-		}
+	if(ptr->lock_addr[0] != NULL) {
+		printk(KERN_ALERT "Spinlock combiner asking for current\n");
+		BUG_ON(true);
 	}
 
-	// if (lock->rlock.raw_lock.locked == _Q_LOCKED_COMBINER_VAL)
-	// 	BUG_ON(true);
-
-	return current;
+	return get_current();
 }
-
-void komb_set_current_state(spinlock_t *lock, unsigned int state)
-{
-	smp_store_mb(komb_get_current(lock)->__state, state);
-}
+EXPORT_SYMBOL(komb_get_current);

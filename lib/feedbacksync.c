@@ -43,7 +43,7 @@ enum HASHTABLE_TYPE {
 
 void __stat_lock_acquire(struct fds_lock_key *key, enum HASHTABLE_TYPE ht_type)
 {
-	if (!fds_running || key == NULL || key->ptr == NULL)
+	if (!fds_running || key == NULL || key->ptr == NULL || key->ptr->lockm == FDS_DISABLE)
 		return;
 
 	uint64_t bucket = (((uint64_t)key->ptr) & (0x1fff));
@@ -477,11 +477,12 @@ static long num_contending_locks = 0;
 
 static struct contending_locks observed_locks[MAX_CONTENDING_LOCKS];
 
-static enum fds_lock_mechanisms fds_spinlock_implementations[] = { FDS_TCLOCK, FDS_QSPINLOCK, FDS_TAS};
+static enum fds_lock_mechanisms fds_spinlock_implementations[] = { FDS_TAS, FDS_QSPINLOCK, FDS_TCLOCK};
 	// FDS_QSPINLOCK, FDS_TAS, FDS_TCLOCK};
-static enum fds_lock_mechanisms fds_mutex_implementations[] = {FDS_TCLOCK, FDS_QSPINLOCK};
-        // { FDS_QSPINLOCK, FDS_TCLOCK };
-static enum fds_lock_mechanisms fds_read_sem_implementations[] = { FDS_BRAVO, FDS_QSPINLOCK};
+static enum fds_lock_mechanisms fds_mutex_implementations[] = 
+         { FDS_QSPINLOCK, FDS_TCLOCK };
+//{FDS_TCLOCK, FDS_QSPINLOCK};
+static enum fds_lock_mechanisms fds_read_sem_implementations[] = { FDS_QSPINLOCK, FDS_BRAVO};
 	// FDS_QSPINLOCK, FDS_BRAVO
 //};
 static enum fds_lock_mechanisms fds_write_sem_implementations[] = {FDS_TCLOCK, FDS_QSPINLOCK};
@@ -857,7 +858,7 @@ int fds_monitor(void *args)
 		print_komb_stats();
 		collect_fds_stats();
 		print_fds_stats();
-		//monitor_fds_stats();
+		monitor_fds_stats();
 		reset_fds_stats();
 		preempt_enable();
 monitor_end:

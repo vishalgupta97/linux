@@ -338,8 +338,7 @@ static __always_inline raw_spinlock_t *spinlock_check(spinlock_t *lock)
 						 #_lock, &__key);       \
 	} while (0)
 
-extern struct task_struct *komb_get_current(spinlock_t *lock);
-extern void komb_set_current_state(spinlock_t *lock, unsigned int state);
+extern struct task_struct *komb_get_current(void);
 
 static __always_inline void spin_lock(spinlock_t *lock)
 {

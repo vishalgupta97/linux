@@ -24,6 +24,7 @@ struct komb_node {
 			int socket_id;
 			int cpuid;
 			int irqs_disabled;
+			int my_preempt_count;
 			int diff_preempt_count;
 			enum fds_lock_mechanisms lockm;
 		};

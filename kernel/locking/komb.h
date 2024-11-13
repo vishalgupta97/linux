@@ -89,8 +89,6 @@ DECLARE_PER_CPU_SHARED_ALIGNED(struct shadow_stack, local_shadow_stack);
 
 u32 encode_tail(int cpu, int idx);
 struct komb_node *decode_tail(u32 tail);
-u32 get_cpu_from_tail(u32 tail);
-u32 get_cpu_from_tail(u32 tail);
 void clear_locked_set_completed(struct komb_node *lock);
 u32 xchg_tail(struct qspinlock *lock, u32 tail);
 u32 cmpxchg_tail(struct qspinlock *lock, u32 tail, u32 new_tail);
