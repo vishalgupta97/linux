@@ -12,8 +12,8 @@
 #include <linux/feedbacksync.h>
 #include <asm-generic/qspinlock.h>
 
-#define DEBUG_KOMB 0
-#define DSM_DEBUG 0
+#define DEBUG_KOMB 1
+#define DSM_DEBUG 1
 
 #if DEBUG_KOMB
 #define KOMB_BUG_ON(cond_expr) BUG_ON(cond_expr)

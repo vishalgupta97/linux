@@ -128,15 +128,15 @@ __always_inline void add_to_local_queue(struct komb_node *node)
 }
 
 __always_inline bool check_exit_condition(enum fds_lock_mechanisms curr_lockm, struct komb_node *my_node) {
-	if(lockm == FDS_TCLOCK) {
-		return (my_node == NULL || check_irq_node(my_node) || !check_tclock_node(my_node)
+	if(curr_lockm == FDS_TCLOCK) {
+		return (my_node == NULL || check_irq_node(my_node) ||
 			my_node->next == NULL || check_irq_node(my_node->next));
-	} else if(lockm == FDS_TDLOCK) {
+	} else if(curr_lockm == FDS_TDLOCK) {
 		return (my_node == NULL || check_irq_node(my_node) || check_tclock_node(my_node));
 	} else {
 		BUG_ON(true);
-		return true;
 	}
+	return true;
 }
 
 __always_inline struct komb_node *get_next_node(struct komb_node *my_node)
@@ -274,7 +274,8 @@ __attribute__((noipa)) noinline notrace static void
 run_combiner(struct qspinlock *lock, struct komb_node *curr_node)
 {
 	KOMB_BUG_ON(curr_node == NULL);
-	struct komb_node *next_node = curr_node->next;
+	KOMB_BUG_ON(curr_node->lockm != FDS_TCLOCK);
+	struct komb_node *next_node = NULL;
 	int counter = 0;
 
 	if(check_exit_condition(FDS_TCLOCK, curr_node)) {
@@ -499,6 +500,8 @@ __komb_spin_lock_slowpath(struct qspinlock *lock)
 	curr_node->my_preempt_count = preempt_count();
 	curr_node->diff_preempt_count = 0;
 	curr_node->lockm = FDS_TCLOCK;
+
+	print_debug("Adding node for tclock\n");
 
 	return __komb_spin_lock_longjmp(lock, tail, curr_node);
 }
@@ -896,7 +899,7 @@ komb_spin_unlock(struct qspinlock *lock)
 	//     (check_irq_node(next_node->next)) ||
 	//     counter >= komb_batch_size || need_resched()) {
 
-	if(check_exit_condition(next_node) ||
+	if(check_exit_condition(curr_node->lockm, next_node) ||
 	    counter >= komb_batch_size || need_resched()) {
 		incoming_rsp_ptr = &(ptr->local_shadow_stack_ptr);
 		ptr->curr_cs_cpu = -1;
