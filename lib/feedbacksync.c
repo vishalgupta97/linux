@@ -261,7 +261,7 @@ void reset_fds_stats(void)
 	spin_unlock(&stat_ht_lock);
 }
 
-#define PRINT_COUNT_LIMIT 100000
+#define PRINT_COUNT_LIMIT 1000
 
 inline void __print_fds_stats(struct lock_stat *tmp, const char *type,
 			      uint64_t *count)
@@ -326,7 +326,7 @@ void print_fds_stats(void)
 #define IS_DIRECTION 2
 
 #define QSPINLOCK_LIMIT 1000000
-#define MONITOR_TIME 20000 // In milliseconds
+#define MONITOR_TIME 10000 // In milliseconds
 
 #define QSPINLOCK_PER_SECOND 200000
 #define MUTEX_PER_SECOND 150000
@@ -477,7 +477,7 @@ static long num_contending_locks = 0;
 
 static struct contending_locks observed_locks[MAX_CONTENDING_LOCKS];
 
-static enum fds_lock_mechanisms fds_spinlock_implementations[] = { FDS_TAS, FDS_QSPINLOCK, FDS_TCLOCK};
+static enum fds_lock_mechanisms fds_spinlock_implementations[] = { FDS_TAS, FDS_QSPINLOCK, FDS_TCLOCK, FDS_TDLOCK};
 	// FDS_QSPINLOCK, FDS_TAS, FDS_TCLOCK};
 static enum fds_lock_mechanisms fds_mutex_implementations[] = 
          { FDS_QSPINLOCK, FDS_TCLOCK };
@@ -795,27 +795,31 @@ static const struct proc_ops oracle_proc_ops = {
 inline void __monitor_fds_stats(struct lock_stat *tmp, const char *type,
 				enum fds_lock_type ltype)
 {
+	int i;
 	if (tmp->counter > QSPINLOCK_LIMIT) {
-		printk(KERN_ALERT
-		       "Flipping %s write Name: %s, Counter: %ld initial: %s\n",
-		       type, tmp->name, tmp->counter,
-		       get_str_lockm(tmp->key->ptr->lockm));
+		enum fds_lock_mechanisms before = tmp->key->ptr->lockm;
 		switch (ltype) {
-		// case FDS_SPINLOCK:
-		// 	tmp->key->ptr->lockm = ((tmp->key->ptr->lockm + 1) %
-		// 				FDS_TDLOCK); //FDS_LOCKM_MAX
-		// 	break;
+		case FDS_SPINLOCK:
+			for(i = 0; i < NELEMS(fds_spinlock_implementations); i++)
+				if(tmp->key->ptr->lockm == fds_spinlock_implementations[i])
+					break;
+			tmp->key->ptr->lockm = fds_spinlock_implementations[(i+1) % NELEMS(fds_spinlock_implementations)];
+			break;
 		case FDS_READ_SEM:
 			if (tmp->key->ptr->lockm == FDS_QSPINLOCK)
 				tmp->key->ptr->lockm = FDS_BRAVO;
 			break;
-		case FDS_SPINLOCK:
 		case FDS_WRITE_SEM:
 		case FDS_MUTEX:
 			if (tmp->key->ptr->lockm == FDS_QSPINLOCK)
 				tmp->key->ptr->lockm = FDS_TCLOCK;
 			break;
 		}
+		printk(KERN_ALERT
+		       "Flipping %s write Name: %s, Counter: %ld before: %s new: %s\n",
+		       type, tmp->name, tmp->counter,
+		       get_str_lockm(before),
+		       get_str_lockm(tmp->key->ptr->lockm));
 	}
 }
 

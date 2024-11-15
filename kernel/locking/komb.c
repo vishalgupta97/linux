@@ -44,6 +44,11 @@ static inline bool check_irq_node(struct komb_node *node)
 	return (node->socket_id == IRQ_NUMA_NODE || node->rsp == 0xdeadbeef);
 }
 
+static inline bool check_tclock_node(struct komb_node *node)
+{
+	return (node->lockm == FDS_TCLOCK);
+}
+
 __always_inline void clear_locked_set_completed(struct komb_node *lock)
 {
 	WRITE_ONCE(lock->locked_completed, 1);
@@ -122,6 +127,18 @@ __always_inline void add_to_local_queue(struct komb_node *node)
 	ptr->is_local_queue_tail_last = true;
 }
 
+__always_inline bool check_exit_condition(enum fds_lock_mechanisms curr_lockm, struct komb_node *my_node) {
+	if(lockm == FDS_TCLOCK) {
+		return (my_node == NULL || check_irq_node(my_node) || !check_tclock_node(my_node)
+			my_node->next == NULL || check_irq_node(my_node->next));
+	} else if(lockm == FDS_TDLOCK) {
+		return (my_node == NULL || check_irq_node(my_node) || check_tclock_node(my_node));
+	} else {
+		BUG_ON(true);
+		return true;
+	}
+}
+
 __always_inline struct komb_node *get_next_node(struct komb_node *my_node)
 {
 	struct komb_node *curr_node, *next_node;
@@ -130,11 +147,14 @@ __always_inline struct komb_node *get_next_node(struct komb_node *my_node)
 	next_node = curr_node->next;
 
 	while (true) {
-                if (next_node == NULL ||
-	                  (next_node->next == NULL) ||
-	                check_irq_node(next_node) ||
-	                (check_irq_node(next_node->next)))
-                        goto next_node_null;
+		if(check_exit_condition(my_node->lockm, next_node))
+			goto next_node_null;
+
+                // if (next_node == NULL ||
+	        //           (next_node->next == NULL) ||
+	        //         check_irq_node(next_node) ||
+	        //         (check_irq_node(next_node->next)))
+                //         goto next_node_null;
 		// if (next_node == NULL ||
 		//     (my_node->lockm == FDS_TCLOCK && next_node->next == NULL))
 		// 	goto next_node_null;
@@ -238,14 +258,12 @@ execute_cs(struct qspinlock *lock, struct komb_node *curr_node)
 
 		next_node = ptr->next_node_ptr;
 
-		// TODO: Fix below if condition for TDLock
-		BUG_ON(curr_node->lockm == FDS_TDLOCK);
+		// if (next_node != NULL && next_node->next != NULL &&
+		//     !check_irq_node(next_node) &&
+		//     !check_irq_node(next_node->next)) {
 
-		if (next_node != NULL && next_node->next != NULL &&
-		    !check_irq_node(next_node) &&
-		    !check_irq_node(next_node->next)) {
+		if(!check_exit_condition(next_node->lockm, next_node))
 			execute_cs(lock, ptr->next_node_ptr);
-		}
 	}
 }
 #pragma GCC pop_options
@@ -259,8 +277,7 @@ run_combiner(struct qspinlock *lock, struct komb_node *curr_node)
 	struct komb_node *next_node = curr_node->next;
 	int counter = 0;
 
-	if (next_node == NULL || check_irq_node(curr_node) ||
-	    check_irq_node(next_node)) {
+	if(check_exit_condition(FDS_TCLOCK, curr_node)) {
 		set_locked(lock);
 		curr_node->locked = false;
 		smp_mb();
@@ -873,10 +890,13 @@ komb_spin_unlock(struct qspinlock *lock)
 	//      check_irq_node(next_node->next)) ||
 	//     counter >= komb_batch_size || need_resched()) {
 
-        if (next_node == NULL ||
-	    (next_node->next == NULL) ||
-	    check_irq_node(next_node) ||
-	    (check_irq_node(next_node->next)) ||
+        // if (next_node == NULL ||
+	//     (next_node->next == NULL) ||
+	//     check_irq_node(next_node) ||
+	//     (check_irq_node(next_node->next)) ||
+	//     counter >= komb_batch_size || need_resched()) {
+
+	if(check_exit_condition(next_node) ||
 	    counter >= komb_batch_size || need_resched()) {
 		incoming_rsp_ptr = &(ptr->local_shadow_stack_ptr);
 		ptr->curr_cs_cpu = -1;
@@ -890,6 +910,12 @@ komb_spin_unlock(struct qspinlock *lock)
 		ptr->counter_val = counter + 1;
 		print_debug("Jumping to the next waiter: %d\n",
 			    next_node->cpuid);
+
+		if(preempt_count() != next_node->my_preempt_count) {
+			printk(KERN_ALERT "preempt_count current: %d next: %d\n",
+				preempt_count(), next_node->my_preempt_count);
+			BUG_ON(true);
+		}
 	}
 
 	outgoing_rsp_ptr = &(curr_node->rsp);
@@ -913,11 +939,6 @@ komb_spin_unlock(struct qspinlock *lock)
 		BUG_ON(preempt_count() != ptr->curr_preempt_count);
 	}
 
-	if(preempt_count() != next_node->my_preempt_count) {
-		printk(KERN_ALERT "preempt_count current: %d next: %d\n",
-			       preempt_count(), next_node->my_preempt_count);
-			BUG_ON(true);
-	}
 
 	KOMB_BUG_ON(incoming_rsp_ptr == NULL);
 	KOMB_BUG_ON(outgoing_rsp_ptr == NULL);
