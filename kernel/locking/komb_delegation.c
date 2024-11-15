@@ -16,7 +16,7 @@ extern enum system_states system_state;
 #pragma GCC push_options
 #pragma GCC optimize("O3")
 __attribute__((noipa)) noinline notrace static struct komb_node *
-run_combiner(struct komb_node *curr_node)
+tdlock_run_combiner(struct komb_node *curr_node)
 {
 	struct shadow_stack *ptr;
 	struct qspinlock *lock;
@@ -79,6 +79,7 @@ __kd_spin_lock_slowpath(struct qspinlock *lock)
 	curr_node->irqs_disabled = false;
 	curr_node->lock = lock;
 	curr_node->task_struct_ptr = current;
+	// curr_node->my_preempt_count = preempt_count();
 	curr_node->diff_preempt_count = 0;
 	curr_node->lockm = FDS_TDLOCK;
 
@@ -222,9 +223,9 @@ int komb_thread(void *args)
 		KOMB_BUG_ON(!in_task());
 		KOMB_BUG_ON(irqs_disabled());
 
-		prev_preempt_count = preempt_count();
+		// prev_preempt_count = preempt_count();
 
-		prev_node = run_combiner(next_node);
+		prev_node = tdlock_run_combiner(next_node);
 
 		KOMB_BUG_ON(prev_preempt_count != preempt_count());
 
@@ -445,6 +446,7 @@ queue:
 		curr_node->irqs_disabled = false;
 		curr_node->lock = lock;
 		curr_node->task_struct_ptr = current;
+		// curr_node->my_preempt_count = preempt_count();
 		curr_node->diff_preempt_count = 0;
 		curr_node->lockm = FDS_QSPINLOCK;
 

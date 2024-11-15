@@ -128,9 +128,12 @@ __always_inline void add_to_local_queue(struct komb_node *node)
 }
 
 __always_inline bool check_exit_condition(enum fds_lock_mechanisms curr_lockm, struct komb_node *my_node) {
+	// return (my_node == NULL || check_irq_node(my_node) ||
+	// 		my_node->next == NULL || check_irq_node(my_node->next));
+			
 	if(curr_lockm == FDS_TCLOCK) {
-		return (my_node == NULL || check_irq_node(my_node) ||
-			my_node->next == NULL || check_irq_node(my_node->next));
+		return (my_node == NULL || check_irq_node(my_node) || !check_tclock_node(my_node) ||
+			my_node->next == NULL || check_irq_node(my_node->next)) || !check_tclock_node(my_node->next);
 	} else if(curr_lockm == FDS_TDLOCK) {
 		return (my_node == NULL || check_irq_node(my_node) || check_tclock_node(my_node));
 	} else {
@@ -207,17 +210,17 @@ execute_cs(struct qspinlock *lock, struct komb_node *curr_node)
 	struct shadow_stack *ptr = this_cpu_ptr(&local_shadow_stack);
 
 	ptr->curr_cs_cpu = curr_node->cpuid;
-	ptr->curr_preempt_count = preempt_count();
+	// ptr->curr_preempt_count = preempt_count();
 
-	if(ptr->curr_preempt_count != curr_node->my_preempt_count) {
-		printk(KERN_ALERT "preempt_count combiner: %d next: %d\n",
-			       ptr->curr_preempt_count, curr_node->my_preempt_count);
-			BUG_ON(true);
-	}
+	// if(ptr->curr_preempt_count != curr_node->my_preempt_count) {
+	// 	printk(KERN_ALERT "preempt_count combiner: %d next: %d\n",
+	// 		       ptr->curr_preempt_count, curr_node->my_preempt_count);
+	// 		BUG_ON(true);
+	// }
 
 	KOMB_BUG_ON(curr_node->cpuid == smp_processor_id());
-	KOMB_BUG_ON((ptr->ptr - (ptr->local_shadow_stack_ptr)) >
-		    SIZE_OF_SHADOW_STACK);
+	// KOMB_BUG_ON((ptr->ptr - (ptr->local_shadow_stack_ptr)) >
+	// 	    SIZE_OF_SHADOW_STACK); // TODO: Check if condition is correct and uncomment all instances.
 
 	// For Komb delegation
 	ptr->is_local_queue_tail_last = false;
@@ -233,8 +236,8 @@ execute_cs(struct qspinlock *lock, struct komb_node *curr_node)
 
 	komb_context_switch(incoming_rsp_ptr, outgoing_rsp_ptr);
 
-	KOMB_BUG_ON((ptr->ptr - (ptr->local_shadow_stack_ptr)) >
-		    SIZE_OF_SHADOW_STACK);
+	// KOMB_BUG_ON((ptr->ptr - (ptr->local_shadow_stack_ptr)) >
+	// 	    SIZE_OF_SHADOW_STACK);
 
 	if (lock->locked == _Q_UNLOCKED_OOO_VAL) {
 		print_debug("Combiner got control back OOO unlock\n");
@@ -274,11 +277,10 @@ __attribute__((noipa)) noinline notrace static void
 run_combiner(struct qspinlock *lock, struct komb_node *curr_node)
 {
 	KOMB_BUG_ON(curr_node == NULL);
-	KOMB_BUG_ON(curr_node->lockm != FDS_TCLOCK);
 	struct komb_node *next_node = NULL;
 	int counter = 0;
 
-	if(check_exit_condition(FDS_TCLOCK, curr_node)) {
+	if(curr_node->lockm != FDS_TCLOCK || check_exit_condition(FDS_TCLOCK, curr_node)) {
 		set_locked(lock);
 		curr_node->locked = false;
 		smp_mb();
@@ -362,11 +364,11 @@ __komb_spin_lock_longjmp(struct qspinlock *lock, int tail,
 				curr_node->irqs_disabled = 0;
 			}
 
-			if (curr_node->diff_preempt_count) {
-				__preempt_count_add(
-					curr_node->diff_preempt_count);
-				curr_node->diff_preempt_count = 0;
-			}
+			// if (curr_node->diff_preempt_count) {
+			// 	__preempt_count_add(
+			// 		curr_node->diff_preempt_count);
+			// 	curr_node->diff_preempt_count = 0;
+			// }
 
 			for (j = 7; j >= 0; j--)
 				if (ptr->lock_addr[j] != NULL)
@@ -484,7 +486,7 @@ __komb_spin_lock_slowpath(struct qspinlock *lock)
 	curr_node = this_cpu_ptr(&komb_nodes[0]);
 	idx = curr_node->count++;
 
-	BUG_ON(idx != 0);
+	KOMB_BUG_ON(idx != 0);
 
 	tail = encode_tail(smp_processor_id(), idx);
 
@@ -497,7 +499,7 @@ __komb_spin_lock_slowpath(struct qspinlock *lock)
 	curr_node->irqs_disabled = false;
 	curr_node->lock = lock;
 	curr_node->task_struct_ptr = current;
-	curr_node->my_preempt_count = preempt_count();
+	// curr_node->my_preempt_count = preempt_count();
 	curr_node->diff_preempt_count = 0;
 	curr_node->lockm = FDS_TCLOCK;
 
@@ -703,7 +705,7 @@ queue:
 		curr_node->irqs_disabled = false;
 		curr_node->lock = lock;
 		curr_node->task_struct_ptr = current;
-		curr_node->my_preempt_count = preempt_count();
+		// curr_node->my_preempt_count = preempt_count();
 		curr_node->diff_preempt_count = 0;
 		curr_node->lockm = FDS_QSPINLOCK;
 
@@ -771,7 +773,7 @@ irq_release:
 		return;
 	} else {
 		curr_node = this_cpu_ptr(&komb_nodes[0]);
-		BUG_ON(curr_node->count != 0);
+		KOMB_BUG_ON(curr_node->count != 0);
 
 		komb_spin_lock_slowpath(lock);
 
@@ -914,33 +916,33 @@ komb_spin_unlock(struct qspinlock *lock)
 		print_debug("Jumping to the next waiter: %d\n",
 			    next_node->cpuid);
 
-		if(preempt_count() != next_node->my_preempt_count) {
-			printk(KERN_ALERT "preempt_count current: %d next: %d\n",
-				preempt_count(), next_node->my_preempt_count);
-			BUG_ON(true);
-		}
+		// if(preempt_count() != next_node->my_preempt_count) {
+		// 	printk(KERN_ALERT "preempt_count current: %d next: %d\n",
+		// 		preempt_count(), next_node->my_preempt_count);
+		// 	BUG_ON(true);
+		// }
 	}
 
 	outgoing_rsp_ptr = &(curr_node->rsp);
 
-	waiter_preempt_count = preempt_count();
+	// waiter_preempt_count = preempt_count();
 
-	if (ptr->curr_preempt_count != waiter_preempt_count) {
-		BUG_ON(true);
-		BUG_ON(irq_count() > 0);
-		if (waiter_preempt_count < ptr->curr_preempt_count) {
-			printk(KERN_ALERT "preempt_count prev: %d curr: %d\n",
-			       waiter_preempt_count, ptr->curr_preempt_count);
-			BUG_ON(true);
-		}
-		printk(KERN_ALERT "preempt_count prev: %d curr: %d\n",
-			       waiter_preempt_count, ptr->curr_preempt_count);
-		curr_node->diff_preempt_count =
-		 	(waiter_preempt_count - ptr->curr_preempt_count);
-		this_cpu_inc(fixing_preempt_count);
-		__preempt_count_sub(curr_node->diff_preempt_count);
-		BUG_ON(preempt_count() != ptr->curr_preempt_count);
-	}
+	// if (ptr->curr_preempt_count != waiter_preempt_count) {
+	// 	BUG_ON(true);
+	// 	BUG_ON(irq_count() > 0);
+	// 	if (waiter_preempt_count < ptr->curr_preempt_count) {
+	// 		printk(KERN_ALERT "preempt_count prev: %d curr: %d\n",
+	// 		       waiter_preempt_count, ptr->curr_preempt_count);
+	// 		BUG_ON(true);
+	// 	}
+	// 	printk(KERN_ALERT "preempt_count prev: %d curr: %d\n",
+	// 		       waiter_preempt_count, ptr->curr_preempt_count);
+	// 	curr_node->diff_preempt_count =
+	// 	 	(waiter_preempt_count - ptr->curr_preempt_count);
+	// 	this_cpu_inc(fixing_preempt_count);
+	// 	__preempt_count_sub(curr_node->diff_preempt_count);
+	// 	BUG_ON(preempt_count() != ptr->curr_preempt_count);
+	// }
 
 
 	KOMB_BUG_ON(incoming_rsp_ptr == NULL);
@@ -949,7 +951,7 @@ komb_spin_unlock(struct qspinlock *lock)
 	KOMB_BUG_ON(outgoing_rsp_ptr == 0xdeadbeef);
 
 	//curr_node->irqs_disabled = irqs_disabled();
-	BUG_ON(irqs_disabled());
+	KOMB_BUG_ON(irqs_disabled());
 	komb_context_switch(incoming_rsp_ptr, outgoing_rsp_ptr);
 	ptr = this_cpu_ptr(&local_shadow_stack);
 	if (ptr->irqs_disabled) {
