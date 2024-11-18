@@ -29,7 +29,7 @@ static inline void mutex_destroy(struct mutex *lock)
 
 #define __MUTEX_INITIALIZER(lockname)                                         \
 	{                                                                     \
-		.tail = NULL, .state = ATOMIC_INIT(0), .combiner_task = NULL, \
+		.tail = NULL, .state = ATOMIC_INIT(0), 			      \
 		.key = {                                                      \
 			.name = #lockname,                                    \
 			.ptr = NULL,                                          \

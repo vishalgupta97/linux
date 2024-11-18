@@ -1,111 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0
 // Copyright (c) 2022 Vishal Gupta, Kumar Kartikeya Dwivedi
 
-#include <linux/mutex.h>
-#include <linux/sched/signal.h>
-#include <linux/sched/rt.h>
-#include <linux/sched/wake_q.h>
-#include <linux/sched/debug.h>
-#include <linux/export.h>
-#include <linux/spinlock.h>
-#include <linux/interrupt.h>
-#include <linux/debug_locks.h>
-#include <linux/osq_lock.h>
-
-#include <linux/module.h>
-#include <linux/smp.h>
-#include <linux/bug.h>
-#include <linux/percpu.h>
-#include <linux/hardirq.h>
-#include <linux/prefetch.h>
-#include <linux/atomic.h>
-#include <asm/byteorder.h>
-#include <linux/vmalloc.h>
-#include <linux/sched/stat.h>
-#include <linux/sched/task.h>
-#include <linux/sched.h>
-#include <linux/mutex.h>
-#include <linux/sched.h>
-#include <linux/combiner.h>
-#include <linux/topology.h>
-
 #include "mutex.h"
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/lock.h>
-
-//#define DSM_DEBUG 1
-#ifdef DSM_DEBUG
-#define print_debug(fmt, ...)                                            \
-	({                                                               \
-		printk(KERN_ALERT "[%d] [%d] komb (%s) lock(%px): " fmt, \
-		       smp_processor_id(), current->pid, __func__, lock, \
-		       ##__VA_ARGS__);                                   \
-	})
-#else
-#define print_debug(fmt, ...)
-#endif
-
-//#define DEBUG_KOMB 1
-#if DEBUG_KOMB
-#define KOMB_BUG_ON(cond_expr) BUG_ON(cond_expr)
-#else
-#define KOMB_BUG_ON(cond_expr)
-#endif
-
-#define smp_cond_load_relaxed_sleep(curr_node, ptr, cond_expr)                 \
-	({                                                                     \
-		typeof(ptr) __PTR = (ptr);                                     \
-		__unqual_scalar_typeof(*ptr) VAL;                              \
-		for (;;) {                                                     \
-			VAL = READ_ONCE(*__PTR);                               \
-			if (cond_expr)                                         \
-				break;                                         \
-			cpu_relax();                                           \
-			if (need_resched()) {                                  \
-				if (single_task_running())                     \
-					schedule_out_curr_task();              \
-				else {                                         \
-					if (READ_ONCE(curr_node->completed) == \
-					    KOMB_WAITER_UNPROCESSED)           \
-						park_waiter(curr_node);        \
-					else                                   \
-						schedule_out_curr_task();      \
-				}                                              \
-			}                                                      \
-		}                                                              \
-		(typeof(*ptr))VAL;                                             \
-	})
-
-#ifndef smp_cond_load_relaxed_sched
-#define smp_cond_load_relaxed_sched(ptr, cond_expr)       \
-	({                                                \
-		typeof(ptr) __PTR = (ptr);                \
-		__unqual_scalar_typeof(*ptr) VAL;         \
-		for (;;) {                                \
-			VAL = READ_ONCE(*__PTR);          \
-			if (cond_expr)                    \
-				break;                    \
-			cpu_relax();                      \
-			if (need_resched()) {             \
-				schedule_out_curr_task(); \
-			}                                 \
-		}                                         \
-		(typeof(*ptr))VAL;                        \
-	})
-#endif
-
-#ifndef smp_cond_load_acquire_sched
-#define smp_cond_load_acquire_sched(ptr, cond_expr)                 \
-	({                                                          \
-		__unqual_scalar_typeof(*ptr) _val;                  \
-		_val = smp_cond_load_relaxed_sched(ptr, cond_expr); \
-		smp_acquire__after_ctrl_dep();                      \
-		(typeof(*ptr))_val;                                 \
-	})
-#endif
-
-#define UINT64_MAX 0xffffffffffffffffL
 
 #ifdef KOMB_STATS
 DEFINE_PER_CPU_ALIGNED(uint64_t, mutex_combiner_count);
@@ -114,14 +13,6 @@ DEFINE_PER_CPU_ALIGNED(uint64_t, mutex_qspinlock);
 DEFINE_PER_CPU_ALIGNED(uint64_t, mutex_tclock);
 DEFINE_PER_CPU_ALIGNED(uint64_t, mutex_ooo_unlocks);
 #endif
-
-#define _Q_LOCKED_COMBINER_VAL 3
-#define _Q_UNLOCKED_OOO_VAL 7 //Unlocked a lock out-of-order
-
-#define KOMB_WAITER_UNPROCESSED 0
-#define KOMB_WAITER_PARKED 1
-#define KOMB_WAITER_PROCESSING 2
-#define KOMB_WAITER_PROCESSED 4
 
 static inline void schedule_out_curr_task(void)
 {
@@ -312,7 +203,6 @@ run_combiner(struct mutex *lock, struct mutex_node *curr_node)
 		return;
 	}
 
-	WRITE_ONCE(lock->combiner_task, current);
 	current->counter_val = 0;
 
 	print_debug("Combiner %d giving control to %d\n", smp_processor_id(),
@@ -347,7 +237,6 @@ run_combiner(struct mutex *lock, struct mutex_node *curr_node)
 		current->komb_next_waiter_task = NULL;
 	}
 
-	WRITE_ONCE(lock->combiner_task, NULL);
 	local_head = (struct mutex_node **)(&current->komb_local_queue_head);
 	local_tail = (struct mutex_node **)(&current->komb_local_queue_tail);
 
@@ -515,6 +404,7 @@ komb_mutex_lock_slowpath(struct mutex *lock)
 	curr_node->cpuid = smp_processor_id();
 	curr_node->task_struct_ptr = current;
 	curr_node->lock = lock;
+	curr_node->lockm = FDS_TCLOCK;
 
 	return __komb_mutex_lock_slowpath(lock, curr_node);
 }
@@ -590,20 +480,9 @@ __komb_mutex_lock(struct mutex *lock)
 }
 #pragma GCC pop_options
 
-__attribute__((noipa)) noinline notrace void mutex_lock(struct mutex *lock)
+__attribute__((noipa)) noinline notrace void __mutex_lock(struct mutex *lock, enum fds_lock_mechanisms lockm)
 {
-	int ret;
-
-	ret = cmpxchg(&lock->locked, 0, 1);
-	if (likely(ret == 0)) {
-		// mutex_stat_lock_acquire(&lock->key);
-		return;
-	}
-
-	might_sleep();
-
-	if (lock->key.ptr == NULL || lock->key.ptr->lockm == FDS_QSPINLOCK) {
-		//if (true) {
+	if (lockm == FDS_QSPINLOCK) {
 		preempt_disable();
 		this_cpu_inc(mutex_qspinlock);
 
@@ -617,6 +496,7 @@ __attribute__((noipa)) noinline notrace void mutex_lock(struct mutex *lock)
 		curr_node->cpuid = smp_processor_id();
 		curr_node->task_struct_ptr = current;
 		curr_node->lock = lock;
+		curr_node->lockm = FDS_QSPINLOCK;
 
 		prev = xchg(&lock->tail, curr_node);
 		next = NULL;
@@ -698,6 +578,24 @@ irq_release:
 	preempt_enable();
 write_exit:
 	mutex_stat_lock_acquire(&lock->key);
+}
+
+__always_inline void mutex_lock(struct mutex *lock)
+{
+	int ret;
+
+	ret = cmpxchg(&lock->locked, 0, 1);
+	if (likely(ret == 0))
+		return;
+
+	might_sleep();
+
+	if(lock->key.ptr == NULL)
+		__mutex_lock(lock, FDS_QSPINLOCK);
+	else if(lock->key.ptr->lockm == FDS_TDLOCK)
+		md_mutex_lock(lock);
+	else
+		__mutex_lock(lock, lock->key.ptr->lockm);
 }
 EXPORT_SYMBOL(mutex_lock);
 
@@ -804,8 +702,6 @@ __attribute__((noipa)) noinline notrace void mutex_unlock(struct mutex *lock)
 
 	uint64_t counter = current->counter_val;
 
-	KOMB_BUG_ON(lock->combiner_task != current);
-
 	if (next_node == NULL || next_node->next == NULL ||
 	    check_irq_node(next_node) || check_irq_node(next_node->next) ||
 	    counter >= komb_batch_size) {
@@ -865,7 +761,6 @@ void ___mutex_init(struct mutex *lock, const char *name,
 {
 	lock->tail = NULL;
 	atomic_set(&lock->state, 0);
-	lock->combiner_task = NULL;
 	lock->key.name = name;
 	lock->key.ptr = key;
 	init_fds_lock_key(key, name, DEFAULT_FDS_LOCK);
@@ -877,7 +772,6 @@ void __mutex_init(struct mutex *lock, const char *name,
 {
 	lock->tail = NULL;
 	atomic_set(&lock->state, 0);
-	lock->combiner_task = NULL;
 }
 EXPORT_SYMBOL(__mutex_init);
 

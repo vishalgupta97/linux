@@ -619,7 +619,6 @@ komb_write_lock_slowpath(struct rw_semaphore *lock)
 	curr_node->locked = true;
 	curr_node->completed = KOMB_WAITER_UNPROCESSED;
 	curr_node->next = NULL;
-	curr_node->tail = NULL;
 	curr_node->socket_id = numa_node_id();
 	curr_node->cpuid = smp_processor_id();
 	curr_node->task_struct_ptr = current;
@@ -736,7 +735,6 @@ void down_write(struct rw_semaphore *lock)
 		curr_node->locked = true;
 		curr_node->completed = KOMB_WAITER_UNPROCESSED;
 		curr_node->next = NULL;
-		curr_node->tail = NULL;
 		curr_node->socket_id = IRQ_NUMA_NODE;
 		curr_node->cpuid = smp_processor_id();
 		curr_node->task_struct_ptr = current;

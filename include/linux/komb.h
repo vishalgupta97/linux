@@ -16,7 +16,6 @@ struct komb_node {
 		struct {
 			void *rsp;
 			struct komb_node *next;
-			struct komb_node *prev;
 			struct qspinlock *lock;
 			struct task_struct *task_struct_ptr;
 			int tail;

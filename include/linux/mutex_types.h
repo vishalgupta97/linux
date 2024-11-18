@@ -40,47 +40,56 @@
  *   locks and tasks (and only those tasks)
  */
 struct mutex_node {
-	struct mutex_node *next;
-	struct mutex_node *tail;
-
-	int socket_id; //Socket ID
-	int cpuid;
-
-	uint64_t rsp;
-	struct task_struct *task_struct_ptr;
-	void *lock;
-	struct ww_acquire_ctx *ww_ctx;
-	char dummy1[80];
-
 	union {
-		atomic_long_t val;
-		atomic_long_t cnts;
 		struct {
-			u8 completed;
-			u8 locked;
-			u8 __unused[6];
+			struct mutex_node *next;
+
+			int socket_id; //Socket ID
+			int cpuid;
+
+			uint64_t rsp;
+			struct task_struct *task_struct_ptr;
+			void *lock;
+			struct ww_acquire_ctx *ww_ctx;
+			enum fds_lock_mechanisms lockm;
 		};
-		struct {
-			u16 locked_completed;
-			u8 __unused1[6];
-		};
-		struct {
-			u16 wlocked;
-			u8 rcount[6];
-		};
+		char alignment1[128];
 	};
 
-	char dummy[16];
+	union {
+		union {
+			atomic_long_t val;
+			atomic_long_t cnts;
+			struct {
+				u8 completed;
+				u8 locked;
+				u8 __unused[6];
+			};
+			struct {
+				u16 locked_completed;
+				u8 __unused1[6];
+			};
+			struct {
+				u16 wlocked;
+				u8 rcount[6];
+			};
+		};
+		char alignment2[128];
+	};
 };
 
 struct mutex {
-	struct mutex_node *tail;
 	union {
-		atomic_t state;
-		u8 locked;
+		struct {
+			struct mutex_node *tail;
+			union {
+				atomic_t state;
+				u8 locked;
+			};
+			struct fds_lock_key key;
+		};
+		char alignment[64];
 	};
-	struct task_struct *combiner_task;
-	struct fds_lock_key key;
 };
 
 #else /* !CONFIG_PREEMPT_RT */
