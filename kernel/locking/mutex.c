@@ -14,7 +14,7 @@ DEFINE_PER_CPU_ALIGNED(uint64_t, mutex_tclock);
 DEFINE_PER_CPU_ALIGNED(uint64_t, mutex_ooo_unlocks);
 #endif
 
-static inline void schedule_out_curr_task(void)
+inline void schedule_out_curr_task(void)
 {
 	// preempt_enable();
 	// schedule();
@@ -23,7 +23,7 @@ static inline void schedule_out_curr_task(void)
 	schedule_preempt_disabled();
 }
 
-static inline void park_waiter(struct mutex_node *node)
+inline void park_waiter(struct mutex_node *node)
 {
 	__set_current_state(TASK_INTERRUPTIBLE);
 
@@ -36,7 +36,7 @@ static inline void park_waiter(struct mutex_node *node)
 	__set_current_state(TASK_RUNNING);
 }
 
-static inline void wake_up_waiter(struct mutex_node *node)
+inline void wake_up_waiter(struct mutex_node *node)
 {
 	u8 old_val = xchg(&node->completed, KOMB_WAITER_PROCESSING);
 
@@ -48,30 +48,30 @@ static inline void wake_up_waiter(struct mutex_node *node)
 	}
 }
 
-static __always_inline void clear_locked_set_completed(struct mutex_node *node)
+__always_inline void mutex_clear_locked_set_completed(struct mutex_node *node)
 {
 	WRITE_ONCE(node->completed, KOMB_WAITER_PROCESSED);
 	WRITE_ONCE(node->locked, 0);
 }
 
-static __always_inline void set_locked(struct mutex *lock)
+__always_inline void mutex_set_locked(struct mutex *lock)
 {
 	WRITE_ONCE(lock->locked, 1);
 }
 
-__attribute__((noipa)) noinline notrace static uint64_t
-get_shadow_stack_ptr(struct mutex *lock)
+__attribute__((noipa)) noinline notrace uint64_t
+mutex_get_shadow_stack_ptr(struct mutex *lock)
 {
 	return &current->komb_stack_curr_ptr;
 }
 
-__attribute__((noipa)) noinline notrace static struct mutex_node *
+__attribute__((noipa)) noinline notrace struct mutex_node *
 get_komb_mutex_node(struct mutex *lock)
 {
 	return ((struct mutex_node *)(current->komb_mutex_node));
 }
 
-__always_inline static void add_to_local_queue(struct mutex_node *node)
+__always_inline void mutex_add_to_local_queue(struct mutex_node *node)
 {
 	struct mutex_node **head, **tail;
 
@@ -87,13 +87,13 @@ __always_inline static void add_to_local_queue(struct mutex_node *node)
 	}
 }
 
-static inline bool check_irq_node(struct mutex_node *node)
+inline bool check_irq_node(struct mutex_node *node)
 {
 	return (node->socket_id == IRQ_NUMA_NODE || node->rsp == 0xdeadbeef);
 }
 
-__always_inline static struct mutex_node *
-get_next_node(struct mutex_node *my_node)
+__always_inline struct mutex_node *
+mutex_get_next_node(struct mutex_node *my_node)
 {
 	struct mutex_node *curr_node, *next_node;
 
@@ -121,7 +121,7 @@ get_next_node(struct mutex_node *my_node)
 			return next_node;
 		}
 
-		add_to_local_queue(next_node);
+		mutex_add_to_local_queue(next_node);
 		curr_node = next_node;
 		next_node = curr_node->next;
 	}
@@ -132,8 +132,8 @@ next_node_null:
 
 #pragma GCC push_options
 #pragma GCC optimize("O3")
-__attribute__((noipa)) noinline notrace static void
-execute_cs(struct mutex *lock, struct mutex_node *curr_node)
+__attribute__((noipa)) noinline notrace void
+mutex_execute_cs(struct mutex *lock, struct mutex_node *curr_node)
 {
 	void *incoming_rsp_ptr, *outgoing_rsp_ptr;
 	struct mutex_node *my_node, *next_node;
@@ -141,7 +141,7 @@ execute_cs(struct mutex *lock, struct mutex_node *curr_node)
 	WRITE_ONCE(current->komb_curr_waiter_task, curr_node->task_struct_ptr);
 
 	incoming_rsp_ptr = &(curr_node->rsp);
-	outgoing_rsp_ptr = get_shadow_stack_ptr(lock);
+	outgoing_rsp_ptr = mutex_get_shadow_stack_ptr(lock);
 
 	komb_context_switch(incoming_rsp_ptr, outgoing_rsp_ptr);
 
@@ -163,7 +163,7 @@ execute_cs(struct mutex *lock, struct mutex_node *curr_node)
 			print_debug("OOO waking up\n");
 			curr_node->rsp = my_node->rsp;
 			wake_up_waiter(curr_node);
-			clear_locked_set_completed(curr_node);
+			mutex_clear_locked_set_completed(curr_node);
 			KOMB_BUG_ON(current->komb_prev_waiter_task != NULL);
 		}
 		current->komb_prev_waiter_task = NULL;
@@ -179,7 +179,7 @@ execute_cs(struct mutex *lock, struct mutex_node *curr_node)
 		if (next_node && next_node->next &&
 		    !check_irq_node(next_node) &&
 		    !check_irq_node(next_node->next))
-			execute_cs(lock, next_node);
+			mutex_execute_cs(lock, next_node);
 	}
 }
 #pragma GCC pop_options
@@ -197,7 +197,7 @@ run_combiner(struct mutex *lock, struct mutex_node *curr_node)
 
 	if (next_node == NULL || check_irq_node(curr_node) ||
 	    check_irq_node(next_node)) {
-		set_locked(lock);
+		mutex_set_locked(lock);
 		wake_up_waiter(curr_node);
 		WRITE_ONCE(curr_node->locked, 0);
 		return;
@@ -208,7 +208,7 @@ run_combiner(struct mutex *lock, struct mutex_node *curr_node)
 	print_debug("Combiner %d giving control to %d\n", smp_processor_id(),
 		    curr_node->cpuid);
 
-	execute_cs(lock, curr_node);
+	mutex_execute_cs(lock, curr_node);
 
 	print_debug(
 		"Combiner got the control back: %d counter: %d last_waiter: %d\n",
@@ -225,7 +225,7 @@ run_combiner(struct mutex *lock, struct mutex_node *curr_node)
 			((struct task_struct *)current->komb_prev_waiter_task)
 				->komb_mutex_node;
 		wake_up_waiter(prev_node);
-		clear_locked_set_completed(prev_node);
+		mutex_clear_locked_set_completed(prev_node);
 		current->komb_prev_waiter_task = NULL;
 	}
 
@@ -247,7 +247,7 @@ run_combiner(struct mutex *lock, struct mutex_node *curr_node)
 		*local_tail = NULL;
 	}
 
-	set_locked(lock);
+	mutex_set_locked(lock);
 	KOMB_BUG_ON(next_node == NULL);
 
 	wake_up_waiter(next_node);
@@ -379,7 +379,7 @@ __komb_mutex_lock_slowpath(struct mutex *lock,
 			wake_up_waiter(
 				((struct task_struct *)prev_curr_waiter_task)
 					->komb_mutex_node);
-			clear_locked_set_completed(
+			mutex_clear_locked_set_completed(
 				((struct task_struct *)prev_curr_waiter_task)
 					->komb_mutex_node);
 		}
@@ -434,7 +434,7 @@ __komb_mutex_lock(struct mutex *lock)
 		     "movq (%%rax), %%rsp\n"
 		     "pushq %%rdi\n"
 		     :
-		     : "i"(get_shadow_stack_ptr)
+		     : "i"(mutex_get_shadow_stack_ptr)
 		     : "memory");
 
 	ret_val = komb_mutex_lock_slowpath(lock);
@@ -451,14 +451,14 @@ __komb_mutex_lock(struct mutex *lock)
 			     "popq %%rbp\n"
 			     "retq\n"
 			     :
-			     : "i"(get_shadow_stack_ptr)
+			     : "i"(mutex_get_shadow_stack_ptr)
 			     : "memory");
 	} else {
 		asm volatile("popq %%rdi\n"
 			     "callq %P0\n"
 			     "movq %%rsp, (%%rax)\n"
 			     :
-			     : "i"(get_shadow_stack_ptr)
+			     : "i"(mutex_get_shadow_stack_ptr)
 			     : "memory");
 		asm volatile("callq %P0\n"
 			     "movq %c1(%%rax), %%rsp\n"
@@ -550,7 +550,7 @@ irq_release:
 
 		if ((struct mutex *)curr_node->lock == lock) {
 			KOMB_BUG_ON(lock->locked != _Q_LOCKED_COMBINER_VAL);
-			struct mutex_node *next_node = get_next_node(curr_node);
+			struct mutex_node *next_node = mutex_get_next_node(curr_node);
 			if (next_node == NULL)
 				current->komb_next_waiter_task = NULL;
 			else
@@ -570,7 +570,7 @@ irq_release:
 			print_debug("Waking up prev waiter: %d\n",
 				    prev_node->cpuid);
 			wake_up_waiter(prev_node);
-			clear_locked_set_completed(prev_node);
+			mutex_clear_locked_set_completed(prev_node);
 			current->komb_prev_waiter_task = NULL;
 		}
 	}

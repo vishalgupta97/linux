@@ -4,6 +4,7 @@
 #include <linux/file.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
+#include <linux/kthread.h>
 
 #include "mutex.h"
 
@@ -136,7 +137,7 @@ md_mutex_lock_slowpath(struct mutex *lock)
 	asm volatile("callq %P0\n"
 		     "movq (%%rax), %%rsp\n"
 		     :
-		     : "i"(get_shadow_stack_ptr)
+		     : "i"(mutex_get_shadow_stack_ptr)
 		     : "memory");
 
 	ret_val = __md_mutex_lock_slowpath(lock);
@@ -152,18 +153,18 @@ md_mutex_lock_slowpath(struct mutex *lock)
 			     "popq %%rbp\n"
 			     "retq\n"
 			     :
-			     : "i"(get_shadow_stack_ptr)
+			     : "i"(mutex_get_shadow_stack_ptr)
 			     : "memory");
 	} else {
 		asm volatile("callq %P0\n"
 			     "movq %%rsp, (%%rax)\n"
 			     :
-			     : "i"(get_shadow_stack_ptr)
+			     : "i"(mutex_get_shadow_stack_ptr)
 			     : "memory");
 		asm volatile("callq %P0\n"
 			     "movq %c1(%%rax), %%rsp\n"
 			     :
-			     : "i"(get_mutex_node),
+			     : "i"(get_komb_mutex_node),
 			       "i"(offsetof(struct mutex_node, rsp))
 			     : "memory");
 		asm volatile("popq %%r15\n"
@@ -185,7 +186,7 @@ md_mutex_lock(struct mutex *lock)
 {
 	if (((smp_processor_id() % num_cores_per_socket) == 0) ||
 	    !task_is_running(dthreads[numa_node_id()])) {
-		__mutex_lock(FDS_QSPINLOCK);
+		__mutex_lock(lock, FDS_QSPINLOCK);
 		return;
 	} else {
 		print_debug("Going on slowpath\n");
@@ -198,7 +199,7 @@ md_mutex_lock(struct mutex *lock)
 
 			if ((struct mutex *)curr_node->lock == lock) {
 				KOMB_BUG_ON(lock->locked != _Q_LOCKED_COMBINER_VAL);
-				struct mutex_node *next_node = get_next_node(curr_node);
+				struct mutex_node *next_node = mutex_get_next_node(curr_node);
 				if (next_node == NULL)
 					current->komb_next_waiter_task = NULL;
 				else
@@ -218,7 +219,7 @@ md_mutex_lock(struct mutex *lock)
 				print_debug("Waking up prev waiter: %d\n",
 					prev_node->cpuid);
 				wake_up_waiter(prev_node);
-				clear_locked_set_completed(prev_node);
+				mutex_clear_locked_set_completed(prev_node);
 				current->komb_prev_waiter_task = NULL;
 			}
 		}
@@ -258,10 +259,10 @@ tdlock_mutex_run_combiner(struct mutex *lock, struct mutex_node *curr_node)
 	print_debug("Combiner %d giving control to %d\n", smp_processor_id(),
 		    curr_node->cpuid);
 
-	execute_cs(lock, curr_node);
+	mutex_execute_cs(lock, curr_node);
 
-	KOMB_BUG_ON(current->lock_addr[j] != lock);
-	current->lock_addr[j] = NULL;
+	KOMB_BUG_ON(current->komb_lock_addr[j] != lock);
+	current->komb_lock_addr[j] = NULL;
 
 	print_debug(
 		"Combiner got the control back: %d counter: %lld last_waiter: %d\n",
@@ -286,7 +287,7 @@ int komb_mutex_thread(void *args)
 	struct mutex_node **local_head, **local_tail;
 	struct mutex_node **rq_tail;
 
-	rq_tail = this_cpu_current(&mutex_rq_tail);
+	rq_tail = this_cpu_ptr(&mutex_rq_tail);
 	lock = NULL;
 
 	while (true) {
@@ -310,7 +311,7 @@ int komb_mutex_thread(void *args)
 		print_debug("Running combiner with node from: %d\n",
 			    next_node->cpuid);
 
-		prev_node = tdlock_run_combiner(next_node);
+		prev_node = tdlock_mutex_run_combiner(lock, next_node);
 		next_node = NULL;
 		WRITE_ONCE(*rq_tail, NULL); //Combining done
 
@@ -320,11 +321,11 @@ int komb_mutex_thread(void *args)
 		//lock = prev_node->lock; //TODO: Check why this is needed.
 		if (READ_ONCE(prev_node->next) == NULL) {
 			if (*local_head) {
-				if (!current->is_local_queue_tail_last) {
+				if (!current->komb_is_local_queue_tail_last) {
 					(*local_tail)->next = NULL;
 					if (cmpxchg(&lock->tail, prev_node, *local_tail) != prev_node) {
 						next_node = READ_ONCE(prev_node->next);
-						while (!next) {
+						while (!next_node) {
 							next_node = READ_ONCE(prev_node->next);
 
 							cpu_relax();
@@ -336,10 +337,10 @@ int komb_mutex_thread(void *args)
 				}
 				next_node = (*local_head);
 			} else {
-				KOMB_BUG_ON(current->is_local_queue_tail_last);
+				KOMB_BUG_ON(current->komb_is_local_queue_tail_last);
 				if (cmpxchg(&lock->tail, prev_node, NULL) != prev_node) {
 					next_node = READ_ONCE(prev_node->next);
-					while (!next) {
+					while (!next_node) {
 						next_node = READ_ONCE(prev_node->next);
 
 						cpu_relax();
@@ -351,11 +352,11 @@ int komb_mutex_thread(void *args)
 			}
 		} else {
 			if (*local_head) {
-				KOMB_BUG_ON(current->is_local_queue_tail_last);
+				KOMB_BUG_ON(current->komb_is_local_queue_tail_last);
 				(*local_tail)->next = prev_node->next;
 				next_node = *local_head;
 			} else {
-				KOMB_BUG_ON(current->is_local_queue_tail_last);
+				KOMB_BUG_ON(current->komb_is_local_queue_tail_last);
 				next_node = prev_node->next;
 			}
 		}
@@ -366,7 +367,7 @@ int komb_mutex_thread(void *args)
 		}
 
 		wake_up_waiter(prev_node);
-		clear_locked_set_completed(prev_node);
+		mutex_clear_locked_set_completed(prev_node);
 
 		KOMB_BUG_ON(lock->locked != _Q_LOCKED_COMBINER_VAL);
 		print_debug("Releasing the lock from combiner\n");

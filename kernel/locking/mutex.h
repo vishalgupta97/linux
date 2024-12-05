@@ -135,6 +135,23 @@ extern void debug_mutex_init(struct mutex *lock, const char *name,
 	})
 #endif
 
+#define smp_cond_load_relaxed_sched_delegation(ptr, cond_expr) \
+	({                                                     \
+		typeof(ptr) __PTR = (ptr);                     \
+		__unqual_scalar_typeof(*ptr) VAL;              \
+		for (;;) {                                     \
+			VAL = READ_ONCE(*__PTR);               \
+			if (cond_expr)                         \
+				break;                         \
+			cpu_relax();                           \
+			if (need_resched()) {                  \
+				schedule_out_curr_task(); 	\
+			}                                      \
+		}                                              \
+		(typeof(*ptr))VAL;                             \
+	})
+
+
 #ifndef smp_cond_load_acquire_sched
 #define smp_cond_load_acquire_sched(ptr, cond_expr)                 \
 	({                                                          \
@@ -158,13 +175,14 @@ extern void debug_mutex_init(struct mutex *lock, const char *name,
 extern void schedule_out_curr_task(void);
 extern void park_waiter(struct mutex_node *node);
 extern void wake_up_waiter(struct mutex_node *node);
-extern void clear_locked_set_completed(struct mutex_node *node);
-extern void set_locked(struct mutex *lock);
-extern uint64_t get_shadow_stack_ptr(struct mutex *lock);
+extern void mutex_clear_locked_set_completed(struct mutex_node *node);
+extern void mutex_set_locked(struct mutex *lock);
+extern uint64_t mutex_get_shadow_stack_ptr(struct mutex *lock);
 extern struct mutex_node *get_komb_mutex_node(struct mutex *lock);
-extern void add_to_local_queue(struct mutex_node *node);
+extern void mutex_add_to_local_queue(struct mutex_node *node);
 extern bool check_irq_node(struct mutex_node *node);
-extern struct mutex_node *get_next_node(struct mutex_node *my_node);
-extern void execute_cs(struct mutex *lock, struct mutex_node *curr_node);
+extern struct mutex_node *mutex_get_next_node(struct mutex_node *my_node);
+extern void mutex_execute_cs(struct mutex *lock, struct mutex_node *curr_node);
 
 extern void __mutex_lock(struct mutex *lock, enum fds_lock_mechanisms lockm);
+extern void md_mutex_lock(struct mutex *lock);

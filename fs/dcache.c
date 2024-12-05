@@ -1665,7 +1665,8 @@ static struct dentry *__d_alloc(struct super_block *sb, const struct qstr *name)
 
 	dentry->d_lockref.count = 1;
 	dentry->d_flags = 0;
-	spin_lock_init_disable_fds(&dentry->d_lock); // FDS disabled due to nested locking in dentry
+	spin_lock_init(&dentry->d_lock);
+	//spin_lock_init_disable_fds(&dentry->d_lock); // FDS disabled due to nested locking in dentry
 	seqcount_spinlock_init(&dentry->d_seq, &dentry->d_lock);
 	dentry->d_inode = NULL;
 	dentry->d_parent = dentry;
