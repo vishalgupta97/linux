@@ -3,6 +3,7 @@
 #define _LINUX_FILELOCK_H
 
 #include <linux/fs.h>
+#include <linux/komb_delegation.h>
 
 #define FL_POSIX	1
 #define FL_FLOCK	2
@@ -140,7 +141,7 @@ struct file_lease {
 } __randomize_layout;
 
 struct file_lock_context {
-	spinlock_t		flc_lock;
+	arch_spinlock_t		flc_lock; // Uses tdlock
 	struct list_head	flc_flock;
 	struct list_head	flc_posix;
 	struct list_head	flc_lease;

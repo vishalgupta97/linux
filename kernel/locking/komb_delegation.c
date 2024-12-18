@@ -11,8 +11,9 @@
 #include <linux/combiner.h>
 #include <linux/topology.h>
 #include <linux/vmalloc.h>
+#include <linux/timing_stats.h>
 
-#define DEBUG_KOMB 1
+#define DEBUG_KOMB 0
 #define DSM_DEBUG 0
 
 #if DEBUG_KOMB
@@ -95,6 +96,12 @@ DEFINE_PER_CPU_ALIGNED(uint64_t, ooo_waiter_combined);
 DEFINE_PER_CPU_ALIGNED(uint64_t, qspinlock_fallback);
 #endif
 
+#ifdef LOCK_MEASURE_TIME
+static DEFINE_PER_CPU_ALIGNED(uint64_t, combiner_loop);
+static DEFINE_PER_CPU_ALIGNED(uint64_t, lock_stack_switch);
+static DEFINE_PER_CPU_ALIGNED(uint64_t, unlock_stack_switch);
+#endif
+
 static DEFINE_PER_CPU_ALIGNED(struct kd_node, *lock_rq_tail);
 static DEFINE_PER_CPU_SHARED_ALIGNED(struct kd_node, kd_nodes[MAX_NODES]);
 static DEFINE_PER_CPU_SHARED_ALIGNED(struct shadow_stack, local_shadow_stack);
@@ -136,12 +143,12 @@ static __always_inline void clear_locked_set_completed(struct kd_node *lock)
 	WRITE_ONCE(lock->locked_completed, 1);
 }
 
-static __always_inline u32 xchg_tail(struct qspinlock *lock, u32 tail)
+static __always_inline u32 xchg_tail(arch_spinlock_t *lock, u32 tail)
 {
 	return (u32)xchg(&lock->tail, tail >> _Q_TAIL_OFFSET) << _Q_TAIL_OFFSET;
 }
 
-static __always_inline u32 cmpxchg_tail(struct qspinlock *lock, u32 tail,
+static __always_inline u32 cmpxchg_tail(arch_spinlock_t *lock, u32 tail,
 					u32 new_tail)
 {
 	return (u32)cmpxchg(&lock->tail, tail >> _Q_TAIL_OFFSET,
@@ -149,7 +156,7 @@ static __always_inline u32 cmpxchg_tail(struct qspinlock *lock, u32 tail,
 	       << _Q_TAIL_OFFSET;
 }
 
-__always_inline static void add_to_local_queue(struct qspinlock *lock,
+__always_inline static void add_to_local_queue(arch_spinlock_t *lock,
 					       struct kd_node *node)
 {
 	struct shadow_stack *ptr = this_cpu_ptr(&local_shadow_stack);
@@ -231,6 +238,10 @@ execute_cs(struct kd_node *curr_node)
 	incoming_rsp_ptr = &(curr_node->rsp);
 	outgoing_rsp_ptr = &(ptr->local_shadow_stack_ptr);
 
+#if LOCK_MEASURE_TIME
+	*this_cpu_ptr(&combiner_loop) = KOMB_UINT64_MAX;
+#endif
+
 	KOMB_BUG_ON(irqs_disabled());
 	KOMB_BUG_ON(*(uint64_t *)incoming_rsp_ptr == 0);
 	KOMB_BUG_ON(*(uint64_t *)outgoing_rsp_ptr == 0);
@@ -250,7 +261,7 @@ __attribute__((noipa)) noinline notrace static struct kd_node *
 run_combiner(struct kd_node *curr_node)
 {
 	struct shadow_stack *ptr;
-	struct qspinlock *lock;
+	arch_spinlock_t *lock;
 
 	KOMB_BUG_ON(curr_node == NULL);
 	KOMB_BUG_ON((smp_processor_id() % num_cores_per_socket) != 0);
@@ -265,6 +276,7 @@ run_combiner(struct kd_node *curr_node)
 	print_debug("Combiner %d giving control to %d\n", smp_processor_id(),
 		    curr_node->cpuid);
 
+	ptr->is_local_queue_tail_last = false;
 	execute_cs(curr_node);
 
 	print_debug(
@@ -283,14 +295,14 @@ run_combiner(struct kd_node *curr_node)
 }
 #pragma GCC pop_options
 
-static inline __pure u32 select_delegation_cpu(struct qspinlock *lock)
+static inline __pure u32 select_delegation_cpu(arch_spinlock_t *lock)
 {
 	return (num_cores_per_socket * numa_node_id());
 	// 				+ ((u64)lock % (num_delegation_threads / num_online_nodes())));
 }
 
 __attribute__((noipa)) noinline notrace static int
-__komb_spin_lock_slowpath(struct qspinlock *lock)
+__komb_spin_lock_slowpath(arch_spinlock_t *lock)
 {
 	struct kd_node *curr_node;
 	register struct kd_node *prev_node;
@@ -405,7 +417,7 @@ continue_with_cs_execution:
 
 int komb_thread(void *args)
 {
-	struct qspinlock *lock;
+	arch_spinlock_t *lock;
 	struct shadow_stack *ptr;
 	struct kd_node *prev_node, *next_node;
 	struct kd_node **rq_tail;
@@ -415,12 +427,12 @@ int komb_thread(void *args)
 	rq_tail = this_cpu_ptr(&lock_rq_tail);
 	lock = NULL;
 
-	while (true) {
+	/*while (true) {
 		if (READ_ONCE(*rq_tail) != 0xdeadbeef)
 			break;
 		cpu_relax();
 		cond_resched();
-	}
+	}*/
 
 	preempt_disable();
 
@@ -573,7 +585,7 @@ void kd_init(void)
 		ptr->counter_val = 0;
 		ptr->next_node_ptr = NULL;
 		ptr->irqs_disabled = false;
-		*per_cpu_ptr(&lock_rq_tail, i) = 0xdeadbeef;
+		*per_cpu_ptr(&lock_rq_tail, i) = 0;
 	}
 
 	komb_node = per_cpu_ptr(&kd_nodes[0], 0);
@@ -598,6 +610,10 @@ void kd_init(void)
 			       "failed to create komb delegation threads\n");
 	}
 
+#if LOCK_MEASURE_TIME
+	locktime_init_timing_stats();
+#endif	
+
 	printk(KERN_ALERT "starting delegation threads\n");
 }
 
@@ -605,7 +621,7 @@ void kd_free(void)
 {
 }
 
-void kd_spin_lock_init(struct qspinlock *lock)
+void kd_spin_lock_init(arch_spinlock_t *lock)
 {
 	atomic_set(&lock->val, 0);
 }
@@ -625,7 +641,7 @@ __attribute__((noipa)) noinline notrace static struct kd_node *get_kd_node(void)
 #pragma GCC push_options
 #pragma GCC optimize("O3")
 static __attribute__((noipa)) noinline notrace void
-komb_spin_lock_slowpath(struct qspinlock *lock)
+komb_spin_lock_slowpath(arch_spinlock_t *lock)
 {
 	register int ret_val;
 	KOMB_BUG_ON(irqs_disabled());
@@ -690,29 +706,29 @@ komb_spin_lock_slowpath(struct qspinlock *lock)
 }
 #pragma GCC pop_options
 
-static __always_inline u32 komb_fetch_set_pending_acquire(struct qspinlock *lock)
+static __always_inline u32 komb_fetch_set_pending_acquire(arch_spinlock_t *lock)
 {
 	return atomic_fetch_or_acquire(_Q_PENDING_VAL, &lock->val);
 }
 
-static __always_inline void clear_pending(struct qspinlock *lock)
+static __always_inline void clear_pending(arch_spinlock_t *lock)
 {
 	atomic_andnot(_Q_PENDING_VAL, &lock->val);
 }
 
-static __always_inline void set_locked(struct qspinlock *lock)
+static __always_inline void set_locked(arch_spinlock_t *lock)
 {
 	WRITE_ONCE(lock->locked, _Q_LOCKED_VAL);
 }
 
-__always_inline void clear_pending_set_locked(struct qspinlock *lock)
+__always_inline void clear_pending_set_locked(arch_spinlock_t *lock)
 {
 	KOMB_BUG_ON(lock->locked != 0);
 	WRITE_ONCE(lock->locked_pending, _Q_LOCKED_VAL);
 }
 
 __attribute__((noipa)) noinline notrace void
-kd_spin_lock(struct qspinlock *lock)
+kd_spin_lock(arch_spinlock_t *lock)
 {
 	struct kd_node *curr_node = NULL;
 	struct shadow_stack *ptr;
@@ -855,13 +871,13 @@ irq_release:
 }
 EXPORT_SYMBOL_GPL(kd_spin_lock);
 
-inline bool kd_spin_trylock(struct qspinlock *lock)
+inline bool kd_spin_trylock(arch_spinlock_t *lock)
 {
 	return (atomic_cmpxchg_acquire(&lock->val, 0, _Q_LOCKED_VAL) == 0);
 }
 
 __attribute__((noipa)) noinline notrace void
-kd_spin_unlock(struct qspinlock *lock)
+kd_spin_unlock(arch_spinlock_t *lock)
 {
 	struct shadow_stack *ptr = this_cpu_ptr(&local_shadow_stack);
 	int from_cpuid = ptr->curr_cs_cpu;
@@ -907,6 +923,11 @@ kd_spin_unlock(struct qspinlock *lock)
 	BUG_ON(from_cpuid == -1);
 #endif
 
+#if LOCK_MEASURE_TIME
+	LOCK_END_TIMING_PER_CPU(combiner_loop);
+	LOCK_START_TIMING_PER_CPU(combiner_loop);
+#endif
+
 	curr_node = per_cpu_ptr(&kd_nodes[0], from_cpuid);
 
 	next_node = ptr->next_node_ptr;
@@ -948,45 +969,20 @@ kd_spin_unlock(struct qspinlock *lock)
 }
 EXPORT_SYMBOL_GPL(kd_spin_unlock);
 
-__always_inline int kd_spin_is_locked(struct qspinlock *lock)
+__always_inline int kd_spin_is_locked(arch_spinlock_t *lock)
 {
 	return atomic_read(&lock->val);
 }
 EXPORT_SYMBOL(kd_spin_is_locked);
 
-__always_inline int kd_spin_is_contended(struct qspinlock *lock)
+__always_inline int kd_spin_is_contended(arch_spinlock_t *lock)
 {
 	return atomic_read(&lock->val) & ~_Q_LOCKED_MASK;
 }
 
-__always_inline int kd_spin_value_unlocked(struct qspinlock lock)
+__always_inline int kd_spin_value_unlocked(arch_spinlock_t lock)
 {
 	return !atomic_read(&lock.val);
-}
-
-struct task_struct *komb_get_current(spinlock_t *lock)
-{
-	struct shadow_stack *ptr = this_cpu_ptr(&local_shadow_stack);
-
-	int j, my_idx;
-
-	j = 0;
-	my_idx = -1;
-
-	for (j = 0; j < 8; j++) {
-		if (ptr->lock_addr[j] == lock) {
-			KOMB_BUG_ON(ptr->curr_cs_cpu < 0);
-			return per_cpu_ptr(&kd_nodes[0], ptr->curr_cs_cpu)
-				->task_struct_ptr;
-		}
-	}
-
-	return current;
-}
-
-void komb_set_current_state(spinlock_t *lock, unsigned int state)
-{
-	smp_store_mb(komb_get_current(lock)->__state, state);
 }
 
 SYSCALL_DEFINE0(komb_start_delegation)
@@ -996,5 +992,6 @@ SYSCALL_DEFINE0(komb_start_delegation)
 	for_each_online_cpu(i) {
 		*per_cpu_ptr(&lock_rq_tail, i) = 0;
 	}
+
 	return 0;
 }

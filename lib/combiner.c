@@ -4,6 +4,7 @@
 #ifdef KERNEL_SYNCSTRESS
 #include "lib/combiner.h"
 #else
+#include<linux/timing_stats.h>
 #include <linux/combiner.h>
 long komb_batch_size = 1024; //262144;
 #endif
@@ -57,6 +58,8 @@ DEFINE_PER_CPU_ALIGNED(uint64_t, rwsem_downgrade);
 
 SYSCALL_DEFINE0(komb_stats)
 {
+	locktime_print_timing_stats();
+
 	printk(KERN_ALERT "======== KOMB spinlock stats ========\n");
 	int i;
 	uint64_t total_counters[17] = { 0 };
@@ -106,6 +109,8 @@ SYSCALL_DEFINE0(komb_stats)
 
 SYSCALL_DEFINE0(komb_clear_stats)
 {
+	locktime_clear_timing_stats();
+
 	printk(KERN_ALERT "======== KOMB stats cleared ========\n");
 	int i;
 	for_each_online_cpu (i) {

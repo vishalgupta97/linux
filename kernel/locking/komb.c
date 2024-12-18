@@ -24,6 +24,8 @@
 #include <linux/kernel.h>
 #include <linux/syscalls.h>
 
+#include <linux/timing_stats.h>
+
 //#define DSM_DEBUG 1
 #ifdef DSM_DEBUG
 #define print_debug(fmt, ...)                                              \
@@ -132,11 +134,11 @@ struct shadow_stack {
 
 } __cacheline_aligned_in_smp;
 
-#ifdef LOCK_MEASURE_TIME
+/*#ifdef LOCK_MEASURE_TIME
 static DEFINE_PER_CPU_ALIGNED(uint64_t, combiner_loop);
 static DEFINE_PER_CPU_ALIGNED(uint64_t, lock_stack_switch);
 static DEFINE_PER_CPU_ALIGNED(uint64_t, unlock_stack_switch);
-#endif
+#endif*/
 
 #ifdef KOMB_STATS
 DEFINE_PER_CPU_ALIGNED(uint64_t, combiner_count);
@@ -149,6 +151,15 @@ DEFINE_PER_CPU_ALIGNED(uint64_t, ooo_unlocks);
 /*
  * Used by all threads to add itself to the queue on the slowpath.
  */
+#if LOCK_MEASURE_TIME
+//static DEFINE_PER_CPU_ALIGNED(uint64_t, combiner_loop);
+//static DEFINE_PER_CPU_ALIGNED(uint64_t, combiner_loop_lockfn);
+//static DEFINE_PER_CPU_ALIGNED(uint64_t, combiner_loop_unlockfn);
+/*static DEFINE_PER_CPU_ALIGNED(uint64_t, lock_stack_switch);
+static DEFINE_PER_CPU_ALIGNED(uint64_t, unlock_stack_switch);*/
+#endif
+
+
 static DEFINE_PER_CPU_SHARED_ALIGNED(struct komb_node, komb_nodes[MAX_NODES]);
 
 /*
@@ -369,9 +380,13 @@ execute_cs(struct qspinlock *lock, struct komb_node *curr_node)
 	incoming_rsp_ptr = &(curr_node->rsp);
 	outgoing_rsp_ptr = &(ptr->local_shadow_stack_ptr);
 
-#ifdef LOCK_MEASURE_TIME
+#if LOCK_MEASURE_TIME
 	*this_cpu_ptr(&combiner_loop) = UINT64_MAX;
 #endif
+
+	KOMB_BUG_ON(irqs_disabled());
+	KOMB_BUG_ON(*(uint64_t *)incoming_rsp_ptr == NULL);
+	KOMB_BUG_ON(*(uint64_t *)outgoing_rsp_ptr == NULL);
 
 	/*
 	 * Make the actual switch, the pushed return address is after this
@@ -809,6 +824,10 @@ void komb_init(void)
 		*per_cpu_ptr(&combiner_loop, i) = UINT64_MAX;
 #endif
 	}
+
+#if LOCK_MEASURE_TIME
+	locktime_init_timing_stats();
+#endif	
 }
 
 void komb_free(void)
@@ -1285,6 +1304,11 @@ komb_spin_unlock(struct qspinlock *lock)
 		lock->locked = _Q_UNLOCKED_OOO_VAL;
 		return;
 	}
+
+#if LOCK_MEASURE_TIME
+	LOCK_END_TIMING_PER_CPU(combiner_loop);
+	LOCK_START_TIMING_PER_CPU(combiner_loop);
+#endif
 
 	struct komb_node *curr_node = per_cpu_ptr(&komb_nodes[0], from_cpuid);
 

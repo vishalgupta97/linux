@@ -10,6 +10,8 @@
 #include <linux/kernel.h>
 #include <linux/percpu.h>
 
+#define KOMB_STATS 1
+
 #define NUMA_AWARE 1
 #define PREFETCHING 1
 #define WWJUMP 1

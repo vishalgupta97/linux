@@ -103,6 +103,7 @@
 #include <linux/pidfs.h>
 #include <linux/ptdump.h>
 #include <net/net_namespace.h>
+#include <linux/komb_delegation.h>
 
 #include <asm/io.h>
 #include <asm/setup.h>

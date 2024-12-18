@@ -14,8 +14,6 @@
 #define DEFINE_KOMBSPINLOCK(x)                                                 \
 	arch_spinlock_t(x) = (arch_spinlock_t)__ORIG_QSPIN_LOCK_UNLOCKED
 
-#define KOMB_STATS 1
-
 /*
  * TODO (Correctness optimization): 
  * Add for BIG ENDIAN

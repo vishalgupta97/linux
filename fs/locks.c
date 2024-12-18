@@ -187,7 +187,7 @@ locks_get_lock_context(struct inode *inode, int type)
 	if (!ctx)
 		goto out;
 
-	spin_lock_init(&ctx->flc_lock);
+	kd_spin_lock_init(&ctx->flc_lock);
 	INIT_LIST_HEAD(&ctx->flc_flock);
 	INIT_LIST_HEAD(&ctx->flc_posix);
 	INIT_LIST_HEAD(&ctx->flc_lease);
@@ -332,16 +332,16 @@ bool locks_owner_has_blockers(struct file_lock_context *flctx, fl_owner_t owner)
 {
 	struct file_lock_core *flc;
 
-	spin_lock(&flctx->flc_lock);
+	kd_spin_lock(&flctx->flc_lock);
 	list_for_each_entry(flc, &flctx->flc_posix, flc_list) {
 		if (flc->flc_owner != owner)
 			continue;
 		if (!list_empty(&flc->flc_blocked_requests)) {
-			spin_unlock(&flctx->flc_lock);
+			kd_spin_unlock(&flctx->flc_lock);
 			return true;
 		}
 	}
-	spin_unlock(&flctx->flc_lock);
+	kd_spin_unlock(&flctx->flc_lock);
 	return false;
 }
 EXPORT_SYMBOL_GPL(locks_owner_has_blockers);
@@ -964,7 +964,7 @@ posix_test_lock(struct file *filp, struct file_lock *fl)
 	}
 
 retry:
-	spin_lock(&ctx->flc_lock);
+	kd_spin_lock(&ctx->flc_lock);
 	list_for_each_entry(cfl, &ctx->flc_posix, c.flc_list) {
 		if (!posix_test_locks_conflict(fl, cfl))
 			continue;
@@ -973,7 +973,7 @@ retry:
 			owner = cfl->fl_lmops->lm_mod_owner;
 			func = cfl->fl_lmops->lm_expire_lock;
 			__module_get(owner);
-			spin_unlock(&ctx->flc_lock);
+			kd_spin_unlock(&ctx->flc_lock);
 			(*func)();
 			module_put(owner);
 			goto retry;
@@ -983,7 +983,7 @@ retry:
 	}
 	fl->c.flc_type = F_UNLCK;
 out:
-	spin_unlock(&ctx->flc_lock);
+	kd_spin_unlock(&ctx->flc_lock);
 	return;
 }
 EXPORT_SYMBOL(posix_test_lock);
@@ -1094,7 +1094,7 @@ static int flock_lock_inode(struct inode *inode, struct file_lock *request)
 	}
 
 	percpu_down_read(&file_rwsem);
-	spin_lock(&ctx->flc_lock);
+	kd_spin_lock(&ctx->flc_lock);
 	if (request->c.flc_flags & FL_ACCESS)
 		goto find_conflict;
 
@@ -1134,7 +1134,7 @@ find_conflict:
 	error = 0;
 
 out:
-	spin_unlock(&ctx->flc_lock);
+	kd_spin_unlock(&ctx->flc_lock);
 	percpu_up_read(&file_rwsem);
 	if (new_fl)
 		locks_free_lock(new_fl);
@@ -1177,7 +1177,7 @@ static int posix_lock_inode(struct inode *inode, struct file_lock *request,
 
 retry:
 	percpu_down_read(&file_rwsem);
-	spin_lock(&ctx->flc_lock);
+	kd_spin_lock(&ctx->flc_lock);
 	/*
 	 * New lock request. Walk all POSIX locks and look for conflicts. If
 	 * there are any, either return error or put the request on the
@@ -1192,7 +1192,7 @@ retry:
 				owner = fl->fl_lmops->lm_mod_owner;
 				func = fl->fl_lmops->lm_expire_lock;
 				__module_get(owner);
-				spin_unlock(&ctx->flc_lock);
+				kd_spin_unlock(&ctx->flc_lock);
 				percpu_up_read(&file_rwsem);
 				(*func)();
 				module_put(owner);
@@ -1368,7 +1368,7 @@ retry:
 	}
  out:
 	trace_posix_lock_inode(inode, request, error);
-	spin_unlock(&ctx->flc_lock);
+	kd_spin_unlock(&ctx->flc_lock);
 	percpu_up_read(&file_rwsem);
 	/*
 	 * Free any unused locks.
@@ -1561,7 +1561,7 @@ int __break_lease(struct inode *inode, unsigned int mode, unsigned int type)
 	}
 
 	percpu_down_read(&file_rwsem);
-	spin_lock(&ctx->flc_lock);
+	kd_spin_lock(&ctx->flc_lock);
 
 	time_out_leases(inode, &dispose);
 
@@ -1611,7 +1611,7 @@ restart:
 		break_time++;
 	locks_insert_block(&fl->c, &new_fl->c, leases_conflict);
 	trace_break_lease_block(inode, new_fl);
-	spin_unlock(&ctx->flc_lock);
+	kd_spin_unlock(&ctx->flc_lock);
 	percpu_up_read(&file_rwsem);
 
 	locks_dispose_list(&dispose);
@@ -1620,7 +1620,7 @@ restart:
 						 break_time);
 
 	percpu_down_read(&file_rwsem);
-	spin_lock(&ctx->flc_lock);
+	kd_spin_lock(&ctx->flc_lock);
 	trace_break_lease_unblock(inode, new_fl);
 	__locks_delete_block(&new_fl->c);
 	if (error >= 0) {
@@ -1635,7 +1635,7 @@ restart:
 		error = 0;
 	}
 out:
-	spin_unlock(&ctx->flc_lock);
+	kd_spin_unlock(&ctx->flc_lock);
 	percpu_up_read(&file_rwsem);
 	locks_dispose_list(&dispose);
 free_lock:
@@ -1661,12 +1661,12 @@ void lease_get_mtime(struct inode *inode, struct timespec64 *time)
 
 	ctx = locks_inode_context(inode);
 	if (ctx && !list_empty_careful(&ctx->flc_lease)) {
-		spin_lock(&ctx->flc_lock);
+		kd_spin_lock(&ctx->flc_lock);
 		flc = list_first_entry_or_null(&ctx->flc_lease,
 					       struct file_lock_core, flc_list);
 		if (flc && flc->flc_type == F_WRLCK)
 			has_lease = true;
-		spin_unlock(&ctx->flc_lock);
+		kd_spin_unlock(&ctx->flc_lock);
 	}
 
 	if (has_lease)
@@ -1708,7 +1708,7 @@ int fcntl_getlease(struct file *filp)
 	ctx = locks_inode_context(inode);
 	if (ctx && !list_empty_careful(&ctx->flc_lease)) {
 		percpu_down_read(&file_rwsem);
-		spin_lock(&ctx->flc_lock);
+		kd_spin_lock(&ctx->flc_lock);
 		time_out_leases(inode, &dispose);
 		list_for_each_entry(fl, &ctx->flc_lease, c.flc_list) {
 			if (fl->c.flc_file != filp)
@@ -1716,7 +1716,7 @@ int fcntl_getlease(struct file *filp)
 			type = target_leasetype(fl);
 			break;
 		}
-		spin_unlock(&ctx->flc_lock);
+		kd_spin_unlock(&ctx->flc_lock);
 		percpu_up_read(&file_rwsem);
 
 		locks_dispose_list(&dispose);
@@ -1800,7 +1800,7 @@ generic_add_lease(struct file *filp, int arg, struct file_lease **flp, void **pr
 		return -EAGAIN;
 
 	percpu_down_read(&file_rwsem);
-	spin_lock(&ctx->flc_lock);
+	kd_spin_lock(&ctx->flc_lock);
 	time_out_leases(inode, &dispose);
 	error = check_conflicting_open(filp, arg, lease->c.flc_flags);
 	if (error)
@@ -1869,7 +1869,7 @@ out_setup:
 	if (lease->fl_lmops->lm_setup)
 		lease->fl_lmops->lm_setup(lease, priv);
 out:
-	spin_unlock(&ctx->flc_lock);
+	kd_spin_unlock(&ctx->flc_lock);
 	percpu_up_read(&file_rwsem);
 	locks_dispose_list(&dispose);
 	if (is_deleg)
@@ -1894,7 +1894,7 @@ static int generic_delete_lease(struct file *filp, void *owner)
 	}
 
 	percpu_down_read(&file_rwsem);
-	spin_lock(&ctx->flc_lock);
+	kd_spin_lock(&ctx->flc_lock);
 	list_for_each_entry(fl, &ctx->flc_lease, c.flc_list) {
 		if (fl->c.flc_file == filp &&
 		    fl->c.flc_owner == owner) {
@@ -1905,7 +1905,7 @@ static int generic_delete_lease(struct file *filp, void *owner)
 	trace_generic_delete_lease(inode, victim);
 	if (victim)
 		error = fl->fl_lmops->lm_change(victim, F_UNLCK, &dispose);
-	spin_unlock(&ctx->flc_lock);
+	kd_spin_unlock(&ctx->flc_lock);
 	percpu_up_read(&file_rwsem);
 	locks_dispose_list(&dispose);
 	return error;
@@ -2671,11 +2671,11 @@ locks_remove_lease(struct file *filp, struct file_lock_context *ctx)
 		return;
 
 	percpu_down_read(&file_rwsem);
-	spin_lock(&ctx->flc_lock);
+	kd_spin_lock(&ctx->flc_lock);
 	list_for_each_entry_safe(fl, tmp, &ctx->flc_lease, c.flc_list)
 		if (filp == fl->c.flc_file)
 			lease_modify(fl, F_UNLCK, &dispose);
-	spin_unlock(&ctx->flc_lock);
+	kd_spin_unlock(&ctx->flc_lock);
 	percpu_up_read(&file_rwsem);
 
 	locks_dispose_list(&dispose);
@@ -2701,11 +2701,11 @@ void locks_remove_file(struct file *filp)
 	/* remove any leases */
 	locks_remove_lease(filp, ctx);
 
-	spin_lock(&ctx->flc_lock);
+	kd_spin_lock(&ctx->flc_lock);
 	locks_check_ctx_file_list(filp, &ctx->flc_posix, "POSIX");
 	locks_check_ctx_file_list(filp, &ctx->flc_flock, "FLOCK");
 	locks_check_ctx_file_list(filp, &ctx->flc_lease, "LEASE");
-	spin_unlock(&ctx->flc_lock);
+	kd_spin_unlock(&ctx->flc_lock);
 }
 
 /**
@@ -2740,9 +2740,9 @@ bool vfs_inode_has_locks(struct inode *inode)
 	if (!ctx)
 		return false;
 
-	spin_lock(&ctx->flc_lock);
+	kd_spin_lock(&ctx->flc_lock);
 	ret = !list_empty(&ctx->flc_posix) || !list_empty(&ctx->flc_flock);
-	spin_unlock(&ctx->flc_lock);
+	kd_spin_unlock(&ctx->flc_lock);
 	return ret;
 }
 EXPORT_SYMBOL_GPL(vfs_inode_has_locks);
@@ -2926,11 +2926,11 @@ void show_fd_locks(struct seq_file *f,
 	if (!ctx)
 		return;
 
-	spin_lock(&ctx->flc_lock);
+	kd_spin_lock(&ctx->flc_lock);
 	__show_fd_locks(f, &ctx->flc_flock, &id, filp, files);
 	__show_fd_locks(f, &ctx->flc_posix, &id, filp, files);
 	__show_fd_locks(f, &ctx->flc_lease, &id, filp, files);
-	spin_unlock(&ctx->flc_lock);
+	kd_spin_unlock(&ctx->flc_lock);
 }
 
 static void *locks_start(struct seq_file *f, loff_t *pos)

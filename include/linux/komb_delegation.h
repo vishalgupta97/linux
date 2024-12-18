@@ -25,7 +25,7 @@ struct kd_node {
 			int cpuid;
 			int pos;
 			void *rsp;
-			struct qspinlock *lock;
+			arch_spinlock_t *lock;
 			int irqs_disabled;
 			struct task_struct *task_struct_ptr;
 		};
@@ -54,12 +54,12 @@ void kd_free(void);
 /*
  * Public API
  */
-extern void kd_spin_lock_init(struct qspinlock *lock);
-extern void kd_spin_lock(struct qspinlock *lock);
-extern bool kd_spin_trylock(struct qspinlock *lock);
-extern void kd_spin_unlock(struct qspinlock *lock);
-extern int kd_spin_is_locked(struct qspinlock *lock);
-extern int kd_spin_value_unlocked(struct qspinlock lock);
-extern int kd_spin_is_contended(struct qspinlock *lock);
+extern void kd_spin_lock_init(arch_spinlock_t *lock);
+extern void kd_spin_lock(arch_spinlock_t *lock);
+extern bool kd_spin_trylock(arch_spinlock_t *lock);
+extern void kd_spin_unlock(arch_spinlock_t *lock);
+extern int kd_spin_is_locked(arch_spinlock_t *lock);
+extern int kd_spin_value_unlocked(arch_spinlock_t lock);
+extern int kd_spin_is_contended(arch_spinlock_t *lock);
 
 #endif
