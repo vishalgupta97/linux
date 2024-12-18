@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 // Copyright (c) 2022 Vishal Gupta, Kumar Kartikeya Dwivedi
 
+#include<linux/timing_stats.h>
 #include <linux/combiner.h>
 long komb_batch_size = 262144;
 
@@ -42,6 +43,8 @@ DEFINE_PER_CPU_ALIGNED(u64, lock_not_in_task);
 
 SYSCALL_DEFINE0(komb_stats)
 {
+	locktime_print_timing_stats();
+
 	printk(KERN_ALERT "======== KOMB spinlock stats ========\n");
 	int i;
 	uint64_t total_counters[17] = { 0 };
@@ -91,6 +94,8 @@ SYSCALL_DEFINE0(komb_stats)
 
 SYSCALL_DEFINE0(komb_clear_stats)
 {
+	locktime_clear_timing_stats();
+
 	printk(KERN_ALERT "======== KOMB stats cleared ========\n");
 	int i;
 	for_each_online_cpu(i) {

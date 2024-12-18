@@ -386,7 +386,8 @@
 462 	common  mseal			sys_mseal
 475 common komb_stats sys_komb_stats
 476 common komb_clear_stats sys_komb_clear_stats
-
+477 common komb_start_timing sys_komb_start_timing
+478 common komb_stop_timing sys_komb_stop_timing
 #
 # Due to a historical design error, certain syscalls are numbered differently
 # in x32 as compared to native x86_64.  These syscalls have numbers 512-547.

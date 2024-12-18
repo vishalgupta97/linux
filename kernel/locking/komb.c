@@ -17,6 +17,8 @@
 #include <linux/kernel.h>
 #include <linux/syscalls.h>
 
+#include <linux/timing_stats.h>
+
 //#define DSM_DEBUG 1
 #ifdef DSM_DEBUG
 #define print_debug(fmt, ...)                                              \
@@ -88,6 +90,15 @@ DEFINE_PER_CPU_ALIGNED(uint64_t, ooo_combiner_count);
 DEFINE_PER_CPU_ALIGNED(uint64_t, ooo_waiter_combined);
 DEFINE_PER_CPU_ALIGNED(uint64_t, ooo_unlocks);
 #endif
+
+#if LOCK_MEASURE_TIME
+static DEFINE_PER_CPU_ALIGNED(uint64_t, combiner_loop);
+//static DEFINE_PER_CPU_ALIGNED(uint64_t, combiner_loop_lockfn);
+//static DEFINE_PER_CPU_ALIGNED(uint64_t, combiner_loop_unlockfn);
+/*static DEFINE_PER_CPU_ALIGNED(uint64_t, lock_stack_switch);
+static DEFINE_PER_CPU_ALIGNED(uint64_t, unlock_stack_switch);*/
+#endif
+
 
 static DEFINE_PER_CPU_SHARED_ALIGNED(struct komb_node, komb_nodes[MAX_NODES]);
 static DEFINE_PER_CPU_SHARED_ALIGNED(struct shadow_stack, local_shadow_stack);
@@ -256,6 +267,10 @@ execute_cs(struct qspinlock *lock, struct komb_node *curr_node)
 
 	incoming_rsp_ptr = &(curr_node->rsp);
 	outgoing_rsp_ptr = &(ptr->local_shadow_stack_ptr);
+
+#if LOCK_MEASURE_TIME
+	*this_cpu_ptr(&combiner_loop) = UINT64_MAX;
+#endif
 
 	KOMB_BUG_ON(irqs_disabled());
 	KOMB_BUG_ON(*(uint64_t *)incoming_rsp_ptr == NULL);
@@ -540,6 +555,10 @@ void komb_init(void)
 
 		ptr->irqs_disabled = false;
 	}
+
+#if LOCK_MEASURE_TIME
+	locktime_init_timing_stats();
+#endif	
 }
 
 void komb_free(void)
@@ -854,6 +873,11 @@ komb_spin_unlock(struct qspinlock *lock)
 		lock->locked = _Q_UNLOCKED_OOO_VAL;
 		return;
 	}
+
+#if LOCK_MEASURE_TIME
+	LOCK_END_TIMING_PER_CPU(combiner_loop);
+	LOCK_START_TIMING_PER_CPU(combiner_loop);
+#endif
 
 	struct komb_node *curr_node = per_cpu_ptr(&komb_nodes[0], from_cpuid);
 	struct komb_node *next_node = ptr->next_node_ptr;
