@@ -380,10 +380,6 @@ execute_cs(struct qspinlock *lock, struct komb_node *curr_node)
 	incoming_rsp_ptr = &(curr_node->rsp);
 	outgoing_rsp_ptr = &(ptr->local_shadow_stack_ptr);
 
-#if LOCK_MEASURE_TIME
-	*this_cpu_ptr(&combiner_loop) = UINT64_MAX;
-#endif
-
 	KOMB_BUG_ON(irqs_disabled());
 	KOMB_BUG_ON(*(uint64_t *)incoming_rsp_ptr == NULL);
 	KOMB_BUG_ON(*(uint64_t *)outgoing_rsp_ptr == NULL);
@@ -472,6 +468,10 @@ run_combiner(struct qspinlock *lock, struct komb_node *curr_node)
 		return;
 	}
 
+#if LOCK_MEASURE_TIME
+	*this_cpu_ptr(&combiner_loop) = UINT64_MAX;
+#endif
+
 	struct shadow_stack *ptr = this_cpu_ptr(&local_shadow_stack);
 
 #ifndef WWJUMP
@@ -489,6 +489,11 @@ run_combiner(struct qspinlock *lock, struct komb_node *curr_node)
 			break;
 
 		curr_node = next_node;
+
+#if LOCK_MEASURE_TIME
+	LOCK_END_TIMING_PER_CPU(combiner_loop);
+	LOCK_START_TIMING_PER_CPU(combiner_loop);
+#endif
 	}
 #else
 	ptr->counter_val = 0;

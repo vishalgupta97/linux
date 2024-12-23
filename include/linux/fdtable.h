@@ -14,6 +14,7 @@
 #include <linux/types.h>
 #include <linux/init.h>
 #include <linux/fs.h>
+#include <linux/komb_delegation.h>
 
 #include <linux/atomic.h>
 
@@ -49,7 +50,7 @@ struct files_struct {
   /*
    * written part on a separate cache line in SMP
    */
-	spinlock_t file_lock ____cacheline_aligned_in_smp;
+	arch_spinlock_t file_lock ____cacheline_aligned_in_smp;
 	unsigned int next_fd;
 	unsigned long close_on_exec_init[1];
 	unsigned long open_fds_init[1];
