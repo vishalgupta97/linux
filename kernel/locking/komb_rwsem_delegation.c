@@ -320,6 +320,9 @@ execute_cs(struct kombd_mutex_node *curr_node)
 __attribute__((noipa)) noinline notrace static void
 run_combiner(struct kombd_rwsem *lock, struct kombd_mutex_node *curr_node)
 {
+#ifndef WWJUMP
+	struct kombd_mutex_node *next_node;
+#endif
 	KOMB_BUG_ON(curr_node == NULL);
 	KOMB_BUG_ON((smp_processor_id() % rwsemd_num_cores_per_socket) != 0);
 
@@ -331,8 +334,36 @@ run_combiner(struct kombd_rwsem *lock, struct kombd_mutex_node *curr_node)
 		NULL; //TODO: fix this to is_local_queue_tail_last
 
 	current->counter_val = 0;
+#ifndef WWJUMP
+	while (curr_node) {
+		current->counter_val++;
 
+		next_node = get_next_node(curr_node);
+		if(next_node == NULL)
+			current->komb_next_waiter_task = NULL;
+		else
+			current->komb_next_waiter_task = next_node->task_struct_ptr;
+
+		execute_cs(curr_node);
+
+		if (next_node == NULL || current->counter_val >= komb_batch_size || need_resched())
+			break;
+
+		wake_up_waiter(curr_node);
+		clear_locked_set_completed(curr_node);
+
+		curr_node = next_node;
+
+#if LOCK_MEASURE_TIME
+		LOCK_END_TIMING_PER_CPU(combiner_loop);
+		LOCK_START_TIMING_PER_CPU(combiner_loop);
+#endif
+	}
+
+	current->komb_prev_waiter_task = curr_node->task_struct_ptr;
+#else
 	execute_cs(curr_node);
+#endif
 
 #if KOMB_STATS
 	this_cpu_add(waiter_combined, current->counter_val);
@@ -346,7 +377,7 @@ run_combiner(struct kombd_rwsem *lock, struct kombd_mutex_node *curr_node)
 
 static inline __pure u32 select_delegation_cpu(struct kombd_rwsem *lock)
 {
-	return (rwsemd_num_cores_per_socket * numa_node_id());
+	return (rwsemd_num_cores_per_socket * numa_node_id()) + 47;
 //		       	+((u64)lock % num_rwsemd_threads_per_socket));
 }
 
@@ -652,7 +683,7 @@ void kombd_rwsem_init(void)
 	for (i = 0; i < num_rwsemd_threads; i++) {
 		dthreads[i] =
 			kthread_create(komb_rwd_thread, NULL, "komb_rw_thread");
-		kthread_bind(dthreads[i], i * rwsemd_num_cores_per_socket);
+		kthread_bind(dthreads[i], (i * rwsemd_num_cores_per_socket) + 47);
 		if (dthreads[i])
 			wake_up_process(dthreads[i]);
 		else
@@ -819,11 +850,12 @@ void kombd_rwsem_down_write(struct kombd_rwsem *lock)
 	
 	rq_tail = per_cpu_ptr(&lock_rq_tail, select_delegation_cpu(lock));
 
-	if(READ_ONCE(*rq_tail) == 0xdeadbeef || (smp_processor_id() % rwsemd_num_cores_per_socket) == 0)
+	if(READ_ONCE(*rq_tail) == 0xdeadbeef || (smp_processor_id() % rwsemd_num_cores_per_socket) == 47)
 		kombd_rwsem_down_write_nested(lock, 0);
 	else
 		kombd_write_lock_slowpath(lock);
 
+#ifdef WWJUMP
 	if (current->komb_curr_waiter_task) {
 		struct kombd_mutex_node *curr_node =
 			((struct task_struct *)current->komb_curr_waiter_task)
@@ -856,6 +888,7 @@ void kombd_rwsem_down_write(struct kombd_rwsem *lock)
 			current->komb_prev_waiter_task = NULL;
 		}
 	}
+#endif
 
 	preempt_enable();
 }
@@ -924,16 +957,18 @@ kombd_rwsem_up_write(struct kombd_rwsem *lock)
 		return;
 	}
 
-#if LOCK_MEASURE_TIME
-	LOCK_END_TIMING_PER_CPU_DISABLE(combiner_loop);
-	LOCK_START_TIMING_PER_CPU_DISABLE(combiner_loop);
-#endif
 
 	//Delegation thread should be on CPU 0 on each socket
 	KOMB_BUG_ON((smp_processor_id() % rwsemd_num_cores_per_socket) != 0);
 
 	curr_node = ((struct task_struct *)current->komb_curr_waiter_task)
 			    ->komb_mutex_node;
+
+#ifdef WWJUMP
+#if LOCK_MEASURE_TIME
+	LOCK_END_TIMING_PER_CPU_DISABLE(combiner_loop);
+	LOCK_START_TIMING_PER_CPU_DISABLE(combiner_loop);
+#endif
 
 	if (current->komb_next_waiter_task)
 		next_node =
@@ -944,7 +979,7 @@ kombd_rwsem_up_write(struct kombd_rwsem *lock)
 
 	counter = current->counter_val;
 
-	if (next_node == NULL || counter >= komb_batch_size || need_resched()) {
+	if (next_node == NULL || counter >= komb_batch_size) {
 		incoming_rsp_ptr = get_shadow_stack_ptr(lock);
 		current->komb_prev_waiter_task = current->komb_curr_waiter_task;
 		current->komb_curr_waiter_task = NULL;
@@ -958,6 +993,10 @@ kombd_rwsem_up_write(struct kombd_rwsem *lock)
 		print_debug("Jumping to the next waiter: %d\n",
 			    next_node->cpuid);
 	}
+#else //WWJUMP
+	incoming_rsp_ptr = get_shadow_stack_ptr(lock);
+#endif
+
 	
 	/*
 	 * Komb node still active here, because cpu (from_cpuid) still spinning.
