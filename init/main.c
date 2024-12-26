@@ -104,6 +104,7 @@
 #include <linux/ptdump.h>
 #include <net/net_namespace.h>
 #include <linux/komb_delegation.h>
+#include <linux/komb_rwsem_delegation.h>
 
 #include <asm/io.h>
 #include <asm/setup.h>
@@ -1488,7 +1489,8 @@ static int __ref kernel_init(void *unused)
 
 	rcu_end_inkernel_boot();
 
-	kd_init();
+	//kd_init();
+	kombd_rwsem_init();
 
 	do_sysctl_args();
 

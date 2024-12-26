@@ -73,7 +73,7 @@ struct kombd_mutex {
  * komb_init and komb_free should be called only when the system boots up and
  * shut down. They are used to setup and free per-core variables.
  */
-void kombd_mutex_init(int num_delegation_threads);
+void kombd_mutex_init(void);
 void kombd_mutex_free(void);
 
 /*

@@ -32,9 +32,6 @@
 #define print_debug(fmt, ...)
 #endif
 
-#define SIZE_OF_SHADOW_STACK 8192L
-#define IRQ_NUMA_NODE 255
-
 #define smp_cond_load_relaxed_sched(ptr, cond_expr) \
 	({                                          \
 		typeof(ptr) __PTR = (ptr);          \

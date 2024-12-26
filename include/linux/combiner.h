@@ -18,6 +18,9 @@
 
 #define NUM_PREFETCH_LINES 6
 
+#define IRQ_NUMA_NODE 255
+#define SIZE_OF_SHADOW_STACK 8192L
+
 #define LOCK_START_TIMING_DISABLE(name, start)
 #define LOCK_START_TIMING_PER_CPU_DISABLE(name)
 #define LOCK_END_TIMING_DISABLE(name, start)

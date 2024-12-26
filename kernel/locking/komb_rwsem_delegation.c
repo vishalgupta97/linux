@@ -61,9 +61,6 @@
 #define KOMB_WAKER_COUNT_SHIFT 16
 #define KOMB_WAKER_COUNT (1U << KOMB_WAKER_COUNT_SHIFT)
 
-#define IRQ_NUMA_NODE 255
-
-#if KERNEL_SYNCSTRESS
 #define smp_cond_load_relaxed_sleep(curr_node, ptr, cond_expr)                 \
 	({                                                                     \
 		typeof(ptr) __PTR = (ptr);                                     \
@@ -98,7 +95,7 @@
 				break;              \
 			cpu_relax();                \
 			if (need_resched()) {       \
-				cond_resched();     \
+				schedule_out_curr_task();     \
 			}                           \
 		}                                   \
 		(typeof(*ptr))VAL;                  \
@@ -120,25 +117,6 @@
 		(typeof(*ptr))VAL;                              \
 	})
 
-#else
-#define smp_cond_load_relaxed_sched(ptr, cond_expr) \
-	({                                          \
-		typeof(ptr) __PTR = (ptr);          \
-		__unqual_scalar_typeof(*ptr) VAL;   \
-		for (;;) {                          \
-			VAL = READ_ONCE(*__PTR);    \
-			if (cond_expr)              \
-				break;              \
-			cpu_relax();                \
-		}                                   \
-		(typeof(*ptr))VAL;                  \
-	})
-
-//if (need_resched()) {
-//	schedule_preempt_disabled();
-//}
-#endif
-
 #ifndef smp_cond_load_acquire_sched
 #define smp_cond_load_acquire_sched(ptr, cond_expr)                 \
 	({                                                          \
@@ -153,8 +131,8 @@
 	smp_cond_load_acquire_sched(&(v)->counter, (c))
 
 static struct task_struct **dthreads;
-static int num_delegation_threads;
-static int num_delegation_threads_per_socket;
+static int num_rwsemd_threads;
+static int rwsemd_num_cores_per_socket;
 
 #if LOCK_MEASURE_TIME
 static DEFINE_PER_CPU_ALIGNED(uint64_t, combiner_loop);
@@ -323,6 +301,7 @@ void kombd_rwsem_down_read(struct kombd_rwsem *lock)
 	kombd_read_lock_slowpath(lock);
 	//preempt_enable();
 }
+EXPORT_SYMBOL_GPL(kombd_rwsem_down_read);
 
 #pragma GCC push_options
 #pragma GCC optimize("O3")
@@ -358,7 +337,7 @@ __attribute__((noipa)) noinline notrace static void
 run_combiner(struct kombd_rwsem *lock, struct kombd_mutex_node *curr_node)
 {
 	KOMB_BUG_ON(curr_node == NULL);
-	KOMB_BUG_ON((smp_processor_id() % num_cores_per_socket) != 0);
+	KOMB_BUG_ON((smp_processor_id() % rwsemd_num_cores_per_socket) != 0);
 
 #if LOCK_MEASURE_TIME
 	*this_cpu_ptr(&combiner_loop) = UINT64_MAX;
@@ -386,8 +365,8 @@ run_combiner(struct kombd_rwsem *lock, struct kombd_mutex_node *curr_node)
 static inline __pure u32 select_delegation_cpu(struct kombd_rwsem *lock)
 {
 #if NUMA_AWARE
-	return ((num_cores_per_socket * numa_node_id());
-//		       	+((u64)lock % num_delegation_threads_per_socket));
+	return (rwsemd_num_cores_per_socket * numa_node_id());
+//		       	+((u64)lock % num_rwsemd_threads_per_socket));
 #else
 	return 0;
 #endif
@@ -675,7 +654,7 @@ int komb_rwd_thread(void *args)
  * Public API
  */
 
-void kombd_rwsem_init(int __num_delegation_threads)
+void kombd_rwsem_init(void)
 {
 	int i;
 
@@ -687,21 +666,20 @@ void kombd_rwsem_init(int __num_delegation_threads)
 	*per_cpu_ptr(&do_timing, KOMB_CPU) = true;
 #endif
 
+	rwsemd_num_cores_per_socket = num_online_cpus() / num_online_nodes();
+
 #if NUMA_AWARE
-	num_delegation_threads = num_online_nodes();
-	num_delegation_threads_per_socket =
-		num_online_cpus() / num_online_nodes();
+	num_rwsemd_threads = num_online_nodes();
 #else
-	num_delegation_threads = 1;
-	num_delegation_threads_per_socket = 1;
+	num_rwsemd_threads = 1;
 #endif
 
 	dthreads =
-		vzalloc(num_delegation_threads * sizeof(struct task_struct *));
-	for (i = 0; i < num_delegation_threads; i++) {
+		vzalloc(num_rwsemd_threads * sizeof(struct task_struct *));
+	for (i = 0; i < num_rwsemd_threads; i++) {
 		dthreads[i] =
 			kthread_create(komb_rwd_thread, NULL, "komb_rw_thread");
-		kthread_bind(dthreads[i], i * num_cores_per_socket);
+		kthread_bind(dthreads[i], i * rwsemd_num_cores_per_socket);
 		if (dthreads[i])
 			wake_up_process(dthreads[i]);
 		else
@@ -715,7 +693,7 @@ void kombd_rwsem_free(void)
 	int ret;
 	uint32_t i;
 
-	for (i = 0; i < num_delegation_threads; i++) {
+	for (i = 0; i < num_rwsemd_threads; i++) {
 		ret = kthread_stop(dthreads[i]);
 		if (ret)
 			printk(KERN_ALERT
@@ -849,7 +827,7 @@ void kombd_rwsem_down_write(struct kombd_rwsem *lock)
 
 	curr_node = get_kombd_mutex_node(lock);
 	KOMB_BUG_ON(curr_node == NULL);
-	if ((smp_processor_id() % num_cores_per_socket) == 0) {
+	if ((smp_processor_id() % rwsemd_num_cores_per_socket) == 0) {
 		int j = 0;
 		for (j = 0; j < 7; j++)
 			if (current->komb_lock_addr[j] != NULL)
@@ -929,12 +907,13 @@ void kombd_rwsem_up_read(struct kombd_rwsem *lock)
 	} else {
 		if (my_idx == max_idx) {
 			KOMB_BUG_ON(lock->wlocked != _KOMB_RWSEM_W_DOWNGRADE);
-			up_write(lock);
+			kombd_rwsem_up_write(lock);
 		} else {
 			BUG_ON(true);
 		}
 	}
 }
+EXPORT_SYMBOL_GPL(kombd_rwsem_up_read);
 
 __attribute__((noipa)) noinline notrace void
 kombd_rwsem_up_write(struct kombd_rwsem *lock)
@@ -975,7 +954,7 @@ kombd_rwsem_up_write(struct kombd_rwsem *lock)
 #endif
 
 	//Delegation thread should be on CPU 0 on each socket
-	KOMB_BUG_ON((smp_processor_id() % num_cores_per_socket) != 0);
+	KOMB_BUG_ON((smp_processor_id() % rwsemd_num_cores_per_socket) != 0);
 
 	curr_node = ((struct task_struct *)current->komb_curr_waiter_task)
 			    ->komb_mutex_node;
@@ -1029,11 +1008,12 @@ kombd_rwsem_up_write(struct kombd_rwsem *lock)
 void kombd_init_rwsem(struct kombd_rwsem *sem)
 {
 	sem->writer_tail = NULL;
-	atomic_set(&sem->reader_wait_lock->val, 0);
-	atomic_set(&sem->cnts, 0);
+	atomic_set(&sem->reader_wait_lock.val, 0);
+	sem->reader_wait_lock.tail = NULL;
+	atomic_long_set(&sem->cnts, 0);
 }
 
-bool kombd_rwsem_down_read_trylock(struct kombd_rwsem *sem)
+bool kombd_rwsem_down_read_trylock(struct kombd_rwsem *lock)
 {
 	u64 cnts;
 
@@ -1047,7 +1027,7 @@ bool kombd_rwsem_down_read_trylock(struct kombd_rwsem *sem)
 	return false;
 }
 
-void kombd_rwsem_down_write_nested(struct kombd_rwsem *sem, int subclass)
+void kombd_rwsem_down_write_nested(struct kombd_rwsem *lock, int subclass)
 {
 	u64 val;
 	val = atomic_long_cmpxchg_acquire(&lock->cnts, 0, _KOMB_RWSEM_W_LOCKED);
