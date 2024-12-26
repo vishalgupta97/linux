@@ -11,6 +11,7 @@
 #include "mutex/komb_mutex_delegation.h"
 #include "timing_stats.h"
 #else
+#include <linux/timing_stats.h>
 #include <linux/komb_mutex_delegation.h>
 #include <linux/sched.h>
 #include <linux/combiner.h>
@@ -24,6 +25,9 @@
 #include <linux/percpu-defs.h>
 #include <linux/kernel.h>
 #include <linux/syscalls.h>
+
+#define DSB_DEBUG 0
+#define DEBUG_KOMB 0
 
 #if DSM_DEBUG
 #define print_debug(fmt, ...)                                              \

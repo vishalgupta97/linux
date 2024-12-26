@@ -389,6 +389,7 @@
 477 common komb_start_timing sys_komb_start_timing
 478 common komb_stop_timing sys_komb_stop_timing
 479 common komb_start_delegation sys_komb_start_delegation
+480 common komb_start_rwsem_delegation sys_komb_start_rwsem_delegation
 
 #
 # Due to a historical design error, certain syscalls are numbered differently

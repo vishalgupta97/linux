@@ -1190,6 +1190,8 @@ asmlinkage long sys_komb_start_delegation(void);
 asmlinkage long sys_komb_start_timing(void);
 asmlinkage long sys_komb_stop_timing(void);
 
+asmlinkage long sys_komb_start_rwsem_delegation(void);
+
 /*
  * Not a real system call, but a placeholder for syscalls which are
  * not implemented -- see kernel/sys_ni.c

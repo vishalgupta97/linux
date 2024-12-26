@@ -12,7 +12,7 @@
 #include "rwsem/komb_rwsem_delegation.h"
 #include "timing_stats.h"
 #else
-//TODO fix this
+#include <linux/timing_stats.h>
 #include <linux/komb_rwsem_delegation.h>
 #include <linux/sched.h>
 #include <linux/combiner.h>
@@ -26,6 +26,9 @@
 #include <linux/percpu-defs.h>
 #include <linux/kernel.h>
 #include <linux/syscalls.h>
+
+#define DSM_DEBUG 1
+#define DEBUG_KOMB 1
 
 #if DSM_DEBUG
 #define print_debug(fmt, ...)                                              \
@@ -131,8 +134,8 @@
 	smp_cond_load_acquire_sched(&(v)->counter, (c))
 
 static struct task_struct **dthreads;
-static int num_rwsemd_threads;
-static int rwsemd_num_cores_per_socket;
+static int num_rwsemd_threads = 1;
+static int rwsemd_num_cores_per_socket = 1;
 
 #if LOCK_MEASURE_TIME
 static DEFINE_PER_CPU_ALIGNED(uint64_t, combiner_loop);
@@ -189,11 +192,6 @@ __attribute__((noipa)) noinline notrace static struct kombd_mutex_node *
 get_kombd_mutex_node(struct kombd_rwsem *lock)
 {
 	return ((struct kombd_mutex_node *)(current->komb_mutex_node));
-}
-
-static __always_inline void set_locked(struct kombd_rwsem *lock)
-{
-	WRITE_ONCE(lock->wlocked, _KOMB_RWSEM_W_LOCKED);
 }
 
 static __always_inline void
@@ -273,14 +271,14 @@ next_node_null:
 
 static inline void kombd_read_lock_slowpath(struct kombd_rwsem *lock)
 {
-	print_debug("Reader waiting for spinlock\n");
+	//print_debug("Reader waiting for spinlock\n");
 	aqm_lock(&lock->reader_wait_lock);
 	atomic_long_add_return_acquire(_KOMB_RWSEM_R_BIAS, &lock->cnts);
-	print_debug(
-		"Reader slowpath got wait lock, waiting for writer to go away\n");
+	//print_debug(
+	//	"Reader slowpath got wait lock, waiting for writer to go away\n");
 	atomic_long_cond_read_acquire(&lock->cnts,
 				      !(VAL & _KOMB_RWSEM_W_WMASK));
-	print_debug("Reader slowpath got the lock\n");
+	//print_debug("Reader slowpath got the lock\n");
 	aqm_unlock(&lock->reader_wait_lock);
 	return;
 }
@@ -402,8 +400,7 @@ __kombd_write_lock_slowpath(struct kombd_rwsem *lock)
 	if (prev_node) {
 		WRITE_ONCE(prev_node->next, curr_node);
 		smp_mb();
-		print_debug("prev_node: %d my_pos: %d\n", prev_node->cpuid,
-			    curr_node->pos);
+		print_debug("prev_node: %d\n", prev_node->cpuid);
 	} else {
 head_of_queue:
 		print_debug("Head of queue\n");
@@ -437,7 +434,9 @@ unlock:
 
 		rq_tail =
 			per_cpu_ptr(&lock_rq_tail, select_delegation_cpu(lock));
-		if (cmpxchg(rq_tail, NULL, curr_node) != NULL) {
+		if (READ_ONCE(*rq_tail) == 0xdeadbeef ||
+				!task_is_running(dthreads[numa_node_id()]) ||
+				cmpxchg(rq_tail, NULL, curr_node) != NULL) {
 			// Fallback to qspinlock
 			print_debug("Delegation %d running something else\n",
 				    select_delegation_cpu(lock));
@@ -504,6 +503,13 @@ int komb_rwd_thread(void *args)
 
 	rq_tail = this_cpu_ptr(&lock_rq_tail);
 	lock = NULL;
+
+	while (true) {
+		if (READ_ONCE(*rq_tail) != 0xdeadbeef)
+			break;
+		cpu_relax();
+		cond_resched();
+	}
 
 	while (!kthread_should_stop()) {
 		smp_cond_load_relaxed_sched_delegation(rq_tail, (VAL));
@@ -633,7 +639,7 @@ int komb_rwd_thread(void *args)
 		clear_locked_set_completed(prev_node);
 
 		//Release the lock
-		KOMB_BUG_ON(lock->wlocked != _KOMB_RWSEM_W_COMBINER);
+		KOMB_BUG_ON(!(lock->wlocked == _KOMB_RWSEM_W_COMBINER || lock->wlocked == _KOMB_RWSEM_W_DOWNGRADE));
 		print_debug("Releasing the lock from combiner\n");
 		WRITE_ONCE(lock->wlocked, 0);
 
@@ -659,7 +665,7 @@ void kombd_rwsem_init(void)
 	int i;
 
 	for_each_possible_cpu(i) {
-		*per_cpu_ptr(&lock_rq_tail, i) = NULL;
+		*per_cpu_ptr(&lock_rq_tail, i) = 0xdeadbeef;
 	}
 
 #if LOCK_MEASURE_TIME
@@ -818,6 +824,7 @@ kombd_write_lock_slowpath(struct kombd_rwsem *lock)
 void kombd_rwsem_down_write(struct kombd_rwsem *lock)
 {
 	struct kombd_mutex_node *curr_node = NULL;
+	struct kombd_mutex_node **rq_tail;
 	u64 val;
 	val = atomic_long_cmpxchg_acquire(&lock->cnts, 0, _KOMB_RWSEM_W_LOCKED);
 	if (val == 0)
@@ -827,14 +834,14 @@ void kombd_rwsem_down_write(struct kombd_rwsem *lock)
 
 	curr_node = get_kombd_mutex_node(lock);
 	KOMB_BUG_ON(curr_node == NULL);
-	if ((smp_processor_id() % rwsemd_num_cores_per_socket) == 0) {
+	/*if ((smp_processor_id() % rwsemd_num_cores_per_socket) == 0) {
 		int j = 0;
 		for (j = 0; j < 7; j++)
 			if (current->komb_lock_addr[j] != NULL)
 				break;
 		print_debug("lock addr index: %d\n", j);
 		KOMB_BUG_ON(true);
-	}
+	}*/
 
 #if LOCK_MEASURE_TIME
 //		*this_cpu_ptr(&lock_stack_switch) = UINT64_MAX;
@@ -842,7 +849,13 @@ void kombd_rwsem_down_write(struct kombd_rwsem *lock)
 #endif
 	LOCK_START_TIMING_PER_CPU_DISABLE(lock_stack_switch);
 
-	kombd_write_lock_slowpath(lock);
+	
+	rq_tail = per_cpu_ptr(&lock_rq_tail, select_delegation_cpu(lock));
+
+	if(READ_ONCE(*rq_tail) == 0xdeadbeef || (smp_processor_id() % rwsemd_num_cores_per_socket) == 0)
+		kombd_rwsem_down_write_nested(lock, 0);
+	else
+		kombd_write_lock_slowpath(lock);
 
 #if WWJUMP
 	if (current->komb_curr_waiter_task) {
@@ -944,7 +957,7 @@ kombd_rwsem_up_write(struct kombd_rwsem *lock)
 	if (my_idx == -1) {
 		KOMB_BUG_ON(lock->wlocked != _KOMB_RWSEM_W_LOCKED);
 		WRITE_ONCE(lock->wlocked, 0);
-		print_debug("Unlocked the qspinlock\n");
+		//print_debug("Unlocked the qspinlock\n");
 		return;
 	}
 
@@ -1052,8 +1065,7 @@ void kombd_rwsem_down_write_nested(struct kombd_rwsem *lock, int subclass)
 	if (prev_node) {
 		WRITE_ONCE(prev_node->next, curr_node);
 		smp_mb();
-		print_debug("prev_node: %d my_pos: %d\n", prev_node->cpuid,
-			    curr_node->pos);
+		//print_debug("prev_node: %d\n", prev_node->cpuid);
 
                 smp_cond_load_relaxed_sleep(curr_node, &curr_node->locked, VAL == 0);
 
@@ -1061,24 +1073,24 @@ void kombd_rwsem_down_write_nested(struct kombd_rwsem *lock, int subclass)
 	}
 
 head_of_queue:
-        print_debug("Head of queue\n");
+        //print_debug("Head of queue\n");
 
-        print_debug("Writer owner on slowpath\n");
+        //print_debug("Writer owner on slowpath\n");
         aqm_lock(&lock->reader_wait_lock);
 
-        print_debug(
-                "Writer got the mutex lock. waiting for pending readers\n");
+        //print_debug(
+        //        "Writer got the mutex lock. waiting for pending readers\n");
 
         if (!atomic_long_read(&lock->cnts) &&
                 (atomic_long_cmpxchg_relaxed(&lock->cnts, 0,
                                                 _KOMB_RWSEM_W_LOCKED) == 0)) {
-                print_debug("No pending readers\n");
+                //print_debug("No pending readers\n");
                 goto unlock;
         }
 
         atomic_long_add_return_acquire(_KOMB_RWSEM_W_WAITING,
                                         &lock->cnts);
-        print_debug("Writer set the pending bit\n");
+        //print_debug("Writer set the pending bit\n");
         do {
                 atomic_long_cond_read_acquire(
                         &lock->cnts, VAL == _KOMB_RWSEM_W_WAITING);
@@ -1087,16 +1099,16 @@ head_of_queue:
                                                 _KOMB_RWSEM_W_LOCKED) !=
                         _KOMB_RWSEM_W_WAITING);
 unlock:
-        print_debug("Writer got the lock slowpath\n");
+        //print_debug("Writer got the lock slowpath\n");
         aqm_unlock(&lock->reader_wait_lock);
 
         if (cmpxchg(&lock->writer_tail, curr_node, NULL) ==
                 curr_node) {
-                print_debug(
-                        "IRQ only one in the queue unlocked\n");
+                //print_debug(
+                //        "IRQ only one in the queue unlocked\n");
 		return;
         } else {
-                print_debug("Someone else joined the queue\n");
+                //print_debug("Someone else joined the queue\n");
         }
 
         next_node = READ_ONCE(curr_node->next);
@@ -1110,8 +1122,8 @@ unlock:
         }
 
         KOMB_BUG_ON(curr_node->next == NULL);
-        print_debug("Next node now head of queue: %d\n",
-                        curr_node->next->cpuid);
+        //print_debug("Next node now head of queue: %d\n",
+        //                curr_node->next->cpuid);
         wake_up_waiter(curr_node->next);
         WRITE_ONCE(curr_node->next->locked, false);
 }
@@ -1150,6 +1162,7 @@ void kombd_rwsem_downgrade_write(struct kombd_rwsem *lock)
 #ifdef KOMB_STATS
 		this_cpu_inc(rwsem_downgrade);
 #endif
+		print_debug("Downgrade with combinining\n");
 		lock->wlocked = _KOMB_RWSEM_W_DOWNGRADE;
 		return;
 	}
@@ -1162,4 +1175,15 @@ void kombd_rwsem_up_read_non_owner(struct kombd_rwsem *sem) {
 
 bool kombd_rwsem_is_contended(struct kombd_rwsem *sem) {
         return (sem->writer_tail != NULL);
+}
+
+SYSCALL_DEFINE0(komb_start_rwsem_delegation)
+{
+	printk(KERN_ALERT "======== KOMB starting RWSEM delegation ========\n");
+	int i;
+	for_each_online_cpu(i) {
+		*per_cpu_ptr(&lock_rq_tail, i) = 0;
+	}
+
+	return 0;
 }

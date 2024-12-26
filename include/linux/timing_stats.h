@@ -14,7 +14,7 @@
 
 #define KOMB_UINT64_MAX                 (u64)(~((u64) 0))    /* 0xFFFFFFFFFFFFFFFF */
 
-#define LOCK_MEASURE_TIME 1
+#define LOCK_MEASURE_TIME 0
 #define N_BUCKETS 16384 //1048576
 #define TIME_UPPER_BOUND 16384 //1048576 //131072
 

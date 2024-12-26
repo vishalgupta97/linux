@@ -606,6 +606,9 @@ void free_task(struct task_struct *tsk)
 	if (tsk->flags & PF_KTHREAD)
 		free_kthread_struct(tsk);
 	bpf_task_storage_free(tsk);
+	vfree(tsk->komb_stack_base_ptr);
+	vfree(tsk->komb_mutex_node);
+	vfree(tsk->aqm_node);
 	free_task_struct(tsk);
 }
 EXPORT_SYMBOL(free_task);
@@ -1194,6 +1197,23 @@ static struct task_struct *dup_task_struct(struct task_struct *orig, int node)
 	tsk->mm_cid_active = 0;
 	tsk->migrate_from_cpu = -1;
 #endif
+
+	//KOMB_allocation
+	void *ptr = vzalloc(8192);
+	tsk->komb_stack_base_ptr = ptr;
+	tsk->komb_stack_curr_ptr = ptr + 8192 - 8;
+	tsk->komb_mutex_node = vzalloc(sizeof(struct kombd_mutex_node));
+	tsk->aqm_node = vzalloc(sizeof(struct aqm_node));
+
+	tsk->komb_local_queue_head = NULL;
+	tsk->komb_local_queue_tail = NULL;
+	tsk->komb_curr_waiter_task = NULL;
+	tsk->komb_prev_waiter_task = NULL;
+	tsk->komb_next_waiter_task = NULL;
+	tsk->counter_val = 0;
+	for (int i = 0; i < 8; i++)
+	tsk->komb_lock_addr[i] = NULL;
+
 	return tsk;
 
 free_stack:
