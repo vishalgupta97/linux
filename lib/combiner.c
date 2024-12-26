@@ -6,7 +6,7 @@
 #else
 #include<linux/timing_stats.h>
 #include <linux/combiner.h>
-long komb_batch_size = 1024; //262144;
+long komb_batch_size = 262144;
 #endif
 
 #include <linux/syscalls.h>

@@ -28,7 +28,7 @@
 #include <linux/syscalls.h>
 
 #define DSM_DEBUG 0
-#define DEBUG_KOMB 1
+#define DEBUG_KOMB 0
 
 #if DSM_DEBUG
 #define print_debug(fmt, ...)                                              \
@@ -233,13 +233,6 @@ get_next_node(struct kombd_mutex_node *my_node)
 	while (true) {
 		if (next_node == NULL || next_node->socket_id == IRQ_NUMA_NODE)
 			goto next_node_null;
-
-		if (next_node->socket_id == -1) {
-			curr_node->next = NULL;
-			curr_node = next_node;
-			next_node = curr_node->next;
-			continue;
-		}
 
 		if (next_node->socket_id == numa_node_id()) {
 #if PREFETCHING
@@ -517,6 +510,9 @@ int komb_rwd_thread(void *args)
 		print_debug("Running combiner with node from: %d\n",
 			    next_node->cpuid);
 
+		BUG_ON(current->mm != NULL); //For mmap_lock
+		current->mm = next_node->task_struct_ptr->mm;
+
 		j = 0;
 		for (j = 0; j < 7; j++)
 			if (current->komb_lock_addr[j] == NULL)
@@ -553,6 +549,8 @@ int komb_rwd_thread(void *args)
 		KOMB_BUG_ON(prev_node == NULL);
 		next_node = NULL;
 		WRITE_ONCE(*rq_tail, NULL); //Combining done
+
+		current->mm = NULL;
 
 		head = (struct kombd_mutex_node *
 				*)(&current->komb_local_queue_head);
@@ -602,6 +600,7 @@ int komb_rwd_thread(void *args)
 				"Transferring lock to another socket %d cpuid %d\n",
 				next_node->socket_id, next_node->cpuid);
 
+			wake_up_waiter(next_node);
 			next_node->locked = false;
 		} else {
 			print_debug("My node next NULL\n");
@@ -831,7 +830,7 @@ void kombd_rwsem_down_write(struct kombd_rwsem *lock)
 				->komb_mutex_node;
 
 		if ((struct kombd_rwsem *)curr_node->lock == lock) {
-			KOMB_BUG_ON(lock->wlocked != _KOMB_RWSEM_W_COMBINER);
+			KOMB_BUG_ON(!(lock->wlocked == _KOMB_RWSEM_W_COMBINER || lock->wlocked == _KOMB_RWSEM_W_DOWNGRADE));
 			struct kombd_mutex_node *next_node =
 				get_next_node(curr_node);
 			if (next_node == NULL)
