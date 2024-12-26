@@ -14,7 +14,7 @@
 
 #define NUMA_AWARE 1
 #define PREFETCHING 1
-#define WWJUMP 0 //1
+#define WWJUMP 1
 
 #define NUM_PREFETCH_LINES 6
 
