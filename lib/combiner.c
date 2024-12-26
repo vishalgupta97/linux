@@ -55,6 +55,7 @@ DEFINE_PER_CPU_ALIGNED(uint64_t, rwsem_ooo_combiner_count);
 DEFINE_PER_CPU_ALIGNED(uint64_t, rwsem_ooo_waiter_combined);
 DEFINE_PER_CPU_ALIGNED(uint64_t, rwsem_ooo_unlocks);
 DEFINE_PER_CPU_ALIGNED(uint64_t, rwsem_downgrade);
+DEFINE_PER_CPU_ALIGNED(uint64_t, rwsem_qspinlock_fallback);
 
 SYSCALL_DEFINE0(komb_stats)
 {
@@ -62,7 +63,7 @@ SYSCALL_DEFINE0(komb_stats)
 
 	printk(KERN_ALERT "======== KOMB spinlock stats ========\n");
 	int i;
-	uint64_t total_counters[17] = { 0 };
+	uint64_t total_counters[18] = { 0 };
 	for_each_online_cpu (i) {
 		total_counters[0] += per_cpu(combiner_count, i);
 		total_counters[1] += per_cpu(waiter_combined, i);
@@ -81,6 +82,7 @@ SYSCALL_DEFINE0(komb_stats)
 		total_counters[14] += per_cpu(rwsem_ooo_combiner_count, i);
 		total_counters[15] += per_cpu(rwsem_ooo_waiter_combined, i);
 		total_counters[16] += per_cpu(rwsem_downgrade, i);
+		total_counters[17] += per_cpu(rwsem_qspinlock_fallback, i);
 	}
 
 	printk(KERN_ALERT "Combiner_count: %ld\n", total_counters[0]);
@@ -103,6 +105,7 @@ SYSCALL_DEFINE0(komb_stats)
 	printk(KERN_ALERT "rwsem_ooo_waiter_combined: %ld\n",
 	       total_counters[15]);
 	printk(KERN_ALERT "rwsem_downgrade: %ld\n", total_counters[16]);
+	printk(KERN_ALERT "rwsem_qspinlock_fallback: %ld\n", total_counters[17]);
 
 	return 0;
 }
@@ -131,6 +134,7 @@ SYSCALL_DEFINE0(komb_clear_stats)
 		*per_cpu_ptr(&rwsem_ooo_combiner_count, i) = 0;
 		*per_cpu_ptr(&rwsem_ooo_waiter_combined, i) = 0;
 		*per_cpu_ptr(&rwsem_downgrade, i) = 0;
+		*per_cpu_ptr(&rwsem_qspinlock_fallback, i) = 0;
 	}
 	return 0;
 }

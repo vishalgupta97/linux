@@ -27,7 +27,7 @@
 #include <linux/kernel.h>
 #include <linux/syscalls.h>
 
-#define DSM_DEBUG 1
+#define DSM_DEBUG 0
 #define DEBUG_KOMB 1
 
 #if DSM_DEBUG
@@ -130,7 +130,7 @@
 	})
 #endif
 
-#define atomic_cond_read_acquire_sched(v, c) \
+#define atomic_long_cond_read_acquire_sched(v, c) \
 	smp_cond_load_acquire_sched(&(v)->counter, (c))
 
 static struct task_struct **dthreads;
@@ -201,7 +201,6 @@ clear_locked_set_completed(struct kombd_mutex_node *node)
 	WRITE_ONCE(node->locked, 0);
 }
 
-#if NUMA_AWARE
 __always_inline static void add_to_local_queue(struct kombd_mutex_node *node)
 {
 	struct kombd_mutex_node **head, **tail;
@@ -219,12 +218,10 @@ __always_inline static void add_to_local_queue(struct kombd_mutex_node *node)
 
 	current->komb_lock_addr[7] = 0xdeadbeef;
 }
-#endif
 
 static __always_inline struct kombd_mutex_node *
 get_next_node(struct kombd_mutex_node *my_node)
 {
-#if NUMA_AWARE
 	struct kombd_mutex_node *curr_node, *next_node;
 #if PREFETCHING
 	int i;
@@ -264,9 +261,6 @@ get_next_node(struct kombd_mutex_node *my_node)
 
 next_node_null:
 	return NULL;
-#else
-	return my_node->next;
-#endif
 }
 
 static inline void kombd_read_lock_slowpath(struct kombd_rwsem *lock)
@@ -276,7 +270,7 @@ static inline void kombd_read_lock_slowpath(struct kombd_rwsem *lock)
 	atomic_long_add_return_acquire(_KOMB_RWSEM_R_BIAS, &lock->cnts);
 	//print_debug(
 	//	"Reader slowpath got wait lock, waiting for writer to go away\n");
-	atomic_long_cond_read_acquire(&lock->cnts,
+	atomic_long_cond_read_acquire_sched(&lock->cnts,
 				      !(VAL & _KOMB_RWSEM_W_WMASK));
 	//print_debug("Reader slowpath got the lock\n");
 	aqm_unlock(&lock->reader_wait_lock);
@@ -289,15 +283,14 @@ void kombd_rwsem_down_read(struct kombd_rwsem *lock)
 
 	cnts = atomic_long_add_return_acquire(_KOMB_RWSEM_R_BIAS, &lock->cnts);
 
-	if (likely(!(cnts & _KOMB_RWSEM_W_WMASK))) {
+	if (likely(!(cnts & _KOMB_RWSEM_W_WMASK)))
 		return;
-	}
 
 	(void)atomic_long_sub_return_release(_KOMB_RWSEM_R_BIAS, &lock->cnts);
 
-	//preempt_disable();
+	preempt_disable();
 	kombd_read_lock_slowpath(lock);
-	//preempt_enable();
+	preempt_enable();
 }
 EXPORT_SYMBOL_GPL(kombd_rwsem_down_read);
 
@@ -341,10 +334,8 @@ run_combiner(struct kombd_rwsem *lock, struct kombd_mutex_node *curr_node)
 	*this_cpu_ptr(&combiner_loop) = UINT64_MAX;
 #endif
 
-#if NUMA_AWARE
 	current->komb_lock_addr[7] =
 		NULL; //TODO: fix this to is_local_queue_tail_last
-#endif
 
 	current->counter_val = 0;
 
@@ -362,12 +353,8 @@ run_combiner(struct kombd_rwsem *lock, struct kombd_mutex_node *curr_node)
 
 static inline __pure u32 select_delegation_cpu(struct kombd_rwsem *lock)
 {
-#if NUMA_AWARE
 	return (rwsemd_num_cores_per_socket * numa_node_id());
 //		       	+((u64)lock % num_rwsemd_threads_per_socket));
-#else
-	return 0;
-#endif
 }
 
 __attribute__((noipa)) noinline notrace static int
@@ -435,8 +422,10 @@ unlock:
 		rq_tail =
 			per_cpu_ptr(&lock_rq_tail, select_delegation_cpu(lock));
 		if (READ_ONCE(*rq_tail) == 0xdeadbeef ||
-				!task_is_running(dthreads[numa_node_id()]) ||
 				cmpxchg(rq_tail, NULL, curr_node) != NULL) {
+#ifdef KOMB_STATS
+			this_cpu_inc(rwsem_qspinlock_fallback);
+#endif
 			// Fallback to qspinlock
 			print_debug("Delegation %d running something else\n",
 				    select_delegation_cpu(lock));
@@ -537,12 +526,10 @@ int komb_rwd_thread(void *args)
 			    0); //TODO: Update this condition nested delegation
 
 		current->komb_lock_addr[j] = lock;
-#if NUMA_AWARE
 		current->komb_local_queue_head = NULL;
 		current->komb_local_queue_tail = NULL;
 		current->komb_lock_addr[7] =
 			NULL; //->is_local_queue_tail_last = false;
-#endif
 		current->komb_curr_waiter_task = NULL;
 		current->komb_prev_waiter_task = NULL;
 		current->komb_next_waiter_task = NULL;
@@ -572,7 +559,6 @@ int komb_rwd_thread(void *args)
 		tail = (struct kombd_mutex_node *
 				*)(&current->komb_local_queue_tail);
 
-#if NUMA_AWARE
 		if (READ_ONCE(prev_node->next) == NULL) {
 			if (*head != NULL) {
 				if (current->komb_lock_addr[7] ==
@@ -610,20 +596,6 @@ int komb_rwd_thread(void *args)
 				next_node = prev_node->next;
 			}
 		}
-
-#else //NUMA_AWARE
-		if (READ_ONCE(prev_node->next) == NULL) {
-			if (cmpxchg(&lock->writer_tail, prev_node, NULL) !=
-			    prev_node) {
-				smp_cond_load_relaxed_sched(&prev_node->next,
-							    (VAL));
-				next_node = prev_node->next;
-			}
-		} else {
-			next_node = READ_ONCE(prev_node->next);
-		}
-
-#endif //NUMA_AWARE
 
 		if (READ_ONCE(next_node) != NULL) {
 			print_debug(
@@ -674,11 +646,7 @@ void kombd_rwsem_init(void)
 
 	rwsemd_num_cores_per_socket = num_online_cpus() / num_online_nodes();
 
-#if NUMA_AWARE
 	num_rwsemd_threads = num_online_nodes();
-#else
-	num_rwsemd_threads = 1;
-#endif
 
 	dthreads =
 		vzalloc(num_rwsemd_threads * sizeof(struct task_struct *));
@@ -857,7 +825,6 @@ void kombd_rwsem_down_write(struct kombd_rwsem *lock)
 	else
 		kombd_write_lock_slowpath(lock);
 
-#if WWJUMP
 	if (current->komb_curr_waiter_task) {
 		struct kombd_mutex_node *curr_node =
 			((struct task_struct *)current->komb_curr_waiter_task)
@@ -890,7 +857,6 @@ void kombd_rwsem_down_write(struct kombd_rwsem *lock)
 			current->komb_prev_waiter_task = NULL;
 		}
 	}
-#endif
 
 	preempt_enable();
 }
@@ -933,10 +899,8 @@ kombd_rwsem_up_write(struct kombd_rwsem *lock)
 {
 	void *incoming_rsp_ptr, *outgoing_rsp_ptr;
 	struct kombd_mutex_node *curr_node;
-#if WWJUMP
 	struct kombd_mutex_node *next_node;
 	uint64_t counter;
-#endif
 	int j, max_idx, my_idx;
 	void *temp_lock_addr;
 
@@ -972,7 +936,6 @@ kombd_rwsem_up_write(struct kombd_rwsem *lock)
 	curr_node = ((struct task_struct *)current->komb_curr_waiter_task)
 			    ->komb_mutex_node;
 
-#if WWJUMP
 	if (current->komb_next_waiter_task)
 		next_node =
 			((struct task_struct *)current->komb_next_waiter_task)
@@ -987,10 +950,8 @@ kombd_rwsem_up_write(struct kombd_rwsem *lock)
 		current->komb_prev_waiter_task = current->komb_curr_waiter_task;
 		current->komb_curr_waiter_task = NULL;
 	} else {
-#if NUMA_AWARE
 		current->komb_lock_addr[7] =
 			NULL; //ptr->is_local_queue_tail_last = false;
-#endif
 		current->komb_prev_waiter_task = current->komb_curr_waiter_task;
 		current->komb_curr_waiter_task = current->komb_next_waiter_task;
 		incoming_rsp_ptr = &(next_node->rsp);
@@ -998,10 +959,7 @@ kombd_rwsem_up_write(struct kombd_rwsem *lock)
 		print_debug("Jumping to the next waiter: %d\n",
 			    next_node->cpuid);
 	}
-#else // WWJUMP
-	incoming_rsp_ptr = get_shadow_stack_ptr(lock);
-	print_debug("Jumping back to combiner\n");
-#endif
+	
 	/*
 	 * Komb node still active here, because cpu (from_cpuid) still spinning.
 	 */
@@ -1182,7 +1140,7 @@ SYSCALL_DEFINE0(komb_start_rwsem_delegation)
 	printk(KERN_ALERT "======== KOMB starting RWSEM delegation ========\n");
 	int i;
 	for_each_online_cpu(i) {
-		*per_cpu_ptr(&lock_rq_tail, i) = 0;
+		*per_cpu_ptr(&lock_rq_tail, i) = NULL;
 	}
 
 	return 0;

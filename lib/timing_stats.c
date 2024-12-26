@@ -32,6 +32,7 @@ DEFINE_PER_CPU(bool, do_timing);
 
 void locktime_init_timing_stats(void)
 {
+#if LOCK_MEASURE_TIME
 	printk(KERN_ALERT "======== init lock timing stats ========\n");
 
 	int i__, cpu;
@@ -42,6 +43,7 @@ void locktime_init_timing_stats(void)
 		}
 		BucketTimingsamples_bucket[i__] = vzalloc(sizeof(unsigned long) * TIME_UPPER_BOUND);
 	}
+#endif
 }
 
 SYSCALL_DEFINE0(komb_start_timing) {
@@ -70,6 +72,7 @@ SYSCALL_DEFINE0(komb_stop_timing) {
 
 static void locktime_get_timing_stats(void)
 {
+#if LOCK_MEASURE_TIME
 	int i, j;
 	int cpu;
 	uint64_t max_value, min_value;
@@ -176,10 +179,12 @@ static void locktime_get_timing_stats(void)
 		//printk(KERN_ALERT "======== Calculate Percentile Finished ========\n");
 
 	}
+#endif
 }
 
 void locktime_print_timing_stats(void)
 {
+#if LOCK_MEASURE_TIME
 	int i;
 
 	locktime_get_timing_stats();
@@ -209,10 +214,12 @@ void locktime_print_timing_stats(void)
 			       Countstats_locktime[i]);
 		}
 	}
+#endif
 }
 
 void locktime_clear_timing_stats(void)
 {
+#if LOCK_MEASURE_TIME
 	int i, j;
 	int cpu;
 
@@ -241,4 +248,5 @@ void locktime_clear_timing_stats(void)
 					cpu)[j] = 0;
 		}
 	}
+#endif
 }
