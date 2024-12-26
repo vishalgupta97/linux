@@ -103,6 +103,7 @@
 #include <linux/pidfs.h>
 #include <linux/ptdump.h>
 #include <net/net_namespace.h>
+#include <linux/timing_stats.h>
 #include <linux/komb_delegation.h>
 #include <linux/komb_rwsem_delegation.h>
 
@@ -1489,6 +1490,9 @@ static int __ref kernel_init(void *unused)
 
 	rcu_end_inkernel_boot();
 
+#if LOCK_MEASURE_TIME
+	locktime_init_timing_stats();
+#endif	
 	//kd_init();
 	kombd_rwsem_init();
 

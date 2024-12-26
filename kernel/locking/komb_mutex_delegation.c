@@ -302,7 +302,7 @@ run_combiner(struct kombd_mutex *lock, struct kombd_mutex_node *curr_node)
 	struct kombd_mutex_node *next_node = curr_node->next;
 
 #if LOCK_MEASURE_TIME
-	*this_cpu_ptr(&combiner_loop) = UINT64_MAX;
+	*this_cpu_ptr(&combiner_loop) = KOMB_UINT64_MAX;
 #endif
 
 #if NUMA_AWARE
@@ -609,11 +609,11 @@ void kombd_mutex_init(void)
 
 	for_each_possible_cpu(i) {
 		*per_cpu_ptr(&lock_rq_tail, i) = NULL;
+#if LOCK_MEASURE_TIME
+		*per_cpu_ptr(&do_timing, i) = true;
+#endif
 	}
 
-#if LOCK_MEASURE_TIME
-	*per_cpu_ptr(&do_timing, KOMB_CPU) = true;
-#endif
 
 	md_num_cores_per_socket = num_online_cpus() / num_online_nodes();
 

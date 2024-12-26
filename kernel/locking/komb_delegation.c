@@ -607,10 +607,6 @@ void kd_init(void)
 			       "failed to create komb delegation threads\n");
 	}
 
-#if LOCK_MEASURE_TIME
-	locktime_init_timing_stats();
-#endif	
-
 	printk(KERN_ALERT "starting delegation threads\n");
 }
 

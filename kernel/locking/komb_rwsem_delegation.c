@@ -16,8 +16,6 @@
 #include <linux/komb_rwsem_delegation.h>
 #include <linux/sched.h>
 #include <linux/combiner.h>
-#define LOCK_START_TIMING_PER_CPU(combiner_loop)
-#define LOCK_END_TIMING_PER_CPU(combiner_loop)
 #endif
 #include <linux/topology.h>
 #include <linux/vmalloc.h>
@@ -327,7 +325,7 @@ run_combiner(struct kombd_rwsem *lock, struct kombd_mutex_node *curr_node)
 	KOMB_BUG_ON((smp_processor_id() % rwsemd_num_cores_per_socket) != 0);
 
 #if LOCK_MEASURE_TIME
-	*this_cpu_ptr(&combiner_loop) = UINT64_MAX;
+	*this_cpu_ptr(&combiner_loop) = KOMB_UINT64_MAX;
 #endif
 
 	current->komb_lock_addr[7] =
@@ -668,11 +666,10 @@ void kombd_rwsem_init(void)
 
 	for_each_possible_cpu(i) {
 		*per_cpu_ptr(&lock_rq_tail, i) = 0xdeadbeef;
-	}
-
 #if LOCK_MEASURE_TIME
-	*per_cpu_ptr(&do_timing, KOMB_CPU) = true;
+		*per_cpu_ptr(&do_timing, i) = true;
 #endif
+	}
 
 	rwsemd_num_cores_per_socket = num_online_cpus() / num_online_nodes();
 
@@ -966,8 +963,8 @@ kombd_rwsem_up_write(struct kombd_rwsem *lock)
 
 #ifdef WWJUMP
 #if LOCK_MEASURE_TIME
-	LOCK_END_TIMING_PER_CPU_DISABLE(combiner_loop);
-	LOCK_START_TIMING_PER_CPU_DISABLE(combiner_loop);
+	LOCK_END_TIMING_PER_CPU(combiner_loop);
+	LOCK_START_TIMING_PER_CPU(combiner_loop);
 #endif
 
 	if (current->komb_next_waiter_task)
