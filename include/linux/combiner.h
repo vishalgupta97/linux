@@ -14,9 +14,9 @@
 
 #define NUMA_AWARE 1
 #define PREFETCHING 1
-//#define WWJUMP 1
+#define WWJUMP 1
 
-#define NUM_PREFETCH_LINES 2
+#define NUM_PREFETCH_LINES 4
 
 #define IRQ_NUMA_NODE 255
 #define SIZE_OF_SHADOW_STACK 8192L

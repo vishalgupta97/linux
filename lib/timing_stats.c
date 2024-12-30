@@ -2,7 +2,7 @@
 #include <linux/vmalloc.h>
 #include <linux/syscalls.h>
 
-const char *Timingstring_locktime[TIMING_NUM] = { "combiner_loop" };
+const char *Timingstring_locktime[TIMING_NUM] = { "combiner_loop", "combiner_loop_lockfn", "combiner_loop_unlockfn" };
 
 //const char *Timingstring_locktime[TIMING_NUM] = { "write_critical_section",
 //						  "write_path", "write_critical_section_loop", "combiner_loop",

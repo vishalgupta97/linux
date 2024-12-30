@@ -34,6 +34,8 @@ static inline unsigned long locktime_timing_end(void)
 
 enum timing_category {
 	combiner_loop_t,
+	combiner_loop_lockfn_t,
+	combiner_loop_unlockfn_t,
 	TIMING_NUM,
 };
 

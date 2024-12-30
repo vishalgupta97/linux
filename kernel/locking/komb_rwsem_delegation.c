@@ -139,6 +139,8 @@ static int rwsemd_num_cores_per_socket = 1;
 
 #if LOCK_MEASURE_TIME
 static DEFINE_PER_CPU_ALIGNED(uint64_t, combiner_loop);
+static DEFINE_PER_CPU_ALIGNED(uint64_t, combiner_loop_lockfn);
+static DEFINE_PER_CPU_ALIGNED(uint64_t, combiner_loop_unlockfn);
 #endif
 
 static DEFINE_PER_CPU_ALIGNED(struct kombd_mutex_node, *lock_rq_tail);
@@ -549,7 +551,7 @@ int komb_rwd_thread(void *args)
 		current->mm = next_node->task_struct_ptr->mm;
 
 		j = 0;
-		for (j = 0; j < 8; j++)
+		for (j = 0; j < 7; j++)
 			if (current->komb_lock_addr[j] == NULL)
 				break;
 
@@ -844,6 +846,9 @@ void kombd_rwsem_down_write(struct kombd_rwsem *lock)
 		kombd_write_lock_slowpath(lock);
 
 #ifdef WWJUMP
+#if LOCK_MEASURE_TIME
+	LOCK_START_TIMING_PER_CPU(combiner_loop_lockfn);
+#endif
 	if (current->komb_curr_waiter_task) {
 		struct kombd_mutex_node *curr_node =
 			((struct task_struct *)current->komb_curr_waiter_task)
@@ -878,6 +883,9 @@ void kombd_rwsem_down_write(struct kombd_rwsem *lock)
 			current->komb_prev_waiter_task = NULL;
 		}
 	}
+#if LOCK_MEASURE_TIME
+	LOCK_END_TIMING_PER_CPU(combiner_loop_lockfn);
+#endif
 #endif
 
 	preempt_enable();
@@ -885,29 +893,13 @@ void kombd_rwsem_down_write(struct kombd_rwsem *lock)
 
 void kombd_rwsem_up_read(struct kombd_rwsem *lock)
 {
-	int j, max_idx, my_idx;
-	uint64_t temp_lock_addr;
-
-	j = 0;
-	max_idx = -1;
-	my_idx = -1;
-
-	for (j = 0; j < 8; j++) {
-		temp_lock_addr = current->komb_lock_addr[j];
-		if (temp_lock_addr)
-			max_idx = j;
-		if (temp_lock_addr == lock)
-			my_idx = j;
-		if (temp_lock_addr == NULL)
-			break;
-	}
-
-	if (my_idx == -1) {
+	if (current->komb_lock_addr[7] == NULL) {
 		KOMB_BUG_ON(lock->wlocked != 0);
 		atomic_long_sub_return_release(_KOMB_RWSEM_R_BIAS, &lock->cnts);
 	} else {
-		if (my_idx == max_idx) {
-			KOMB_BUG_ON(lock->wlocked != _KOMB_RWSEM_W_DOWNGRADE);
+		if (current->komb_lock_addr[7] == lock) {
+			KOMB_BUG_ON(lock->wlocked != _KOMB_RWSEM_W_COMBINER);
+			current->komb_lock_addr[7] = NULL;
 			kombd_rwsem_up_write(lock);
 		} else {
 			BUG_ON(true);
@@ -930,7 +922,7 @@ kombd_rwsem_up_write(struct kombd_rwsem *lock)
 	max_idx = -1;
 	my_idx = -1;
 
-	for (j = 0; j < 8; j++) {
+	for (j = 0; j < 7; j++) {
 		temp_lock_addr = current->komb_lock_addr[j];
 		if (temp_lock_addr != NULL)
 			max_idx = j;
@@ -958,6 +950,8 @@ kombd_rwsem_up_write(struct kombd_rwsem *lock)
 #if LOCK_MEASURE_TIME
 	LOCK_END_TIMING_PER_CPU(combiner_loop);
 	LOCK_START_TIMING_PER_CPU(combiner_loop);
+
+	LOCK_START_TIMING_PER_CPU(combiner_loop_unlockfn);
 #endif
 
 	if (current->komb_next_waiter_task)
@@ -982,6 +976,9 @@ kombd_rwsem_up_write(struct kombd_rwsem *lock)
 		print_debug("Jumping to the next waiter: %d\n",
 			    next_node->cpuid);
 	}
+#if LOCK_MEASURE_TIME
+	LOCK_END_TIMING_PER_CPU(combiner_loop_unlockfn);
+#endif
 #else //WWJUMP
 	incoming_rsp_ptr = get_shadow_stack_ptr(lock);
 #endif
@@ -1145,7 +1142,9 @@ void kombd_rwsem_downgrade_write(struct kombd_rwsem *lock)
 		this_cpu_inc(rwsem_downgrade);
 #endif
 		print_debug("Downgrade with combinining\n");
-		lock->wlocked = _KOMB_RWSEM_W_DOWNGRADE;
+		BUG_ON(my_idx == 7);
+		current->komb_lock_addr[7] = lock;
+		//lock->wlocked = _KOMB_RWSEM_W_DOWNGRADE;
 		return;
 	}
 	BUG_ON(true);
