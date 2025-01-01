@@ -730,7 +730,7 @@ void down_write(struct rw_semaphore *lock)
 		print_debug("komb-curr-waiter_tsk\n");
 
 		if ((struct rw_semaphore *)curr_node->lock == lock) {
-			KOMB_BUG_ON(lock->wlocked != _KOMB_RWSEM_W_COMBINER);
+			KOMB_BUG_ON(!(lock->wlocked == _KOMB_RWSEM_W_COMBINER || lock->wlocked == _KOMB_RWSEM_W_DOWNGRADE));
 			struct mutex_node *next_node = get_next_node(curr_node);
 			print_debug("get_next_node called\n");
 			if (next_node == NULL)
