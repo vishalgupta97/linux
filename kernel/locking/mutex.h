@@ -42,11 +42,11 @@
  * on the blocked task's kernel stack:
  */
 struct mutex_waiter {
-	struct list_head	list;
-	struct task_struct	*task;
-	struct ww_acquire_ctx	*ww_ctx;
+	struct list_head list;
+	struct task_struct *task;
+	struct ww_acquire_ctx *ww_ctx;
 #ifdef CONFIG_DEBUG_MUTEXES
-	void			*magic;
+	void *magic;
 #endif
 };
 
@@ -59,19 +59,34 @@ extern void debug_mutex_free_waiter(struct mutex_waiter *waiter);
 extern void debug_mutex_add_waiter(struct mutex *lock,
 				   struct mutex_waiter *waiter,
 				   struct task_struct *task);
-extern void debug_mutex_remove_waiter(struct mutex *lock, struct mutex_waiter *waiter,
+extern void debug_mutex_remove_waiter(struct mutex *lock,
+				      struct mutex_waiter *waiter,
 				      struct task_struct *task);
 extern void debug_mutex_unlock(struct mutex *lock);
 extern void debug_mutex_init(struct mutex *lock, const char *name,
 			     struct lock_class_key *key);
 #else /* CONFIG_DEBUG_MUTEXES */
-# define debug_mutex_lock_common(lock, waiter)		do { } while (0)
-# define debug_mutex_wake_waiter(lock, waiter)		do { } while (0)
-# define debug_mutex_free_waiter(waiter)		do { } while (0)
-# define debug_mutex_add_waiter(lock, waiter, ti)	do { } while (0)
-# define debug_mutex_remove_waiter(lock, waiter, ti)	do { } while (0)
-# define debug_mutex_unlock(lock)			do { } while (0)
-# define debug_mutex_init(lock, name, key)		do { } while (0)
+#define debug_mutex_lock_common(lock, waiter) \
+	do {                                  \
+	} while (0)
+#define debug_mutex_wake_waiter(lock, waiter) \
+	do {                                  \
+	} while (0)
+#define debug_mutex_free_waiter(waiter) \
+	do {                            \
+	} while (0)
+#define debug_mutex_add_waiter(lock, waiter, ti) \
+	do {                                     \
+	} while (0)
+#define debug_mutex_remove_waiter(lock, waiter, ti) \
+	do {                                        \
+	} while (0)
+#define debug_mutex_unlock(lock) \
+	do {                     \
+	} while (0)
+#define debug_mutex_init(lock, name, key) \
+	do {                              \
+	} while (0)
 #endif /* !CONFIG_DEBUG_MUTEXES */
 
 //#define DSM_DEBUG 1
@@ -144,13 +159,10 @@ extern void debug_mutex_init(struct mutex *lock, const char *name,
 			if (cond_expr)                         \
 				break;                         \
 			cpu_relax();                           \
-			if (need_resched()) {                  \
-				schedule_out_curr_task(); 	\
-			}                                      \
+			park_komb_mutex_thread();              \
 		}                                              \
 		(typeof(*ptr))VAL;                             \
 	})
-
 
 #ifndef smp_cond_load_acquire_sched
 #define smp_cond_load_acquire_sched(ptr, cond_expr)                 \

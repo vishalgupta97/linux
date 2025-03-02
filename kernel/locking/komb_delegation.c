@@ -13,6 +13,16 @@ static DEFINE_PER_CPU_ALIGNED(struct komb_node, *lock_rq_tail);
 
 extern enum system_states system_state;
 
+void park_komb_thread(void)
+{
+	struct komb_node **rq_tail = this_cpu_ptr(&lock_rq_tail);
+	//Park
+	__set_current_state(TASK_INTERRUPTIBLE);
+	if (READ_ONCE(*rq_tail) == NULL && cmpxchg(rq_tail, NULL, NULL) == NULL)
+		schedule();
+	__set_current_state(TASK_RUNNING);
+}
+
 #pragma GCC push_options
 #pragma GCC optimize("O3")
 __attribute__((noipa)) noinline notrace static struct komb_node *
@@ -142,9 +152,10 @@ head_of_queue:
 			WRITE_ONCE(curr_node->next->locked, false);
 
 		} else {
-			KOMB_BUG_ON(!task_is_running(dthreads[numa_node_id()]));
+			// KOMB_BUG_ON(!task_is_running(dthreads[numa_node_id()]));
 			print_debug("Added to the delegation thread: %d\n",
 				    select_delegation_cpu(lock));
+			wake_up_process(dthreads[numa_node_id()]);
 		}
 	}
 
@@ -637,21 +648,22 @@ static int __init kd_init(void)
 	num_delegation_threads = num_online_nodes();
 	num_cores_per_socket = num_online_cpus() / num_online_nodes();
 
-	printk(KERN_ALERT "======== KOMB starting delegation ========\n");
+	printk(KERN_ALERT
+	       "======== KOMB SPINLOCK starting delegation ========\n");
 
 	dthreads =
 		vzalloc(num_delegation_threads * sizeof(struct task_struct *));
 	for (i = 0; i < num_delegation_threads; i++) {
 		dthreads[i] = kthread_create(komb_thread, NULL, "komb_thread");
 		kthread_bind(dthreads[i], i * num_cores_per_socket);
-		if (dthreads[i])
-			wake_up_process(dthreads[i]);
-		else
-			printk(KERN_ALERT
-			       "failed to create komb delegation threads\n");
+		// if (dthreads[i])
+		// 	wake_up_process(dthreads[i]);
+		// else
+		// 	printk(KERN_ALERT
+		// 	       "failed to create komb delegation threads\n");
 	}
 
-	printk(KERN_ALERT "starting delegation threads\n");
+	printk(KERN_ALERT "Created spinlock delegation threads\n");
 
 	return 0;
 }

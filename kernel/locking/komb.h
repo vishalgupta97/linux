@@ -53,11 +53,7 @@
 			if (cond_expr)                         \
 				break;                         \
 			cpu_relax();                           \
-			if (need_resched()) {                  \
-				preempt_enable();              \
-				cond_resched();                \
-				preempt_disable();             \
-			}                                      \
+			park_komb_thread();                    \
 		}                                              \
 		(typeof(*ptr))VAL;                             \
 	})
