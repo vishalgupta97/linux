@@ -994,6 +994,7 @@ __always_inline int komb_spin_is_contended(struct qspinlock *lock)
 {
 	return atomic_read(&lock->val) & ~_Q_LOCKED_MASK;
 }
+EXPORT_SYMBOL(komb_spin_is_contended);
 
 __always_inline int komb_spin_value_unlocked(struct qspinlock lock)
 {

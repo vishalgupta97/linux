@@ -12,6 +12,9 @@
 #include <linux/seq_file.h>
 #include <linux/sched/clock.h>
 #include <linux/math.h>
+#include <linux/cpumask.h>
+
+#include <fds/decision_tree.h>
 
 static bool fds_running = false;
 static bool fds_oracle_running = false;
@@ -25,6 +28,7 @@ struct lock_stat {
 	const char *name;
 	u64 counter;
 	struct hlist_node hnode;
+	cpumask_t contending_cpus;	
 };
 
 DEFINE_PER_CPU_ALIGNED(struct lock_stat, read_lock_stats[NUM_BUCKETS]);
@@ -104,15 +108,22 @@ DEFINE_HASHTABLE(write_stats_ht, HASHTABLE_BITS);
 DEFINE_HASHTABLE(spin_stats_ht, HASHTABLE_BITS);
 DEFINE_HASHTABLE(mutex_stats_ht, HASHTABLE_BITS);
 
-inline bool __collect_fds_stats(struct lock_stat *stat, struct lock_stat *tmp)
+inline bool __collect_fds_stats(struct lock_stat *stat, struct lock_stat *tmp, int cpu)
 {
 	if (stat == tmp) {
+		if(stat->counter > 0)
+			cpumask_set_cpu(cpu, &tmp->contending_cpus);
+
 		return true;
 	}
 	if (stat->key != NULL && tmp->key != NULL) {
 		if (stat->key == tmp->key) {
-			tmp->counter += stat->counter;
-			stat->counter = 0;
+			if(stat->counter > 0) {
+				tmp->counter += stat->counter;
+				cpumask_set_cpu(cpu, &tmp->contending_cpus);
+			}
+			stat->counter = 0; 
+
 			return true;
 		}
 	}
@@ -171,52 +182,60 @@ void collect_fds_stats(void)
 			if (stat->counter > 0) {
 				bool found = false;
 				hash_for_each(read_stats_ht, bkt, tmp, hnode) {
-					found = __collect_fds_stats(stat, tmp);
+					found = __collect_fds_stats(stat, tmp, i);
 					if (found)
 						break;
 				}
-				if (!found)
+				if (!found) {
+					cpumask_set_cpu(i, &stat->contending_cpus);
 					hash_add(read_stats_ht, &stat->hnode,
 						 stat->key);
+				}
 			}
 
 			stat = per_cpu_ptr(&write_lock_stats[j], i);
 			if (stat->counter > 0) {
 				bool found = false;
 				hash_for_each(write_stats_ht, bkt, tmp, hnode) {
-					found = __collect_fds_stats(stat, tmp);
+					found = __collect_fds_stats(stat, tmp, i);
 					if (found)
 						break;
 				}
-				if (!found)
+				if (!found) {
+					cpumask_set_cpu(i, &stat->contending_cpus);
 					hash_add(write_stats_ht, &stat->hnode,
 						 stat->key);
+				}
 			}
 
 			stat = per_cpu_ptr(&spin_lock_stats[j], i);
 			if (stat->counter > 0) {
 				bool found = false;
 				hash_for_each(spin_stats_ht, bkt, tmp, hnode) {
-					found = __collect_fds_stats(stat, tmp);
+					found = __collect_fds_stats(stat, tmp, i);
 					if (found)
 						break;
 				}
-				if (!found)
+				if (!found) {
+					cpumask_set_cpu(i, &stat->contending_cpus);
 					hash_add(spin_stats_ht, &stat->hnode,
 						 stat->key);
+				}
 			}
 
 			stat = per_cpu_ptr(&mutex_lock_stats[j], i);
 			if (stat->counter > 0) {
 				bool found = false;
 				hash_for_each(mutex_stats_ht, bkt, tmp, hnode) {
-					found = __collect_fds_stats(stat, tmp);
+					found = __collect_fds_stats(stat, tmp, i);
 					if (found)
 						break;
 				}
-				if (!found)
+				if (!found) {
+					cpumask_set_cpu(i, &stat->contending_cpus);
 					hash_add(mutex_stats_ht, &stat->hnode,
 						 stat->key);
+				}
 			}
 		}
 	}
@@ -233,6 +252,11 @@ void collect_fds_stats(void)
 // 	}
 // }
 
+void __reset_fds_stats(struct lock_stat *tmp) {
+	tmp->counter = 0;
+	cpumask_clear(&tmp->contending_cpus);
+}
+
 void reset_fds_stats(void)
 {
 	// __reset_fds_stats(&read_stats_ht);
@@ -246,16 +270,16 @@ void reset_fds_stats(void)
 	spin_lock(&stat_ht_lock);
 
 	hash_for_each(read_stats_ht, bkt, tmp, hnode) {
-		tmp->counter = 0;
+		__reset_fds_stats(tmp);
 	}
 	hash_for_each(write_stats_ht, bkt, tmp, hnode) {
-		tmp->counter = 0;
+		__reset_fds_stats(tmp);
 	}
 	hash_for_each(spin_stats_ht, bkt, tmp, hnode) {
-		tmp->counter = 0;
+		__reset_fds_stats(tmp);
 	}
 	hash_for_each(mutex_stats_ht, bkt, tmp, hnode) {
-		tmp->counter = 0;
+		__reset_fds_stats(tmp);
 	}
 
 	spin_unlock(&stat_ht_lock);
@@ -268,8 +292,8 @@ inline void __print_fds_stats(struct lock_stat *tmp, const char *type,
 {
 	if (tmp->counter) {
 		if (tmp->counter > PRINT_COUNT_LIMIT)
-			printk(KERN_ALERT "%s Name: %s, Counter: %ld\n", type,
-			       tmp->name, tmp->counter);
+			printk(KERN_ALERT "%s Name: %s, Counter: %ld Contending_CPUs: %d\n", type,
+			       tmp->name, tmp->counter, cpumask_weight(&tmp->contending_cpus));
 		*count = *count + 1;
 	}
 }
@@ -325,7 +349,7 @@ void print_fds_stats(void)
 #define IS_VALUE 1
 #define IS_DIRECTION 2
 
-#define QSPINLOCK_LIMIT 1000000
+#define QSPINLOCK_LIMIT 10000
 #define MONITOR_TIME 10000 // In milliseconds
 
 #define QSPINLOCK_PER_SECOND 200000
@@ -376,19 +400,19 @@ static void reset_fds(void)
 
 	hash_for_each(read_stats_ht, bkt, tmp, hnode) {
 		tmp->key->ptr->lockm = DEFAULT_FDS_LOCK;
-		tmp->counter = 0;
+		__reset_fds_stats(tmp);
 	}
 	hash_for_each(write_stats_ht, bkt, tmp, hnode) {
 		tmp->key->ptr->lockm = DEFAULT_FDS_LOCK;
-		tmp->counter = 0;
+		__reset_fds_stats(tmp);
 	}
 	hash_for_each(spin_stats_ht, bkt, tmp, hnode) {
 		tmp->key->ptr->lockm = DEFAULT_FDS_LOCK;
-		tmp->counter = 0;
+		__reset_fds_stats(tmp);
 	}
 	hash_for_each(mutex_stats_ht, bkt, tmp, hnode) {
 		tmp->key->ptr->lockm = DEFAULT_FDS_LOCK;
-		tmp->counter = 0;
+		__reset_fds_stats(tmp);
 	}
 
 	spin_unlock(&stat_ht_lock);
@@ -800,10 +824,45 @@ inline void __monitor_fds_stats(struct lock_stat *tmp, const char *type,
 		enum fds_lock_mechanisms before = tmp->key->ptr->lockm;
 		switch (ltype) {
 		case FDS_SPINLOCK:
-			for(i = 0; i < NELEMS(fds_spinlock_implementations); i++)
-				if(tmp->key->ptr->lockm == fds_spinlock_implementations[i])
+			//for(i = 0; i < NELEMS(fds_spinlock_implementations); i++)
+			//	if(tmp->key->ptr->lockm == fds_spinlock_implementations[i])
+			//		break;
+			//tmp->key->ptr->lockm = fds_spinlock_implementations[(i+1) % NELEMS(fds_spinlock_implementations)];
+			long feature_vector[8];
+			feature_vector[0] = 4;
+			feature_vector[1] = cpumask_weight(&tmp->contending_cpus);
+			feature_vector[2] = tmp->counter / (MONITOR_TIME / 1000);
+			int max_value = 0;
+			int max_index = 0;
+			int j = 0;
+			for(j = 0; j < 5; j++) {
+				if(j > 0)
+					feature_vector[3 + (j - 1)] = 0;
+				feature_vector[3 + j] = 1;
+				int value = decision_tree(feature_vector);
+				if(value > max_value) {
+					max_value = value;
+					max_index = 3 + j;
+				}
+			}
+			printk(KERN_ALERT "feature_vector: %ld %ld %ld max_value: %d max_index: %d\n",
+					feature_vector[0], feature_vector[1], feature_vector[2],
+					max_value, max_index);
+			enum fds_lock_mechanisms next_lock_type = FDS_QSPINLOCK;
+			switch(max_index) {
+				case 3:
+				case 4:
+				case 7:
+					next_lock_type = FDS_QSPINLOCK;
 					break;
-			tmp->key->ptr->lockm = fds_spinlock_implementations[(i+1) % NELEMS(fds_spinlock_implementations)];
+				case 5:
+					next_lock_type = FDS_TCLOCK;
+					break;
+				case 6:
+					next_lock_type = FDS_TDLOCK;
+					break;
+			}
+			tmp->key->ptr->lockm = next_lock_type;
 			break;
 		case FDS_READ_SEM:
 			if (tmp->key->ptr->lockm == FDS_QSPINLOCK)
@@ -854,6 +913,8 @@ int fds_monitor(void *args)
 	printk(KERN_ALERT "Starting fds monitor\n");
 	while (!kthread_should_stop()) {
 		msleep(MONITOR_TIME);
+		
+		//ssleep(30);
 
 		if (fds_oracle_running)
 			goto monitor_end;

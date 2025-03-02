@@ -85,8 +85,10 @@ int blk_crypto_profile_init(struct blk_crypto_profile *profile,
 	 * of a device-mapper device, so use a dynamic lock class to avoid
 	 * false-positive lockdep reports.
 	 */
-	lockdep_register_key(&profile->lockdep_key);
-	__init_rwsem(&profile->lock, "&profile->lock", &profile->lockdep_key);
+	//lockdep_register_key(&profile->lockdep_key);
+	//__init_rwsem(&profile->lock, "&profile->lock", &profile->lockdep_key);
+
+	init_rwsem(&profile->lock);
 
 	if (num_slots == 0)
 		return 0;
