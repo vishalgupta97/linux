@@ -428,11 +428,11 @@ static int __init md_init(void)
 		dthreads[i] = kthread_create(komb_mutex_thread, NULL,
 					     "komb_mutex_thread");
 		kthread_bind(dthreads[i], i * num_cores_per_socket);
-		// if (dthreads[i])
-		// 	wake_up_process(dthreads[i]);
-		// else
-		// 	printk(KERN_ALERT
-		// 	       "failed to create komb mutex delegation threads\n");
+		if (dthreads[i])
+			wake_up_process(dthreads[i]);
+		else
+			printk(KERN_ALERT
+			       "failed to create komb mutex delegation threads\n");
 	}
 
 	printk(KERN_ALERT "Created mutex delegation threads\n");

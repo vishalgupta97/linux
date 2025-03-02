@@ -656,11 +656,11 @@ static int __init kd_init(void)
 	for (i = 0; i < num_delegation_threads; i++) {
 		dthreads[i] = kthread_create(komb_thread, NULL, "komb_thread");
 		kthread_bind(dthreads[i], i * num_cores_per_socket);
-		// if (dthreads[i])
-		// 	wake_up_process(dthreads[i]);
-		// else
-		// 	printk(KERN_ALERT
-		// 	       "failed to create komb delegation threads\n");
+		if (dthreads[i])
+			wake_up_process(dthreads[i]);
+		else
+			printk(KERN_ALERT
+			       "failed to create komb delegation threads\n");
 	}
 
 	printk(KERN_ALERT "Created spinlock delegation threads\n");
