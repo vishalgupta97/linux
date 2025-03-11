@@ -16,9 +16,9 @@ DEFINE_PER_CPU_ALIGNED(uint64_t, mutex_ooo_unlocks);
 
 inline void schedule_out_curr_task(void)
 {
-	// preempt_enable();
-	// schedule();
-	// preempt_disable();
+	//preempt_enable();
+	//schedule();
+	//preempt_disable();
 	__set_current_state(TASK_RUNNING);
 	schedule_preempt_disabled();
 }
@@ -33,6 +33,7 @@ inline void park_waiter(struct mutex_node *node)
 		return;
 	}
 	schedule_preempt_disabled();
+	//schedule_out_curr_task();
 	__set_current_state(TASK_RUNNING);
 }
 

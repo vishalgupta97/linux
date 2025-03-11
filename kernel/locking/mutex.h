@@ -89,8 +89,7 @@ extern void debug_mutex_init(struct mutex *lock, const char *name,
 	} while (0)
 #endif /* !CONFIG_DEBUG_MUTEXES */
 
-//#define DSM_DEBUG 1
-#ifdef DSM_DEBUG
+#if DSM_DEBUG
 #define print_debug(fmt, ...)                                            \
 	({                                                               \
 		printk(KERN_ALERT "[%d] [%d] komb (%s) lock(%px): " fmt, \
@@ -101,7 +100,6 @@ extern void debug_mutex_init(struct mutex *lock, const char *name,
 #define print_debug(fmt, ...)
 #endif
 
-//#define DEBUG_KOMB 1
 #if DEBUG_KOMB
 #define KOMB_BUG_ON(cond_expr) BUG_ON(cond_expr)
 #else

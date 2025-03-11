@@ -12,9 +12,6 @@
 #include <linux/feedbacksync.h>
 #include <asm-generic/qspinlock.h>
 
-#define DEBUG_KOMB 0
-#define DSM_DEBUG 0
-
 #if DEBUG_KOMB
 #define KOMB_BUG_ON(cond_expr) BUG_ON(cond_expr)
 #else
@@ -97,3 +94,4 @@ u32 komb_fetch_set_pending_acquire(struct qspinlock *lock);
 void clear_pending(struct qspinlock *lock);
 void set_locked(struct qspinlock *lock);
 void clear_pending_set_locked(struct qspinlock *lock);
+extern void schedule_out_curr_task(void);

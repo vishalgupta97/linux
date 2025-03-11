@@ -51,6 +51,7 @@ struct rw_semaphore {
 		struct {
 			struct aqm_mutex reader_wait_lock;
 			int rbias;
+			u64 inhibit_until;
 		};
 		char __padding3[128];
 	};

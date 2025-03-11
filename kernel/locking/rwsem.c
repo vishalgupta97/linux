@@ -18,96 +18,7 @@
 #include <linux/combiner.h>
 #include <linux/topology.h>
 
-//#define DSM_DEBUG 1
-#ifdef DSM_DEBUG
-#define print_debug(fmt, ...)                                            \
-	({                                                               \
-		printk(KERN_ALERT "[%d] [%d] komb (%s) lock(%px): " fmt, \
-		       smp_processor_id(), current->pid, __func__, lock, \
-		       ##__VA_ARGS__);                                   \
-	})
-#else
-#define print_debug(fmt, ...)
-#endif
-
-//#define DEBUG_KOMB 1
-
-#if DEBUG_KOMB
-#define KOMB_BUG_ON(cond_expr) BUG_ON(cond_expr)
-#else
-#define KOMB_BUG_ON(cond_expr)
-#endif
-
-#define READ_STATE 0
-#define WRITE_STATE 1
-
-#define KOMB_WAITER_UNPROCESSED 0
-#define KOMB_WAITER_PARKED 1
-#define KOMB_WAITER_PROCESSING 2
-#define KOMB_WAITER_PROCESSED 4
-#define KOMB_WAITER_WAKER 8
-
-#define KOMB_WAKER_COUNT_SHIFT 16
-#define KOMB_WAKER_COUNT (1U << KOMB_WAKER_COUNT_SHIFT)
-
-#define smp_cond_load_relaxed_sleep(curr_node, ptr, cond_expr)                 \
-	({                                                                     \
-		typeof(ptr) __PTR = (ptr);                                     \
-		__unqual_scalar_typeof(*ptr) VAL;                              \
-		for (;;) {                                                     \
-			VAL = READ_ONCE(*__PTR);                               \
-			if (cond_expr)                                         \
-				break;                                         \
-			cpu_relax();                                           \
-			if (need_resched()) {                                  \
-				if (single_task_running())                     \
-					schedule_out_curr_task();              \
-				else {                                         \
-					if (READ_ONCE(curr_node->completed) == \
-					    KOMB_WAITER_UNPROCESSED)           \
-						park_waiter(curr_node);        \
-					else                                   \
-						schedule_out_curr_task();      \
-				}                                              \
-			}                                                      \
-		}                                                              \
-		(typeof(*ptr))VAL;                                             \
-	})
-
-#ifndef smp_cond_load_relaxed_sched
-#define smp_cond_load_relaxed_sched(ptr, cond_expr) \
-	({                                          \
-		typeof(ptr) __PTR = (ptr);          \
-		__unqual_scalar_typeof(*ptr) VAL;   \
-		for (;;) {                          \
-			VAL = READ_ONCE(*__PTR);    \
-			if (cond_expr)              \
-				break;              \
-			cpu_relax();                \
-			if (need_resched()) {       \
-				preempt_enable();   \
-				schedule();         \
-				preempt_disable();  \
-			}                           \
-		}                                   \
-		(typeof(*ptr))VAL;                  \
-	})
-#endif
-
-#ifndef smp_cond_load_acquire_sched
-#define smp_cond_load_acquire_sched(ptr, cond_expr)                 \
-	({                                                          \
-		__unqual_scalar_typeof(*ptr) _val;                  \
-		_val = smp_cond_load_relaxed_sched(ptr, cond_expr); \
-		smp_acquire__after_ctrl_dep();                      \
-		(typeof(*ptr))_val;                                 \
-	})
-#endif
-
-#define atomic_long_cond_read_acquire_sched(v, c) \
-	smp_cond_load_acquire_sched(&(v)->counter, (c))
-
-#define UINT64_MAX 0xffffffffffffffffL
+#include "rwsem.h"
 
 #ifdef KOMB_STATS
 DEFINE_PER_CPU_ALIGNED(uint64_t, rwsem_combiner_count);
@@ -133,7 +44,7 @@ static inline uint32_t hash(uint64_t addr)
 	return mix32a((uint64_t)current ^ addr) % NUM_SLOT;
 }
 
-static inline void wait_for_visible_readers(struct rw_semaphore *lock)
+inline void wait_for_visible_readers(struct rw_semaphore *lock)
 {
 	if (READ_ONCE(lock->rbias)) {
 		int i, j;
@@ -196,10 +107,31 @@ __always_inline static void add_to_local_queue(struct mutex_node *node)
 	}
 }
 
+static inline bool check_tclock_node(struct mutex_node *node)
+{
+	return (node->lockm == FDS_TCLOCK);
+}
+
 static inline bool check_irq_node(struct mutex_node *node)
 {
 	return (node->socket_id == IRQ_NUMA_NODE || node->rsp == 0xdeadbeef);
 }
+
+__always_inline bool check_rwsem_exit_condition(enum fds_lock_mechanisms curr_lockm, struct mutex_node *my_node) {
+	// return (my_node == NULL || check_irq_node(my_node) ||
+	// 		my_node->next == NULL || check_irq_node(my_node->next));
+			
+	if(curr_lockm == FDS_TCLOCK) {
+		return (my_node == NULL || check_irq_node(my_node) || !check_tclock_node(my_node) ||
+			my_node->next == NULL || check_irq_node(my_node->next)) || !check_tclock_node(my_node->next);
+	} else if(curr_lockm == FDS_TDLOCK) {
+		return (my_node == NULL || check_irq_node(my_node) || check_tclock_node(my_node));
+	} else {
+		BUG_ON(true);
+	}
+	return true;
+}
+
 
 __always_inline static struct mutex_node *
 get_next_node(struct mutex_node *my_node)
@@ -210,7 +142,7 @@ get_next_node(struct mutex_node *my_node)
 	next_node = curr_node->next;
 
 	while (true) {
-		if (next_node == NULL || next_node->next == NULL)
+		if (check_rwsem_exit_condition(my_node->lockm, next_node))
 			goto next_node_null;
 		else if (check_irq_node(next_node) ||
 			 check_irq_node(next_node->next))
@@ -237,13 +169,6 @@ get_next_node(struct mutex_node *my_node)
 
 next_node_null:
 	return next_node;
-}
-
-static inline void schedule_out_curr_task(void)
-{
-	preempt_enable();
-	schedule();
-	preempt_disable();
 }
 
 static inline void park_waiter(struct mutex_node *node)
@@ -623,6 +548,7 @@ komb_write_lock_slowpath(struct rw_semaphore *lock)
 	curr_node->cpuid = smp_processor_id();
 	curr_node->task_struct_ptr = current;
 	curr_node->lock = lock;
+	curr_node->lockm = FDS_TCLOCK;
 
 	smp_wmb();
 
@@ -700,33 +626,10 @@ __komb_write_stack_switch(struct rw_semaphore *lock)
 }
 #pragma GCC pop_options
 
-void down_write(struct rw_semaphore *lock)
+void __down_write(struct rw_semaphore *lock, enum fds_lock_mechanisms lockm)
 {
-	u64 val, cnt;
-	val = atomic_long_cmpxchg_acquire(&lock->cnts, 0, _KOMB_RWSEM_W_LOCKED);
-	if (val == 0) {
-		wait_for_visible_readers(lock);
-		goto write_exit;
-	}
 
-#if WRITE_BOUNDED_OPPORTUNISTIC_SPIN
-	if ((val & _KOMB_RWSEM_W_WMASK) == _KOMB_RWSEM_W_LOCKED) {
-		cnt = 512;
-		val = atomic_long_cond_read_acquire_sched(
-			&lock->cnts, (VAL == 0) || !(cnt--));
-	}
-
-	if (val == 0) {
-		val = atomic_long_cmpxchg_acquire(&lock->cnts, 0,
-						  _KOMB_RWSEM_W_LOCKED);
-		if (val == 0) {
-			wait_for_visible_readers(lock);
-			goto write_exit_slowpath;
-		}
-	}
-#endif
-
-	if (lock->key.ptr == NULL || lock->key.ptr->lockm == FDS_QSPINLOCK) {
+	if (lockm == FDS_QSPINLOCK) {
 		preempt_disable();
 
 		struct mutex_node *prev, *next;
@@ -739,6 +642,7 @@ void down_write(struct rw_semaphore *lock)
 		curr_node->cpuid = smp_processor_id();
 		curr_node->task_struct_ptr = current;
 		curr_node->lock = lock;
+		curr_node->lockm = FDS_QSPINLOCK;
 
 		prev = xchg(&lock->writer_tail, curr_node);
 		next = NULL;
@@ -837,6 +741,46 @@ write_exit:
 	this_cpu_inc(rwsem_writes);
 	return;
 }
+
+void down_write(struct rw_semaphore *lock)
+{
+	u64 val, cnt;
+	val = atomic_long_cmpxchg_acquire(&lock->cnts, 0, _KOMB_RWSEM_W_LOCKED);
+	if (val == 0) {
+		wait_for_visible_readers(lock);
+		goto write_exit;
+	}
+
+#if WRITE_BOUNDED_OPPORTUNISTIC_SPIN
+	if ((val & _KOMB_RWSEM_W_WMASK) == _KOMB_RWSEM_W_LOCKED) {
+		cnt = 512;
+		val = atomic_long_cond_read_acquire_sched(
+			&lock->cnts, (VAL == 0) || !(cnt--));
+	}
+
+	if (val == 0) {
+		val = atomic_long_cmpxchg_acquire(&lock->cnts, 0,
+						  _KOMB_RWSEM_W_LOCKED);
+		if (val == 0) {
+			wait_for_visible_readers(lock);
+			goto write_exit_slowpath;
+		}
+	}
+#endif
+
+	if(lock->key.ptr == NULL)
+		__down_write(lock, FDS_QSPINLOCK);
+	else if(lock->key.ptr->lockm == FDS_TDLOCK)
+		komb_rwsemd_down_write(lock);
+	else
+		__down_write(lock, lock->key.ptr->lockm);
+
+write_exit_slowpath:
+	write_stat_lock_acquire(&lock->key);
+write_exit:
+	this_cpu_inc(rwsem_writes);
+	return;
+}
 EXPORT_SYMBOL(down_write);
 
 void up_read(struct rw_semaphore *lock)
@@ -912,7 +856,8 @@ __attribute__((noipa)) noinline notrace void up_write(struct rw_semaphore *lock)
 #ifdef KOMB_STATS
 			// this_cpu_inc(rwsem_ooo_unlocks);
 #endif
-
+			printk(KERN_ALERT "OOO KOMBD RWSEM not supported\n");
+			BUG_ON(true);
 			lock->wlocked = _KOMB_RWSEM_W_OOO;
 			print_debug("OOO unlock\n");
 		} else
@@ -930,6 +875,7 @@ __attribute__((noipa)) noinline notrace void up_write(struct rw_semaphore *lock)
 #ifdef KOMB_STATS
 		// this_cpu_inc(rwsem_ooo_unlocks);
 #endif
+		printk(KERN_ALERT "OOO KOMBD RWSEM not supported\n");
 		lock->wlocked = _KOMB_RWSEM_W_OOO;
 		return;
 	}
@@ -945,8 +891,7 @@ __attribute__((noipa)) noinline notrace void up_write(struct rw_semaphore *lock)
 
 	uint64_t counter = current->counter_val;
 
-	if (next_node == NULL || next_node->next == NULL ||
-	    check_irq_node(next_node) || check_irq_node(next_node->next) ||
+	if (check_rwsem_exit_condition(curr_node->lockm, next_node) ||
 	    counter >= komb_batch_size || need_resched()) {
 		incoming_rsp_ptr = &(current->komb_stack_curr_ptr);
 		current->komb_prev_waiter_task = current->komb_curr_waiter_task;
@@ -955,6 +900,7 @@ __attribute__((noipa)) noinline notrace void up_write(struct rw_semaphore *lock)
 	} else {
 		current->komb_prev_waiter_task = current->komb_curr_waiter_task;
 		current->komb_curr_waiter_task = current->komb_next_waiter_task;
+		current->komb_is_local_queue_tail_last = false;
 		incoming_rsp_ptr = &(next_node->rsp);
 		current->counter_val = counter + 1;
 		print_debug("Jumping to the next waiter: %d\n",

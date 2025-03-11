@@ -509,7 +509,7 @@ static enum fds_lock_mechanisms fds_mutex_implementations[] =
 static enum fds_lock_mechanisms fds_read_sem_implementations[] = { FDS_QSPINLOCK, FDS_BRAVO};
 	// FDS_QSPINLOCK, FDS_BRAVO
 //};
-static enum fds_lock_mechanisms fds_write_sem_implementations[] = {FDS_TCLOCK, FDS_QSPINLOCK};
+static enum fds_lock_mechanisms fds_write_sem_implementations[] = {FDS_QSPINLOCK, FDS_TCLOCK, FDS_TDLOCK};
 	 // FDS_QSPINLOCK, FDS_TCLOCK
 //};
 
@@ -869,6 +869,11 @@ inline void __monitor_fds_stats(struct lock_stat *tmp, const char *type,
 				tmp->key->ptr->lockm = FDS_BRAVO;
 			break;
 		case FDS_WRITE_SEM:
+			for(i = 0; i < NELEMS(fds_write_sem_implementations); i++)
+				if(tmp->key->ptr->lockm == fds_write_sem_implementations[i])
+					break;
+			tmp->key->ptr->lockm = fds_write_sem_implementations[(i+1) % NELEMS(fds_write_sem_implementations)];
+			break;
 		case FDS_MUTEX:
 			if (tmp->key->ptr->lockm == FDS_QSPINLOCK)
 				tmp->key->ptr->lockm = FDS_TCLOCK;
