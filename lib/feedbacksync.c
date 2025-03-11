@@ -819,7 +819,9 @@ static const struct proc_ops oracle_proc_ops = {
 inline void __monitor_fds_stats(struct lock_stat *tmp, const char *type,
 				enum fds_lock_type ltype)
 {
-	int i;
+	int i, j;
+	long feature_vector[8];
+	int max_value, max_index;
 	if (tmp->counter > QSPINLOCK_LIMIT) {
 		enum fds_lock_mechanisms before = tmp->key->ptr->lockm;
 		switch (ltype) {
@@ -828,13 +830,12 @@ inline void __monitor_fds_stats(struct lock_stat *tmp, const char *type,
 			//	if(tmp->key->ptr->lockm == fds_spinlock_implementations[i])
 			//		break;
 			//tmp->key->ptr->lockm = fds_spinlock_implementations[(i+1) % NELEMS(fds_spinlock_implementations)];
-			long feature_vector[8];
 			feature_vector[0] = 4;
 			feature_vector[1] = cpumask_weight(&tmp->contending_cpus);
 			feature_vector[2] = tmp->counter / (MONITOR_TIME / 1000);
-			int max_value = 0;
-			int max_index = 0;
-			int j = 0;
+			max_value = 0;
+			max_index = 0;
+			j = 0;
 			for(j = 0; j < 5; j++) {
 				if(j > 0)
 					feature_vector[3 + (j - 1)] = 0;

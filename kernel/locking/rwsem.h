@@ -115,10 +115,10 @@ extern void schedule_out_curr_task(void);
 
 #define _Q_UNLOCKED_OOO_VAL 7 //Unlocked a lock out-of-order
 
-#define KOMB_WAITER_UNPROCESSED 0
-#define KOMB_WAITER_PARKED 1
-#define KOMB_WAITER_PROCESSING 2
-#define KOMB_WAITER_PROCESSED 4
+//#define KOMB_WAITER_UNPROCESSED 0
+//#define KOMB_WAITER_PARKED 1
+//#define KOMB_WAITER_PROCESSING 2
+//#define KOMB_WAITER_PROCESSED 4
 
 #define UINT64_MAX 0xffffffffffffffffL
 

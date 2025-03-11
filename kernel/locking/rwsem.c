@@ -470,6 +470,10 @@ unlock:
 
 	prev_locked_val = lock->wlocked;
 	KOMB_BUG_ON(prev_locked_val == _KOMB_RWSEM_W_COMBINER);
+	if(prev_locked_val != 0) {
+		printk(KERN_ALERT "prev_locked_val: %d %s\n", prev_locked_val, lock->key.name);
+		BUG_ON(true);
+	}
 
 	lock->wlocked = _KOMB_RWSEM_W_COMBINER;
 
@@ -876,6 +880,7 @@ __attribute__((noipa)) noinline notrace void up_write(struct rw_semaphore *lock)
 		// this_cpu_inc(rwsem_ooo_unlocks);
 #endif
 		printk(KERN_ALERT "OOO KOMBD RWSEM not supported\n");
+		BUG_ON(true);
 		lock->wlocked = _KOMB_RWSEM_W_OOO;
 		return;
 	}
