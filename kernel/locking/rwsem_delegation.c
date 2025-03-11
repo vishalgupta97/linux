@@ -150,7 +150,7 @@ rwsemd_run_combiner(struct rw_semaphore *lock, struct mutex_node *curr_node)
 #if KOMB_STATS
 	this_cpu_add(waiter_combined, current->counter_val);
 	this_cpu_inc(combiner_count);
-	printk(KERN_ALERT "KOMB RWSEMD combiner_count: %d\n", combiner_count);
+	//printk(KERN_ALERT "KOMB RWSEMD combiner_count: %d\n", combiner_count);
 #endif
 
 	KOMB_BUG_ON(current->komb_prev_waiter_task == NULL);
@@ -266,6 +266,7 @@ unlock:
 		} else {
 			print_debug("Added to the delegation thread: %d\n",
 				    select_delegation_cpu(lock));
+			wake_up_process(dthreads[numa_node_id()]);
 		}
 	}
 
@@ -502,6 +503,7 @@ void komb_rwsemd_down_write(struct rw_semaphore *lock)
 	curr_node = rwsemd_get_mutex_node(lock);
 	KOMB_BUG_ON(curr_node == NULL);
 
+	preempt_disable();
 	kombd_write_lock_slowpath(lock);
 
 	if (current->komb_curr_waiter_task) {
@@ -538,6 +540,8 @@ void komb_rwsemd_down_write(struct rw_semaphore *lock)
 			current->komb_prev_waiter_task = NULL;
 		}
 	}
+	
+	preempt_enable();
 }
 
 static int __init rwsemd_init(void)

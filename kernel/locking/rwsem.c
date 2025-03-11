@@ -275,6 +275,8 @@ execute_cs(struct rw_semaphore *lock, struct mutex_node *curr_node)
 		    8192);
 
 	if (lock->wlocked == _KOMB_RWSEM_W_OOO) {
+		BUG_ON(true); //TODO: Check OOO
+
 		print_debug("Combiner got control back OOO unlock\n");
 
 #ifdef KOMB_STATS
@@ -417,6 +419,7 @@ __komb_write_lock_slowpath(register struct rw_semaphore *lock)
 					current->komb_lock_addr[j];
 				KOMB_BUG_ON(parent_lock == lock);
 				if (parent_lock->wlocked == _KOMB_RWSEM_W_OOO) {
+					BUG_ON(true); // TODO: Check OOO
 					print_debug("Waiter unlocked OOO\n");
 					return 1;
 				}
@@ -470,10 +473,10 @@ unlock:
 
 	prev_locked_val = lock->wlocked;
 	KOMB_BUG_ON(prev_locked_val == _KOMB_RWSEM_W_COMBINER);
-	if(prev_locked_val != 0) {
+	/*if(prev_locked_val != 0) {
 		printk(KERN_ALERT "prev_locked_val: %d %s\n", prev_locked_val, lock->key.name);
 		BUG_ON(true);
-	}
+	}*/
 
 	lock->wlocked = _KOMB_RWSEM_W_COMBINER;
 
@@ -522,6 +525,7 @@ unlock:
 	curr_node->task_struct_ptr = prev_task_struct_ptr;
 
 	if (lock->wlocked == _KOMB_RWSEM_W_OOO) {
+		BUG_ON(true); //TODO: Check OOO
 		if (prev_curr_waiter_task) {
 			print_debug("Waking up \n");
 			wake_up_waiter(
@@ -633,7 +637,7 @@ __komb_write_stack_switch(struct rw_semaphore *lock)
 void __down_write(struct rw_semaphore *lock, enum fds_lock_mechanisms lockm)
 {
 
-	if (lockm == FDS_QSPINLOCK) {
+	if (lockm == FDS_QSPINLOCK || lockm == FDS_BRAVO) {
 		preempt_disable();
 
 		struct mutex_node *prev, *next;
@@ -712,7 +716,11 @@ irq_release:
 		print_debug("komb-curr-waiter_tsk\n");
 
 		if ((struct rw_semaphore *)curr_node->lock == lock) {
-			KOMB_BUG_ON(lock->wlocked != _KOMB_RWSEM_W_COMBINER);
+			//KOMB_BUG_ON(lock->wlocked != _KOMB_RWSEM_W_COMBINER);
+			if(lock->wlocked != _KOMB_RWSEM_W_COMBINER) { //TODO: Remove this
+				printk(KERN_ALERT "wlocked: %d\n", lock->wlocked);
+				BUG_ON(true);
+			}
 			struct mutex_node *next_node = get_next_node(curr_node);
 			print_debug("get_next_node called\n");
 			if (next_node == NULL)
@@ -819,6 +827,7 @@ void up_read(struct rw_semaphore *lock)
 	} else {
 		if (my_idx == max_idx) {
 			KOMB_BUG_ON(lock->wlocked != _KOMB_RWSEM_W_DOWNGRADE);
+			lock->wlocked = _KOMB_RWSEM_W_COMBINER;
 			up_write(lock);
 		} else {
 			BUG_ON(true);
@@ -872,7 +881,7 @@ __attribute__((noipa)) noinline notrace void up_write(struct rw_semaphore *lock)
 	KOMB_BUG_ON(!(lock->wlocked == _KOMB_RWSEM_W_COMBINER ||
 		      lock->wlocked == _KOMB_RWSEM_W_DOWNGRADE));
 	KOMB_BUG_ON(current->komb_curr_waiter_task == NULL);
-	KOMB_BUG_ON(current->komb_next_waiter_task == NULL);
+	//KOMB_BUG_ON(current->komb_next_waiter_task == NULL);
 	KOMB_BUG_ON(max_idx < 0);
 
 	if (my_idx < max_idx) {

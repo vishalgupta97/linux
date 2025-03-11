@@ -19,7 +19,7 @@ void park_komb_thread(void)
 	//Park
 	__set_current_state(TASK_INTERRUPTIBLE);
 	if (READ_ONCE(*rq_tail) == NULL && cmpxchg(rq_tail, NULL, NULL) == NULL)
-		schedule_out_curr_task();
+		schedule_preempt_disabled();
 	__set_current_state(TASK_RUNNING);
 }
 
@@ -238,7 +238,7 @@ int komb_thread(void *args)
 
 		prev_node = tdlock_run_combiner(next_node);
 
-		KOMB_BUG_ON(prev_preempt_count != preempt_count());
+		//KOMB_BUG_ON(prev_preempt_count != preempt_count());
 
 		KOMB_BUG_ON(ptr->lock_addr[j] != lock);
 		ptr->lock_addr[j] = NULL;

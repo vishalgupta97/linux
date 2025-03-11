@@ -22,7 +22,7 @@ void park_komb_mutex_thread(void)
 	//Park
 	__set_current_state(TASK_INTERRUPTIBLE);
 	if (READ_ONCE(*rq_tail) == NULL && cmpxchg(rq_tail, NULL, NULL) == NULL)
-		schedule_out_curr_task();
+		schedule_preempt_disabled();
 	__set_current_state(TASK_RUNNING);
 }
 

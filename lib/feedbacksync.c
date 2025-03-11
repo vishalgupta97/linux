@@ -866,8 +866,8 @@ inline void __monitor_fds_stats(struct lock_stat *tmp, const char *type,
 			tmp->key->ptr->lockm = next_lock_type;
 			break;
 		case FDS_READ_SEM:
-			if (tmp->key->ptr->lockm == FDS_QSPINLOCK)
-				tmp->key->ptr->lockm = FDS_BRAVO;
+			//if (tmp->key->ptr->lockm == FDS_QSPINLOCK)
+			//	tmp->key->ptr->lockm = FDS_BRAVO;
 			break;
 		case FDS_WRITE_SEM:
 			for(i = 0; i < NELEMS(fds_write_sem_implementations); i++)
