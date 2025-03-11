@@ -237,18 +237,18 @@ void down_read(struct rw_semaphore *lock)
 	cnts = atomic_long_add_return_acquire(_KOMB_RWSEM_R_BIAS, &lock->cnts);
 
 	if (likely(!(cnts & _KOMB_RWSEM_W_WMASK)))
-		goto read_exit;
+		goto check_bias_and_exit;
 
 	(void)atomic_long_sub_return_release(_KOMB_RWSEM_R_BIAS, &lock->cnts);
 
 	preempt_disable();
 	komb_read_lock_slowpath(lock);
+	preempt_enable();
 
+check_bias_and_exit:
 	if (!READ_ONCE(lock->rbias) && global_vr_table != NULL &&
 	    (lock->key.ptr && lock->key.ptr->lockm == FDS_BRAVO))
 		WRITE_ONCE(lock->rbias, 1);
-
-	preempt_enable();
 read_exit:
 	this_cpu_inc(rwsem_reads);
 	read_stat_lock_acquire(&lock->key);
@@ -763,22 +763,22 @@ void down_write(struct rw_semaphore *lock)
 		goto write_exit;
 	}
 
-#if WRITE_BOUNDED_OPPORTUNISTIC_SPIN
-	if ((val & _KOMB_RWSEM_W_WMASK) == _KOMB_RWSEM_W_LOCKED) {
-		cnt = 512;
-		val = atomic_long_cond_read_acquire_sched(
-			&lock->cnts, (VAL == 0) || !(cnt--));
-	}
-
-	if (val == 0) {
-		val = atomic_long_cmpxchg_acquire(&lock->cnts, 0,
-						  _KOMB_RWSEM_W_LOCKED);
-		if (val == 0) {
-			wait_for_visible_readers(lock);
-			goto write_exit_slowpath;
-		}
-	}
-#endif
+//#if WRITE_BOUNDED_OPPORTUNISTIC_SPIN
+//	if ((val & _KOMB_RWSEM_W_WMASK) == _KOMB_RWSEM_W_LOCKED) {
+//		cnt = 512;
+//		val = atomic_long_cond_read_acquire_sched(
+//			&lock->cnts, (VAL == 0) || !(cnt--));
+//	}
+//
+//	if (val == 0) {
+//		val = atomic_long_cmpxchg_acquire(&lock->cnts, 0,
+//						  _KOMB_RWSEM_W_LOCKED);
+//		if (val == 0) {
+//			wait_for_visible_readers(lock);
+//			goto write_exit_slowpath;
+//		}
+//	}
+//#endif
 
 	if(lock->key.ptr == NULL)
 		__down_write(lock, FDS_QSPINLOCK);
@@ -815,7 +815,6 @@ void up_read(struct rw_semaphore *lock)
 	}
 
 	if (my_idx == -1) {
-		KOMB_BUG_ON(lock->wlocked != 0);
 
 		struct rw_semaphore **slot = NULL;
 		u32 id = hash((uint64_t)lock);
@@ -823,6 +822,7 @@ void up_read(struct rw_semaphore *lock)
 		if (cmpxchg(slot, lock, NULL) == lock)
 			return;
 
+		KOMB_BUG_ON(lock->wlocked != 0);
 		atomic_long_sub_return_release(_KOMB_RWSEM_R_BIAS, &lock->cnts);
 	} else {
 		if (my_idx == max_idx) {
@@ -982,9 +982,9 @@ int down_read_trylock(struct rw_semaphore *lock)
 	u64 cnts =
 		atomic_long_add_return_acquire(_KOMB_RWSEM_R_BIAS, &lock->cnts);
 	if (likely(!(cnts & _KOMB_RWSEM_W_WMASK))) {
-		if (!READ_ONCE(lock->rbias) && global_vr_table != NULL &&
+		/*if (!READ_ONCE(lock->rbias) && global_vr_table != NULL &&
 		    (lock->key.ptr && lock->key.ptr->lockm == FDS_BRAVO))
-			WRITE_ONCE(lock->rbias, 1);
+			WRITE_ONCE(lock->rbias, 1);*/
 		this_cpu_inc(rwsem_reads);
 		read_stat_lock_acquire(&lock->key);
 		return 1;
