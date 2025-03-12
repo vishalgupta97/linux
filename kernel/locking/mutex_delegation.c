@@ -282,8 +282,8 @@ tdlock_mutex_run_combiner(struct mutex *lock, struct mutex_node *curr_node)
 	current->komb_lock_addr[j] = NULL;
 
 	print_debug(
-		"Combiner got the control back: %d counter: %lld last_waiter: %d\n",
-		smp_processor_id(), current->counter_val, current->curr_cs_cpu);
+		"Combiner got the control back: %d counter: %lld last_waiter: \n",
+		smp_processor_id(), current->counter_val);
 
 #if KOMB_STATS
 	this_cpu_add(waiter_combined, current->counter_val);

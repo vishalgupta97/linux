@@ -25,52 +25,64 @@ DEFINE_PER_CPU_ALIGNED(uint64_t, rwsem_combiner_count);
 DEFINE_PER_CPU_ALIGNED(uint64_t, rwsem_waiter_combined);
 DEFINE_PER_CPU_ALIGNED(uint64_t, rwsem_reads);
 DEFINE_PER_CPU_ALIGNED(uint64_t, rwsem_writes);
-DEFINE_PER_CPU_ALIGNED(uint64_t, rwsem_bravo_reads);
+DEFINE_PER_CPU_ALIGNED(uint64_t, rwsem_percpu_reads);
 DEFINE_PER_CPU_ALIGNED(uint64_t, rwsem_downgrade);
 #endif
 
-static struct rw_semaphore **global_vr_table = NULL;
+static unsigned long __percpu **global_percpu_table = NULL;
+static struct rw_semaphore **global_lock_table = NULL; 
+static unsigned long *percpu_table_freelist;
 
-static inline uint32_t mix32a(uint32_t v)
-{
-	static const uint32_t mix32ka = 0x9abe94e3;
-	v = (v ^ (v >> 16)) * mix32ka;
-	v = (v ^ (v >> 16)) * mix32ka;
-	return v;
+int alloc_from_percpu_table(struct rw_semaphore *lock) {
+	unsigned int free_index;
+	while(true) {
+		free_index = find_first_zero_bit(percpu_table_freelist, PERCPU_TABLE_SIZE);
+		if(free_index == PERCPU_TABLE_SIZE)
+			break;
+		if(test_and_set_bit(free_index, percpu_table_freelist) == 0) {
+			KOMB_BUG_ON(xchg(&global_lock_table[free_index], lock) != NULL);
+			return free_index;
+		}
+	}
+
+	return -1;
 }
 
-static inline uint32_t hash(uint64_t addr)
-{
-	return mix32a((uint64_t)current ^ addr) % NUM_SLOT;
+void free_to_percpu_table(struct rw_semaphore *lock, int index) {
+	__clear_bit(index, percpu_table_freelist);
+	KOMB_BUG_ON(xchg(&global_lock_table[index], NULL) != lock);
+	smp_mb();
 }
+
+#define per_cpu_sum(var)						\
+({									\
+	typeof(var) __sum = 0;						\
+	int cpu;							\
+	compiletime_assert_atomic_type(__sum);				\
+	for_each_possible_cpu(cpu)					\
+		__sum += per_cpu(var, cpu);				\
+	__sum;								\
+})
+
 
 inline void wait_for_visible_readers(struct rw_semaphore *lock)
 {
 	if (READ_ONCE(lock->rbias)) {
-		int i, j;
-		struct rw_semaphore **vr_table;
+		int index = READ_ONCE(lock->percpu_index); 
 
-		smp_mb();
 		WRITE_ONCE(lock->rbias, 0);
+		smp_mb();
+		if(index != -1) {
+			KOMB_BUG_ON(index >= PERCPU_TABLE_SIZE);
+			while(per_cpu_sum(*global_percpu_table[index])) {
+				cpu_relax();
+				if(need_resched())
+					schedule_out_curr_task();
 
-		vr_table = global_vr_table;
-		for (i = 0; i < NUM_SLOT; i += 8) {
-			uint64_t value = (uint64_t)vr_table[V(i)] |
-					 (uint64_t)vr_table[V(i + 1)] |
-					 (uint64_t)vr_table[V(i + 2)] |
-					 (uint64_t)vr_table[V(i + 3)] |
-					 (uint64_t)vr_table[V(i + 4)] |
-					 (uint64_t)vr_table[V(i + 5)] |
-					 (uint64_t)vr_table[V(i + 6)] |
-					 (uint64_t)vr_table[V(i + 7)];
-			if (value) {
-				for (j = 0; j < 8; j++) {
-					smp_cond_load_acquire_sched(
-						&vr_table[V(i + j)],
-						((VAL) != lock));
-				}
 			}
-		}
+			WRITE_ONCE(lock->percpu_index, -1);
+			free_to_percpu_table(lock, index);
+		}	
 	}
 }
 
@@ -202,53 +214,78 @@ static __always_inline void clear_locked_set_completed(struct mutex_node *node)
 	WRITE_ONCE(node->locked, 0);
 }
 
-static inline void komb_read_lock_slowpath(struct rw_semaphore *lock)
+static inline u64 komb_read_lock_slowpath(struct rw_semaphore *lock)
 {
+	u64 cnts;
 	print_debug("Reader waiting for spinlock\n");
 	aqm_lock(&lock->reader_wait_lock);
-	atomic_long_add_return_acquire(_KOMB_RWSEM_R_BIAS, &lock->cnts);
+	cnts = atomic_long_add_return_acquire(_KOMB_RWSEM_R_BIAS, &lock->cnts);
 	print_debug(
 		"Reader slowpath got wait lock, waiting for writer to go away\n");
 	atomic_long_cond_read_acquire_sched(&lock->cnts,
 					    !(VAL & _KOMB_RWSEM_W_WMASK));
 	print_debug("Reader slowpath got the lock\n");
 	aqm_unlock(&lock->reader_wait_lock);
-	return;
+	return cnts;
+}
+
+void check_and_set_rbias(struct rw_semaphore *lock, u64 cnts) {
+	if (!READ_ONCE(lock->rbias) &&
+	    (lock->key.ptr && lock->key.ptr->lockm == FDS_PERCPU)) {
+		if(cnts == _KOMB_RWSEM_R_BIAS) {
+			WRITE_ONCE(lock->percpu_index, alloc_from_percpu_table(lock));	
+			WRITE_ONCE(lock->rbias, 1);
+		}
+	}
+}
+
+__always_inline bool __down_read_fastpath(struct rw_semaphore *lock)
+{
+	if (READ_ONCE(lock->rbias)) {
+		int index = READ_ONCE(lock->percpu_index);
+		if(index != -1) {
+			unsigned long *percpu_addr = global_percpu_table[index];
+			//KOMB_BUG_ON(this_cpu_read(*percpu_addr) != 0);
+			this_cpu_inc(*percpu_addr);
+			smp_mb();
+			if(READ_ONCE(lock->rbias)) {
+				//KOMB_BUG_ON(this_cpu_read(*percpu_addr) != 1);
+				this_cpu_inc(rwsem_percpu_reads);
+				return true;
+			}
+			this_cpu_dec(*percpu_addr);
+			//KOMB_BUG_ON(this_cpu_read(*percpu_addr) != 0);
+
+		}
+	}
+	return false;
 }
 
 void down_read(struct rw_semaphore *lock)
 {
-	if (READ_ONCE(lock->rbias)) {
-		struct rw_semaphore **slot = NULL;
-		u32 id = hash((uint64_t)lock);
-		slot = &global_vr_table[V(id)];
+	migrate_disable();
 
-		if (cmpxchg(slot, NULL, lock) == NULL) {
-			if (READ_ONCE(lock->rbias)) {
-				this_cpu_inc(rwsem_bravo_reads);
-				goto read_exit;
-			}
-			(void)xchg(slot, NULL);
-		}
+	if(__down_read_fastpath(lock)) {
+		goto read_exit;	
 	}
 
 	u64 cnts;
 
 	cnts = atomic_long_add_return_acquire(_KOMB_RWSEM_R_BIAS, &lock->cnts);
 
-	if (likely(!(cnts & _KOMB_RWSEM_W_WMASK)))
-		goto check_bias_and_exit;
+	if (likely(!(cnts & _KOMB_RWSEM_W_WMASK))) {
+		print_debug("Read acquired on fastpath\n");
+		goto check_bias_and_exit; 
+	}
 
 	(void)atomic_long_sub_return_release(_KOMB_RWSEM_R_BIAS, &lock->cnts);
 
 	preempt_disable();
-	komb_read_lock_slowpath(lock);
+	cnts = komb_read_lock_slowpath(lock);
 	preempt_enable();
 
 check_bias_and_exit:
-	if (!READ_ONCE(lock->rbias) && global_vr_table != NULL &&
-	    (lock->key.ptr && lock->key.ptr->lockm == FDS_BRAVO))
-		WRITE_ONCE(lock->rbias, 1);
+	check_and_set_rbias(lock, cnts);
 read_exit:
 	this_cpu_inc(rwsem_reads);
 	read_stat_lock_acquire(&lock->key);
@@ -637,7 +674,7 @@ __komb_write_stack_switch(struct rw_semaphore *lock)
 void __down_write(struct rw_semaphore *lock, enum fds_lock_mechanisms lockm)
 {
 
-	if (lockm == FDS_QSPINLOCK || lockm == FDS_BRAVO) {
+	if (lockm == FDS_QSPINLOCK || lockm == FDS_PERCPU) {
 		preempt_disable();
 
 		struct mutex_node *prev, *next;
@@ -663,15 +700,22 @@ void __down_write(struct rw_semaphore *lock, enum fds_lock_mechanisms lockm)
 				    KOMB_WAITER_PROCESSED);
 		}
 
+		print_debug("Writer owner on slowpath\n");
+
 		aqm_lock(&lock->reader_wait_lock);
+
+		print_debug("Write got the mutex lock. waiting for pending readers\n");
 
 		if (!atomic_long_read(&lock->cnts) &&
 		    (atomic_long_cmpxchg_relaxed(&lock->cnts, 0,
-						 _KOMB_RWSEM_W_LOCKED) == 0))
+						 _KOMB_RWSEM_W_LOCKED) == 0)) {
+			print_debug("No pending readers\n");
 			goto irq_unlock;
+		}
 
 		atomic_long_add_return_acquire(_KOMB_RWSEM_W_WAITING,
 					       &lock->cnts);
+		print_debug("Writer set the pending bit\n");
 
 		do {
 			atomic_long_cond_read_acquire_sched(
@@ -681,6 +725,7 @@ void __down_write(struct rw_semaphore *lock, enum fds_lock_mechanisms lockm)
 						     _KOMB_RWSEM_W_LOCKED) !=
 			 _KOMB_RWSEM_W_WAITING);
 irq_unlock:
+		print_debug("Writer got the lock slowpath\n");
 		aqm_unlock(&lock->reader_wait_lock);
 
 		wait_for_visible_readers(lock);
@@ -716,11 +761,7 @@ irq_release:
 		print_debug("komb-curr-waiter_tsk\n");
 
 		if ((struct rw_semaphore *)curr_node->lock == lock) {
-			//KOMB_BUG_ON(lock->wlocked != _KOMB_RWSEM_W_COMBINER);
-			if(lock->wlocked != _KOMB_RWSEM_W_COMBINER) { //TODO: Remove this
-				printk(KERN_ALERT "wlocked: %d\n", lock->wlocked);
-				BUG_ON(true);
-			}
+			KOMB_BUG_ON(lock->wlocked != _KOMB_RWSEM_W_COMBINER);
 			struct mutex_node *next_node = get_next_node(curr_node);
 			print_debug("get_next_node called\n");
 			if (next_node == NULL)
@@ -756,10 +797,12 @@ write_exit:
 
 void down_write(struct rw_semaphore *lock)
 {
+	migrate_disable();
 	u64 val, cnt;
 	val = atomic_long_cmpxchg_acquire(&lock->cnts, 0, _KOMB_RWSEM_W_LOCKED);
 	if (val == 0) {
 		wait_for_visible_readers(lock);
+		print_debug("Writer got the lock fastpath\n");
 		goto write_exit;
 	}
 
@@ -815,15 +858,34 @@ void up_read(struct rw_semaphore *lock)
 	}
 
 	if (my_idx == -1) {
-
-		struct rw_semaphore **slot = NULL;
-		u32 id = hash((uint64_t)lock);
-		slot = &global_vr_table[V(id)];
-		if (cmpxchg(slot, lock, NULL) == lock)
-			return;
-
+		int pcpu_idx = READ_ONCE(lock->percpu_index);
+		if(pcpu_idx != -1) {
+			unsigned long *percpu_addr = global_percpu_table[pcpu_idx];
+			int cnt = this_cpu_read(*percpu_addr);
+			KOMB_BUG_ON(cnt > 1);
+			if(cnt == 1) {
+				this_cpu_dec(*percpu_addr);
+				goto read_exit;
+			}
+		}
 		KOMB_BUG_ON(lock->wlocked != 0);
+		unsigned long tmp = atomic_long_read(&lock->cnts); // TODO: Remove this
+		if((tmp >> _KOMB_RWSEM_R_SHIFT) == 0) {
+			int pcpu_idx = READ_ONCE(lock->percpu_index);
+			if(pcpu_idx != -1) {
+				unsigned long *percpu_addr = global_percpu_table[pcpu_idx];
+				for_each_possible_cpu(j) {
+					int cnt = *per_cpu_ptr(percpu_addr, j);
+					if(cnt != 0)
+						printk(KERN_ALERT "lock: %px cpu: %d cnt: %d\n", lock, j, cnt);
+				}
+			}
+			printk(KERN_ALERT "lock: %px my cpu: %d cnts: %ld counter: %ld\n", lock, smp_processor_id(), tmp, (tmp >> _KOMB_RWSEM_R_SHIFT)); 
+			BUG_ON(true);
+		}
 		atomic_long_sub_return_release(_KOMB_RWSEM_R_BIAS, &lock->cnts);
+		print_debug("Read lock released\n");
+		//dump_stack();
 	} else {
 		if (my_idx == max_idx) {
 			KOMB_BUG_ON(lock->wlocked != _KOMB_RWSEM_W_DOWNGRADE);
@@ -833,6 +895,8 @@ void up_read(struct rw_semaphore *lock)
 			BUG_ON(true);
 		}
 	}
+read_exit:
+	migrate_enable();
 }
 EXPORT_SYMBOL(up_read);
 
@@ -845,6 +909,8 @@ __attribute__((noipa)) noinline notrace void up_write(struct rw_semaphore *lock)
 	int j, max_idx, my_idx;
 
 	uint64_t temp_lock_addr;
+
+	migrate_enable();
 
 	j = 0;
 	max_idx = -1;
@@ -862,8 +928,9 @@ __attribute__((noipa)) noinline notrace void up_write(struct rw_semaphore *lock)
 
 	if (my_idx == -1) {
 		if (lock->wlocked == _KOMB_RWSEM_W_LOCKED) {
-			if (lock->key.ptr && lock->key.ptr->lockm == FDS_BRAVO)
-				WRITE_ONCE(lock->rbias, 1);
+//			if (lock->key.ptr && lock->key.ptr->lockm == FDS_PERCPU)
+//				WRITE_ONCE(lock->rbias, 1);
+			print_debug("Writer releasing on fastpath\n");			
 			WRITE_ONCE(lock->wlocked, 0);
 		} else if (lock->wlocked == _KOMB_RWSEM_W_COMBINER) {
 #ifdef KOMB_STATS
@@ -932,7 +999,15 @@ EXPORT_SYMBOL(up_write);
 
 void komb_rwsem_init(void)
 {
-	global_vr_table = vzalloc(TABLE_SIZE * sizeof(struct komb_rwsem *));
+	int i;
+
+	global_percpu_table = vzalloc(PERCPU_TABLE_SIZE * sizeof(unsigned long *));
+	global_lock_table = vzalloc(PERCPU_TABLE_SIZE * sizeof(struct rw_semaphore*));
+	for(i = 0; i < PERCPU_TABLE_SIZE; i++) {
+		global_percpu_table[i] = alloc_percpu(unsigned long);
+	}
+
+	percpu_table_freelist = bitmap_zalloc(PERCPU_TABLE_SIZE, GFP_KERNEL);
 }
 
 void __init_rwsem(struct rw_semaphore *lock, const char *name,
@@ -943,6 +1018,7 @@ void __init_rwsem(struct rw_semaphore *lock, const char *name,
 	lock->reader_wait_lock.tail = NULL;
 	lock->writer_tail = NULL;
 	lock->rbias = 0;
+	lock->percpu_index = -1;
 	lock->key.name = name;
 	lock->key.ptr = key;
 	init_fds_lock_key(key, name, DEFAULT_FDS_LOCK);
@@ -965,28 +1041,19 @@ EXPORT_SYMBOL(down_read_interruptible);
 
 int down_read_trylock(struct rw_semaphore *lock)
 {
-	if (READ_ONCE(lock->rbias)) {
-		struct rw_semaphore **slot = NULL;
-		u32 id = hash((uint64_t)lock);
-		slot = &global_vr_table[V(id)];
-
-		if (cmpxchg(slot, NULL, lock) == NULL) {
-			if (READ_ONCE(lock->rbias)) {
-				this_cpu_inc(rwsem_bravo_reads);
-				return 1;
-			}
-			(void)xchg(slot, NULL);
-		}
+	if(__down_read_fastpath(lock)) {
+		migrate_disable();
+		return 1;
 	}
 
 	u64 cnts =
 		atomic_long_add_return_acquire(_KOMB_RWSEM_R_BIAS, &lock->cnts);
 	if (likely(!(cnts & _KOMB_RWSEM_W_WMASK))) {
-		/*if (!READ_ONCE(lock->rbias) && global_vr_table != NULL &&
-		    (lock->key.ptr && lock->key.ptr->lockm == FDS_BRAVO))
-			WRITE_ONCE(lock->rbias, 1);*/
+		check_and_set_rbias(lock, cnts);
 		this_cpu_inc(rwsem_reads);
 		read_stat_lock_acquire(&lock->key);
+		print_debug("Reader got the lock\n");
+		migrate_disable();
 		return 1;
 	}
 	(void)atomic_long_sub_return_release(_KOMB_RWSEM_R_BIAS, &lock->cnts);
@@ -1011,6 +1078,7 @@ int down_write_trylock(struct rw_semaphore *lock)
 		wait_for_visible_readers(lock);
 		this_cpu_inc(rwsem_writes);
 		//write_stat_lock_acquire(&lock->key);
+		migrate_disable();
 	}
 	return val;
 }
@@ -1037,6 +1105,7 @@ void downgrade_write(struct rw_semaphore *lock)
 
 	if (my_idx == -1) {
 		if (lock->wlocked == _KOMB_RWSEM_W_LOCKED) {
+			print_debug("downgrade to read\n");
 			atomic_long_add_return_acquire(_KOMB_RWSEM_R_BIAS,
 						       &lock->cnts);
 			WRITE_ONCE(lock->wlocked, 0);

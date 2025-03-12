@@ -1028,7 +1028,7 @@ void start_kernel(void)
 	WARN(!irqs_disabled(), "Interrupts were enabled early\n");
 
 	komb_init();
-	komb_rwsem_init();
+	//komb_rwsem_init();
 
 	early_boot_irqs_disabled = false;
 	local_irq_enable();

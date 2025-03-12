@@ -51,7 +51,7 @@ struct rw_semaphore {
 		struct {
 			struct aqm_mutex reader_wait_lock;
 			int rbias;
-			u64 inhibit_until;
+			int percpu_index;
 		};
 		char __padding3[128];
 	};
@@ -78,6 +78,7 @@ static inline int rwsem_is_locked(struct rw_semaphore *sem)
 		.cnts = ATOMIC_LONG_INIT(0),                        \
 		.reader_wait_lock.val = ATOMIC_INIT(0),             \
 		.reader_wait_lock.tail = NULL, .writer_tail = NULL, \
+		.percpu_index = -1, .rbias = 0,                      \
 		.key = {                                            \
 			.name = #lockname,                          \
 			.ptr = NULL,                                \

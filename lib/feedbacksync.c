@@ -482,10 +482,8 @@ static inline const char *get_str_lockm(enum fds_lock_mechanisms lockm)
 		return "TCLOCK";
 	case FDS_TDLOCK:
 		return "TDLOCK";
-	case FDS_PERCPU_RWSEM:
+	case FDS_PERCPU:
 		return "PERCPU";
-	case FDS_BRAVO:
-		return "BRAVO";
 	default:
 		return "UNDEFINED";
 	}
@@ -502,15 +500,9 @@ static long num_contending_locks = 0;
 static struct contending_locks observed_locks[MAX_CONTENDING_LOCKS];
 
 static enum fds_lock_mechanisms fds_spinlock_implementations[] = { FDS_TAS, FDS_QSPINLOCK, FDS_TCLOCK, FDS_TDLOCK};
-	// FDS_QSPINLOCK, FDS_TAS, FDS_TCLOCK};
 static enum fds_lock_mechanisms fds_mutex_implementations[] = { FDS_QSPINLOCK, FDS_TCLOCK, FDS_TDLOCK };
-//{FDS_TCLOCK, FDS_QSPINLOCK};
-static enum fds_lock_mechanisms fds_read_sem_implementations[] = { FDS_QSPINLOCK, FDS_BRAVO};
-	// FDS_QSPINLOCK, FDS_BRAVO
-//};
+static enum fds_lock_mechanisms fds_read_sem_implementations[] = { FDS_QSPINLOCK, FDS_PERCPU};
 static enum fds_lock_mechanisms fds_write_sem_implementations[] = {FDS_QSPINLOCK, FDS_TCLOCK, FDS_TDLOCK};
-	 // FDS_QSPINLOCK, FDS_TCLOCK
-//};
 
 #define NELEMS(x) (sizeof(x) / sizeof((x)[0]))
 
@@ -953,6 +945,8 @@ static int __init feedback_sync_init(void)
 	proc_create("fds/reset", 0222, NULL, &reset_fds_proc_ops);
 	proc_create("fds/getstat", 0444, NULL, &get_fds_proc_ops);
 	proc_create("fds/oracle", 0222, NULL, &oracle_proc_ops);
+
+	komb_rwsem_init();
 
 	fdsthreads = kthread_create(fds_monitor, NULL, "fds_monitor");
 	kthread_bind(fdsthreads, 95);

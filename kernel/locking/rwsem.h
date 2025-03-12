@@ -122,5 +122,7 @@ extern void schedule_out_curr_task(void);
 
 #define UINT64_MAX 0xffffffffffffffffL
 
+#define PERCPU_TABLE_SIZE 1024
+
 extern void komb_rwsemd_down_write(struct rw_semaphore *lock);
 extern void wait_for_visible_readers(struct rw_semaphore *lock);

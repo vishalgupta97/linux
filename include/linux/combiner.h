@@ -11,7 +11,7 @@
 #include <linux/percpu.h>
 
 #define DSM_DEBUG 0
-#define DEBUG_KOMB 0
+#define DEBUG_KOMB 1
 
 #define KOMB_STATS 1
 
@@ -95,7 +95,7 @@ DECLARE_PER_CPU_ALIGNED(u64, rwsem_combiner_count);
 DECLARE_PER_CPU_ALIGNED(u64, rwsem_waiter_combined);
 DECLARE_PER_CPU_ALIGNED(u64, rwsem_reads);
 DECLARE_PER_CPU_ALIGNED(u64, rwsem_writes);
-DECLARE_PER_CPU_ALIGNED(u64, rwsem_bravo_reads);
+DECLARE_PER_CPU_ALIGNED(u64, rwsem_percpu_reads);
 DECLARE_PER_CPU_ALIGNED(u64, rwsem_downgrade);
 
 void print_komb_stats(void);

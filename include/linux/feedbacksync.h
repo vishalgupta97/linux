@@ -12,8 +12,7 @@ enum fds_lock_mechanisms {
 	FDS_TCLOCK,
 	FDS_TDLOCK,
 	FDS_LOCKM_MAX,
-	FDS_PERCPU_RWSEM,
-	FDS_BRAVO,
+	FDS_PERCPU,
 	FDS_DISABLE,
 };
 
