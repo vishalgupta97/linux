@@ -503,8 +503,7 @@ static struct contending_locks observed_locks[MAX_CONTENDING_LOCKS];
 
 static enum fds_lock_mechanisms fds_spinlock_implementations[] = { FDS_TAS, FDS_QSPINLOCK, FDS_TCLOCK, FDS_TDLOCK};
 	// FDS_QSPINLOCK, FDS_TAS, FDS_TCLOCK};
-static enum fds_lock_mechanisms fds_mutex_implementations[] = 
-         { FDS_QSPINLOCK, FDS_TCLOCK };
+static enum fds_lock_mechanisms fds_mutex_implementations[] = { FDS_QSPINLOCK, FDS_TCLOCK, FDS_TDLOCK };
 //{FDS_TCLOCK, FDS_QSPINLOCK};
 static enum fds_lock_mechanisms fds_read_sem_implementations[] = { FDS_QSPINLOCK, FDS_BRAVO};
 	// FDS_QSPINLOCK, FDS_BRAVO
@@ -878,8 +877,10 @@ inline void __monitor_fds_stats(struct lock_stat *tmp, const char *type,
 			tmp->key->ptr->lockm = fds_write_sem_implementations[(i+1) % NELEMS(fds_write_sem_implementations)];
 			break;
 		case FDS_MUTEX:
-			if (tmp->key->ptr->lockm == FDS_QSPINLOCK)
-				tmp->key->ptr->lockm = FDS_TCLOCK;
+			for(i = 0; i < NELEMS(fds_mutex_implementations); i++)
+				if(tmp->key->ptr->lockm == fds_mutex_implementations[i])
+					break;
+			tmp->key->ptr->lockm = fds_mutex_implementations[(i+1) % NELEMS(fds_mutex_implementations)];
 			break;
 		}
 		printk(KERN_ALERT
