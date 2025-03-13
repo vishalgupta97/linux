@@ -40,7 +40,7 @@ int alloc_from_percpu_table(struct rw_semaphore *lock) {
 		if(free_index == PERCPU_TABLE_SIZE)
 			break;
 		if(test_and_set_bit(free_index, percpu_table_freelist) == 0) {
-			KOMB_BUG_ON(xchg(&global_lock_table[free_index], lock) != NULL);
+			//KOMB_BUG_ON(xchg(&global_lock_table[free_index], lock) != NULL);
 			return free_index;
 		}
 	}
@@ -49,9 +49,8 @@ int alloc_from_percpu_table(struct rw_semaphore *lock) {
 }
 
 void free_to_percpu_table(struct rw_semaphore *lock, int index) {
-	__clear_bit(index, percpu_table_freelist);
-	KOMB_BUG_ON(xchg(&global_lock_table[index], NULL) != lock);
-	smp_mb();
+	//KOMB_BUG_ON(xchg(&global_lock_table[index], NULL) != lock);
+	clear_bit(index, percpu_table_freelist);
 }
 
 #define per_cpu_sum(var)						\
@@ -862,8 +861,8 @@ void up_read(struct rw_semaphore *lock)
 		if(pcpu_idx != -1) {
 			unsigned long *percpu_addr = global_percpu_table[pcpu_idx];
 			int cnt = this_cpu_read(*percpu_addr);
-			KOMB_BUG_ON(cnt > 1);
-			if(cnt == 1) {
+			//KOMB_BUG_ON(cnt > 1);
+			if(cnt > 0) {
 				this_cpu_dec(*percpu_addr);
 				goto read_exit;
 			}

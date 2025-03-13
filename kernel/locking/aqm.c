@@ -93,7 +93,7 @@ static void wake_up_waiter(struct aqm_node *node)
 
 static void schedule_out_curr_task(void)
 {
-	schedule();
+	schedule_preempt_disabled();
 }
 
 static inline int force_update_node(struct aqm_node *node, u8 state)
@@ -382,9 +382,10 @@ static void __aqm_lock_slowpath(struct aqm_mutex *lock, struct aqm_node *node)
 				shuffle_waiters(lock, node, false);
 			}
 			if (need_resched()) {
-				preempt_enable();
+				schedule_preempt_disabled();
+				/*preempt_enable();
 				schedule();
-				preempt_disable();
+				preempt_disable();*/
 			}
 			cpu_relax();
 		}
@@ -411,9 +412,10 @@ static void __aqm_lock_slowpath(struct aqm_mutex *lock, struct aqm_node *node)
 		cpu_relax();
 
 		if (need_resched()) {
-			preempt_enable();
+			schedule_preempt_disabled();
+			/*preempt_enable();
 			schedule();
-			preempt_disable();
+			preempt_disable();*/
 		}
 	}
 

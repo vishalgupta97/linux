@@ -209,10 +209,10 @@ int komb_thread(void *args)
 
 		next_node = *rq_tail;
 		KOMB_BUG_ON(next_node == NULL);
-		KOMB_BUG_ON(next_node->cpuid == smp_processor_id());
+		//KOMB_BUG_ON(next_node->cpuid == smp_processor_id());
 		lock = next_node->lock;
-		KOMB_BUG_ON(lock->locked ==
-			    0); //Lock should already be acquired.
+		KOMB_BUG_ON(lock->locked == 0); 
+		//Lock should already be acquired.
 		WRITE_ONCE(lock->locked, _Q_LOCKED_COMBINER_VAL);
 		print_debug("Running combiner with node from: %d\n",
 			    next_node->cpuid);

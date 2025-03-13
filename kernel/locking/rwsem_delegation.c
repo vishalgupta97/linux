@@ -125,7 +125,7 @@ rwsemd_execute_cs(struct mutex_node *curr_node)
 	void *incoming_rsp_ptr, *outgoing_rsp_ptr;
 
 	WRITE_ONCE(current->komb_curr_waiter_task, curr_node->task_struct_ptr);
-	KOMB_BUG_ON(curr_node->cpuid == smp_processor_id());
+	//KOMB_BUG_ON(curr_node->cpuid == smp_processor_id());
 
 	incoming_rsp_ptr = &(curr_node->rsp);
 	outgoing_rsp_ptr = rwsemd_get_shadow_stack_ptr(NULL);
@@ -311,15 +311,15 @@ int komb_rwsemd_thread(void *args)
 
 		next_node = *rq_tail;
 		KOMB_BUG_ON(next_node == NULL);
-		KOMB_BUG_ON(next_node->cpuid == smp_processor_id());
+		//KOMB_BUG_ON(next_node->cpuid == smp_processor_id());
 		lock = next_node->lock;
-		KOMB_BUG_ON(lock->wlocked ==
-			    0); //Lock should already be acquired.
+		//Lock should already be acquired.
+		KOMB_BUG_ON(lock->wlocked == 0); 
 		lock->wlocked = _KOMB_RWSEM_W_COMBINER;
 		print_debug("Running combiner with node from: %d\n",
 			    next_node->cpuid);
 
-		BUG_ON(current->mm != NULL); //For mmap_lock
+		KOMB_BUG_ON(current->mm != NULL); //For mmap_lock
 		current->mm = next_node->task_struct_ptr->mm;
 
 		j = 0;
