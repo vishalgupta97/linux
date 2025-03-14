@@ -817,40 +817,45 @@ inline void __monitor_fds_stats(struct lock_stat *tmp, const char *type,
 		enum fds_lock_mechanisms before = tmp->key->ptr->lockm;
 		switch (ltype) {
 		case FDS_SPINLOCK:
-			feature_vector[0] = 4;
-			feature_vector[1] = cpumask_weight(&tmp->contending_cpus);
-			feature_vector[2] = tmp->counter / (MONITOR_TIME / 1000);
-			max_value = 0;
-			max_index = 0;
-			j = 0;
-			for(j = 0; j < 5; j++) {
-				if(j > 0)
-					feature_vector[3 + (j - 1)] = 0;
-				feature_vector[3 + j] = 1;
-				int value = decision_tree(feature_vector);
-				if(value > max_value) {
-					max_value = value;
-					max_index = 3 + j;
-				}
-			}
-			printk(KERN_ALERT "feature_vector: %ld %ld %ld max_value: %d max_index: %d\n",
-					feature_vector[0], feature_vector[1], feature_vector[2],
-					max_value, max_index);
-			enum fds_lock_mechanisms next_lock_type = FDS_QSPINLOCK;
-			switch(max_index) {
-				case 3:
-				case 4:
-				case 7:
-					next_lock_type = FDS_QSPINLOCK;
+			for(i = 0; i < NELEMS(fds_spinlock_implementations); i++)
+				if(tmp->key->ptr->lockm == fds_spinlock_implementations[i])
 					break;
-				case 5:
-					next_lock_type = FDS_TCLOCK;
-					break;
-				case 6:
-					next_lock_type = FDS_TDLOCK;
-					break;
-			}
-			tmp->key->ptr->lockm = next_lock_type;
+			tmp->key->ptr->lockm = fds_spinlock_implementations[(i+1) % NELEMS(fds_spinlock_implementations)];
+			
+//			feature_vector[0] = 4;
+//			feature_vector[1] = cpumask_weight(&tmp->contending_cpus);
+//			feature_vector[2] = tmp->counter / (MONITOR_TIME / 1000);
+//			max_value = 0;
+//			max_index = 0;
+//			j = 0;
+//			for(j = 0; j < 5; j++) {
+//				if(j > 0)
+//					feature_vector[3 + (j - 1)] = 0;
+//				feature_vector[3 + j] = 1;
+//				int value = decision_tree(feature_vector);
+//				if(value > max_value) {
+//					max_value = value;
+//					max_index = 3 + j;
+//				}
+//			}
+//			printk(KERN_ALERT "feature_vector: %ld %ld %ld max_value: %d max_index: %d\n",
+//					feature_vector[0], feature_vector[1], feature_vector[2],
+//					max_value, max_index);
+//			enum fds_lock_mechanisms next_lock_type = FDS_QSPINLOCK;
+//			switch(max_index) {
+//				case 3:
+//				case 4:
+//				case 7:
+//					next_lock_type = FDS_QSPINLOCK;
+//					break;
+//				case 5:
+//					next_lock_type = FDS_TCLOCK;
+//					break;
+//				case 6:
+//					next_lock_type = FDS_TDLOCK;
+//					break;
+//			}
+//			tmp->key->ptr->lockm = next_lock_type;
 			break;
 		case FDS_READ_SEM:
 			for(i = 0; i < NELEMS(fds_read_sem_implementations); i++)
