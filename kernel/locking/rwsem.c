@@ -79,8 +79,10 @@ inline void wait_for_visible_readers(struct rw_semaphore *lock)
 					schedule_out_curr_task();
 
 			}
-			WRITE_ONCE(lock->percpu_index, -1);
-			free_to_percpu_table(lock, index);
+			if(lock->key.ptr->lockm != FDS_PERCPU) {
+				WRITE_ONCE(lock->percpu_index, -1);
+				free_to_percpu_table(lock, index);
+			}
 		}	
 	}
 }
@@ -231,8 +233,10 @@ static inline u64 komb_read_lock_slowpath(struct rw_semaphore *lock)
 void check_and_set_rbias(struct rw_semaphore *lock, u64 cnts) {
 	if (!READ_ONCE(lock->rbias) &&
 	    (lock->key.ptr && lock->key.ptr->lockm == FDS_PERCPU)) {
-		if(cnts == _KOMB_RWSEM_R_BIAS) {
-			WRITE_ONCE(lock->percpu_index, alloc_from_percpu_table(lock));	
+		if((cnts >> _KOMB_RWSEM_R_SHIFT) == 1) {
+			if(READ_ONCE(lock->percpu_index) == -1)
+				WRITE_ONCE(lock->percpu_index, alloc_from_percpu_table(lock));
+			smp_mb();
 			WRITE_ONCE(lock->rbias, 1);
 		}
 	}
@@ -868,7 +872,7 @@ void up_read(struct rw_semaphore *lock)
 			}
 		}
 		KOMB_BUG_ON(lock->wlocked != 0);
-		unsigned long tmp = atomic_long_read(&lock->cnts); // TODO: Remove this
+		/*unsigned long tmp = atomic_long_read(&lock->cnts); // TODO: Remove this
 		if((tmp >> _KOMB_RWSEM_R_SHIFT) == 0) {
 			int pcpu_idx = READ_ONCE(lock->percpu_index);
 			if(pcpu_idx != -1) {
@@ -881,7 +885,7 @@ void up_read(struct rw_semaphore *lock)
 			}
 			printk(KERN_ALERT "lock: %px my cpu: %d cnts: %ld counter: %ld\n", lock, smp_processor_id(), tmp, (tmp >> _KOMB_RWSEM_R_SHIFT)); 
 			BUG_ON(true);
-		}
+		}*/
 		atomic_long_sub_return_release(_KOMB_RWSEM_R_BIAS, &lock->cnts);
 		print_debug("Read lock released\n");
 		//dump_stack();
@@ -927,8 +931,10 @@ __attribute__((noipa)) noinline notrace void up_write(struct rw_semaphore *lock)
 
 	if (my_idx == -1) {
 		if (lock->wlocked == _KOMB_RWSEM_W_LOCKED) {
-//			if (lock->key.ptr && lock->key.ptr->lockm == FDS_PERCPU)
-//				WRITE_ONCE(lock->rbias, 1);
+			//if (lock->key.ptr && lock->key.ptr->lockm == FDS_PERCPU)
+			//	WRITE_ONCE(lock->rbias, 1);
+			// cnts passed to allow allocated as well if needed.
+			check_and_set_rbias(lock, _KOMB_RWSEM_R_BIAS);
 			print_debug("Writer releasing on fastpath\n");			
 			WRITE_ONCE(lock->wlocked, 0);
 		} else if (lock->wlocked == _KOMB_RWSEM_W_COMBINER) {
@@ -1040,24 +1046,27 @@ EXPORT_SYMBOL(down_read_interruptible);
 
 int down_read_trylock(struct rw_semaphore *lock)
 {
-	if(__down_read_fastpath(lock)) {
-		migrate_disable();
-		return 1;
-	}
+	if(__down_read_fastpath(lock)) 
+		goto read_exit;
 
 	u64 cnts =
 		atomic_long_add_return_acquire(_KOMB_RWSEM_R_BIAS, &lock->cnts);
 	if (likely(!(cnts & _KOMB_RWSEM_W_WMASK))) {
 		check_and_set_rbias(lock, cnts);
 		this_cpu_inc(rwsem_reads);
-		read_stat_lock_acquire(&lock->key);
 		print_debug("Reader got the lock\n");
-		migrate_disable();
-		return 1;
+		goto read_exit;
 	}
 	(void)atomic_long_sub_return_release(_KOMB_RWSEM_R_BIAS, &lock->cnts);
 
 	return 0;
+
+read_exit:
+	this_cpu_inc(rwsem_reads);
+	read_stat_lock_acquire(&lock->key);
+	migrate_disable();
+	return 1;
+
 }
 EXPORT_SYMBOL(down_read_trylock);
 

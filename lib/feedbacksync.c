@@ -349,7 +349,7 @@ void print_fds_stats(void)
 #define IS_VALUE 1
 #define IS_DIRECTION 2
 
-#define QSPINLOCK_LIMIT 10000
+#define QSPINLOCK_LIMIT 1000000
 #define MONITOR_TIME 10000 // In milliseconds
 
 #define QSPINLOCK_PER_SECOND 200000
@@ -817,10 +817,6 @@ inline void __monitor_fds_stats(struct lock_stat *tmp, const char *type,
 		enum fds_lock_mechanisms before = tmp->key->ptr->lockm;
 		switch (ltype) {
 		case FDS_SPINLOCK:
-			//for(i = 0; i < NELEMS(fds_spinlock_implementations); i++)
-			//	if(tmp->key->ptr->lockm == fds_spinlock_implementations[i])
-			//		break;
-			//tmp->key->ptr->lockm = fds_spinlock_implementations[(i+1) % NELEMS(fds_spinlock_implementations)];
 			feature_vector[0] = 4;
 			feature_vector[1] = cpumask_weight(&tmp->contending_cpus);
 			feature_vector[2] = tmp->counter / (MONITOR_TIME / 1000);
