@@ -7,13 +7,13 @@
 #define NUM_BUCKETS 8192
 
 enum fds_lock_mechanisms {
-	FDS_QSPINLOCK,
-        FDS_TAS,
-	FDS_TCLOCK,
-	FDS_TDLOCK,
-	FDS_LOCKM_MAX,
-	FDS_PERCPU,
-	FDS_DISABLE,
+	FDS_QSPINLOCK 	= (1 << 0),
+	FDS_TAS 	= (1 << 1),
+	FDS_TCLOCK	= (1 << 2),
+	FDS_TDLOCK	= (1 << 3),
+	FDS_LOCKM_MAX	= (1 << 4),
+	FDS_PERCPU	= (1 << 5),
+	FDS_DISABLE	= (1 << 6),
 };
 
 struct fds_lock_key {
