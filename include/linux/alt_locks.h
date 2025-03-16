@@ -1,8 +1,15 @@
 #ifndef __ALT_LOCKS_H__
 #define __ALT_LOCKS_H__
 
+#include <linux/komb_spinlock.h>
 #include <linux/komb_mutex.h>
 #include <linux/komb_rwsem.h>
+
+#define alt_spinlock_t			struct qspinlock
+#define alt_spin_lock_init		komb_spin_lock_init
+#define alt_spin_lock			komb_spin_lock
+#define alt_spin_unlock			komb_spin_unlock
+#define __ALT_SPIN_LOCK_UNLOCKED	__KOMB_SPIN_LOCK_UNLOCKED
 
 #define alt_mutex 			komb_mutex
 #define alt_mutex_init 			komb_mutex_init

@@ -36,7 +36,7 @@ static int seq_show(struct seq_file *m, void *v)
 	if (files) {
 		unsigned int fd = proc_fd(m->private);
 
-		spin_lock(&files->file_lock);
+		alt_spin_lock(&files->file_lock);
 		file = files_lookup_fd_locked(files, fd);
 		if (file) {
 			f_flags = file->f_flags;
@@ -46,7 +46,7 @@ static int seq_show(struct seq_file *m, void *v)
 			get_file(file);
 			ret = 0;
 		}
-		spin_unlock(&files->file_lock);
+		alt_spin_unlock(&files->file_lock);
 	}
 	task_unlock(task);
 	put_task_struct(task);

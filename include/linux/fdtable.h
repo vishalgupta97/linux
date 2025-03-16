@@ -17,6 +17,8 @@
 
 #include <linux/atomic.h>
 
+#include <linux/alt_locks.h>
+
 /*
  * The default fd array needs to be at least BITS_PER_LONG,
  * as this is the granularity returned by copy_fdset().
@@ -49,7 +51,7 @@ struct files_struct {
   /*
    * written part on a separate cache line in SMP
    */
-	spinlock_t file_lock ____cacheline_aligned_in_smp;
+	alt_spinlock_t file_lock ____cacheline_aligned_in_smp;
 	unsigned int next_fd;
 	unsigned long close_on_exec_init[1];
 	unsigned long open_fds_init[1];
