@@ -2917,7 +2917,7 @@ struct dentry *d_ancestor(struct dentry *p1, struct dentry *p2)
  */
 static int __d_unalias(struct dentry *dentry, struct dentry *alias)
 {
-	struct mutex *m1 = NULL;
+	struct alt_mutex *m1 = NULL;
 	struct rw_semaphore *m2 = NULL;
 	int ret = -ESTALE;
 
@@ -2926,7 +2926,7 @@ static int __d_unalias(struct dentry *dentry, struct dentry *alias)
 		goto out_unalias;
 
 	/* See lock_rename() */
-	if (!mutex_trylock(&dentry->d_sb->s_vfs_rename_mutex))
+	if (!alt_mutex_trylock(&dentry->d_sb->s_vfs_rename_mutex))
 		goto out_err;
 	m1 = &dentry->d_sb->s_vfs_rename_mutex;
 	if (!inode_trylock_shared(alias->d_parent->d_inode))
@@ -2939,7 +2939,7 @@ out_err:
 	if (m2)
 		up_read(m2);
 	if (m1)
-		mutex_unlock(m1);
+		alt_mutex_unlock(m1);
 	return ret;
 }
 

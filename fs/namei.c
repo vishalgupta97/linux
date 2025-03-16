@@ -3060,7 +3060,7 @@ static struct dentry *lock_two_directories(struct dentry *p1, struct dentry *p2)
 		inode_lock_nested(p2->d_inode, I_MUTEX_PARENT2);
 		return NULL;
 	} else { // no common ancestor at the time we'd been called
-		mutex_unlock(&p1->d_sb->s_vfs_rename_mutex);
+		alt_mutex_unlock(&p1->d_sb->s_vfs_rename_mutex);
 		return ERR_PTR(-EXDEV);
 	}
 }
@@ -3075,7 +3075,7 @@ struct dentry *lock_rename(struct dentry *p1, struct dentry *p2)
 		return NULL;
 	}
 
-	mutex_lock(&p1->d_sb->s_vfs_rename_mutex);
+	alt_mutex_lock(&p1->d_sb->s_vfs_rename_mutex);
 	return lock_two_directories(p1, p2);
 }
 EXPORT_SYMBOL(lock_rename);
@@ -3104,7 +3104,7 @@ struct dentry *lock_rename_child(struct dentry *c1, struct dentry *p2)
 		inode_unlock(p2->d_inode);
 	}
 
-	mutex_lock(&c1->d_sb->s_vfs_rename_mutex);
+	alt_mutex_lock(&c1->d_sb->s_vfs_rename_mutex);
 	/*
 	 * nobody can move out of any directories on this fs.
 	 */
@@ -3117,7 +3117,7 @@ struct dentry *lock_rename_child(struct dentry *c1, struct dentry *p2)
 	 * for consistency with lock_rename().
 	 */
 	inode_lock_nested(p2->d_inode, I_MUTEX_PARENT);
-	mutex_unlock(&c1->d_sb->s_vfs_rename_mutex);
+	alt_mutex_unlock(&c1->d_sb->s_vfs_rename_mutex);
 	return NULL;
 }
 EXPORT_SYMBOL(lock_rename_child);
@@ -3127,7 +3127,7 @@ void unlock_rename(struct dentry *p1, struct dentry *p2)
 	inode_unlock(p1->d_inode);
 	if (p1 != p2) {
 		inode_unlock(p2->d_inode);
-		mutex_unlock(&p1->d_sb->s_vfs_rename_mutex);
+		alt_mutex_unlock(&p1->d_sb->s_vfs_rename_mutex);
 	}
 }
 EXPORT_SYMBOL(unlock_rename);

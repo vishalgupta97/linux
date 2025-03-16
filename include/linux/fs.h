@@ -49,6 +49,8 @@
 #include <asm/byteorder.h>
 #include <uapi/linux/fs.h>
 
+#include <linux/alt_locks.h>
+
 struct backing_dev_info;
 struct bdi_writeback;
 struct bio;
@@ -1286,7 +1288,7 @@ struct super_block {
 	 * The next field is for VFS *only*. No filesystems have any business
 	 * even looking at it. You had been warned.
 	 */
-	struct mutex s_vfs_rename_mutex;	/* Kludge */
+	struct alt_mutex s_vfs_rename_mutex;	/* Kludge */
 
 	/*
 	 * Filesystem subtype.  If non-empty the filesystem type field
