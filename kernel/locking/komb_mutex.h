@@ -18,6 +18,7 @@
 #include <linux/debug_locks.h>
 #include <linux/osq_lock.h>
 
+#include <linux/topology.h>
 #include <linux/smp.h>
 #include <linux/bug.h>
 #include <linux/percpu.h>

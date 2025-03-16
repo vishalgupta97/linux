@@ -62,7 +62,12 @@ static inline int komb_rwsem_is_locked(struct komb_rwsem *sem)
 	return atomic_long_read(&sem->cnts) != 0;
 }
 
-#define RWSEM_UNLOCKED_VALUE 0L
+#define __KOMB_RWSEM_INITIALIZER(lockname)                          \
+	{                                                           \
+		.cnts = ATOMIC_LONG_INIT(0),                        \
+		.reader_wait_lock.val = ATOMIC_INIT(0),             \
+		.reader_wait_lock.tail = NULL, .writer_tail = NULL, \
+	}
 
 extern void komb_init_rwsem(struct komb_rwsem *sem);
 
@@ -84,10 +89,12 @@ extern void komb_up_write(struct komb_rwsem *sem);
 extern void komb_downgrade_write(struct komb_rwsem *sem);
 
 #define komb_down_read_nested(sem, subclass) komb_down_read(sem)
-#define komb_down_read_killable_nested(sem, subclass) komb_down_read_killable(sem)
+#define komb_down_read_killable_nested(sem, subclass) \
+	komb_down_read_killable(sem)
 #define komb_down_write_nest_lock(sem, nest_lock) komb_down_write(sem)
 #define komb_down_write_nested(sem, subclass) komb_down_write(sem)
-#define komb_down_write_killable_nested(sem, subclass) komb_down_write_killable(sem)
+#define komb_down_write_killable_nested(sem, subclass) \
+	komb_down_write_killable(sem)
 #define komb_down_read_non_owner(sem) komb_down_read(sem)
 #define komb_up_read_non_owner(sem) komb_up_read(sem)
 

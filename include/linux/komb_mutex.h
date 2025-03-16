@@ -13,7 +13,6 @@
 #include <linux/osq_lock.h>
 #include <linux/debug_locks.h>
 #include <linux/cleanup.h>
-#include <linux/topology.h>
 
 struct komb_mutex_node {
 	union {
