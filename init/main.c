@@ -103,6 +103,7 @@
 #include <linux/pidfs.h>
 #include <linux/ptdump.h>
 #include <net/net_namespace.h>
+#include <linux/komb_spinlock.h>
 
 #include <asm/io.h>
 #include <asm/setup.h>
@@ -1025,6 +1026,8 @@ void start_kernel(void)
 	call_function_init();
 	WARN(!irqs_disabled(), "Interrupts were enabled early\n");
 
+	komb_init();
+
 	early_boot_irqs_disabled = false;
 	local_irq_enable();
 
@@ -1483,6 +1486,7 @@ static int __ref kernel_init(void *unused)
 	pti_finalize();
 
 	system_state = SYSTEM_RUNNING;
+
 	numa_default_policy();
 
 	rcu_end_inkernel_boot();
