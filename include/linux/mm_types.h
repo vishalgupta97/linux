@@ -22,6 +22,8 @@
 
 #include <asm/mmu.h>
 
+#include <linux/alt_locks.h>
+
 #ifndef AT_VECTOR_SIZE_ARCH
 #define AT_VECTOR_SIZE_ARCH 0
 #endif
@@ -846,7 +848,7 @@ struct mm_struct {
 		 * mmap_lock, which can easily push the 2 fields into one
 		 * cacheline.
 		 */
-		struct rw_semaphore mmap_lock;
+		struct alt_rw_semaphore mmap_lock;
 
 		struct list_head mmlist; /* List of maybe swapped mm's.	These
 					  * are globally strung together off
