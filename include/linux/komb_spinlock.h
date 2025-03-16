@@ -4,8 +4,11 @@
 #include <asm/qspinlock.h>
 
 #define MAX_NODES 4
-#define DEFINE_KOMBSPINLOCK(x) \
-	arch_spinlock_t(x) = (arch_spinlock_t)__ORIG_QSPIN_LOCK_UNLOCKED
+
+#define __KOMB_SPIN_LOCK_UNLOCKED(x)   \
+	{                              \
+		.val = ATOMIC_INIT(0), \
+	}
 
 /*
  * TODO (Correctness optimization): 
