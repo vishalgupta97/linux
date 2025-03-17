@@ -177,8 +177,8 @@ extern void do_raw_spin_unlock(raw_spinlock_t *lock) __releases(lock);
 static inline void do_raw_spin_lock(raw_spinlock_t *lock) __acquires(lock)
 {
 	__acquire(lock);
-	if (lock->key.ptr)
-		arch_spin_lock_fds(&lock->raw_lock, lock->key.ptr);
+	if (lock->key)
+		arch_spin_lock_fds(&lock->raw_lock, lock->key);
 	else
 		arch_spin_lock(&lock->raw_lock);
 	mmiowb_spin_lock();

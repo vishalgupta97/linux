@@ -58,7 +58,7 @@ struct rw_semaphore {
 	union {
 		struct {
 			struct mutex_node *writer_tail;
-			struct fds_lock_key key;
+			struct fds_lock_key *key;
 		};
 		char __padding4[128];
 	};
@@ -79,10 +79,7 @@ static inline int rwsem_is_locked(struct rw_semaphore *sem)
 		.reader_wait_lock.val = ATOMIC_INIT(0),             \
 		.reader_wait_lock.tail = NULL, .writer_tail = NULL, \
 		.percpu_index = -1, .rbias = 0,                      \
-		.key = {                                            \
-			.name = #lockname,                          \
-			.ptr = NULL,                                \
-		},                                                  \
+		.key = NULL \
 	}
 
 #define DECLARE_RWSEM(name) struct rw_semaphore name = __RWSEM_INITIALIZER(name)

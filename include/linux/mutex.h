@@ -30,10 +30,7 @@ static inline void mutex_destroy(struct mutex *lock)
 #define __MUTEX_INITIALIZER(lockname)                                         \
 	{                                                                     \
 		.tail = NULL, .state = ATOMIC_INIT(0), 			      \
-		.key = {                                                      \
-			.name = #lockname,                                    \
-			.ptr = NULL,                                          \
-		},                                                            \
+		.key = NULL                                                   \
 	}
 
 #define DEFINE_MUTEX(mutexname) \

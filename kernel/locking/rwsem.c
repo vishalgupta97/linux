@@ -79,7 +79,7 @@ inline void wait_for_visible_readers(struct rw_semaphore *lock)
 					schedule_out_curr_task();
 
 			}
-			if(lock->key.ptr->lockm != FDS_PERCPU) {
+			if(lock->key->lockm != FDS_PERCPU) {
 				WRITE_ONCE(lock->percpu_index, -1);
 				free_to_percpu_table(lock, index);
 			}
@@ -232,7 +232,7 @@ static inline u64 komb_read_lock_slowpath(struct rw_semaphore *lock)
 
 void check_and_set_rbias(struct rw_semaphore *lock, u64 cnts) {
 	if (!READ_ONCE(lock->rbias) &&
-	    (lock->key.ptr && lock->key.ptr->lockm == FDS_PERCPU)) {
+	    (lock->key && lock->key->lockm == FDS_PERCPU)) {
 		if((cnts >> _KOMB_RWSEM_R_SHIFT) == 1) {
 			if(READ_ONCE(lock->percpu_index) == -1)
 				WRITE_ONCE(lock->percpu_index, alloc_from_percpu_table(lock));
@@ -291,7 +291,7 @@ check_bias_and_exit:
 	check_and_set_rbias(lock, cnts);
 read_exit:
 	this_cpu_inc(rwsem_reads);
-	read_stat_lock_acquire(&lock->key);
+	read_stat_lock_acquire(lock->key);
 	return;
 }
 EXPORT_SYMBOL(down_read);
@@ -792,7 +792,7 @@ irq_release:
 	}
 	preempt_enable();
 write_exit_slowpath:
-	write_stat_lock_acquire(&lock->key);
+	write_stat_lock_acquire(lock->key);
 write_exit:
 	this_cpu_inc(rwsem_writes);
 	return;
@@ -826,15 +826,15 @@ void down_write(struct rw_semaphore *lock)
 //	}
 //#endif
 
-	if(lock->key.ptr == NULL)
+	if(lock->key == NULL)
 		__down_write(lock, FDS_QSPINLOCK);
-	else if(lock->key.ptr->lockm == FDS_TDLOCK)
+	else if(lock->key->lockm == FDS_TDLOCK)
 		komb_rwsemd_down_write(lock);
 	else
-		__down_write(lock, lock->key.ptr->lockm);
+		__down_write(lock, lock->key->lockm);
 
 write_exit_slowpath:
-	write_stat_lock_acquire(&lock->key);
+	write_stat_lock_acquire(lock->key);
 write_exit:
 	this_cpu_inc(rwsem_writes);
 	return;
@@ -1024,8 +1024,7 @@ void __init_rwsem(struct rw_semaphore *lock, const char *name,
 	lock->writer_tail = NULL;
 	lock->rbias = 0;
 	lock->percpu_index = -1;
-	lock->key.name = name;
-	lock->key.ptr = key;
+	lock->key = key;
 	init_fds_lock_key(key, name, DEFAULT_FDS_LOCK);
 }
 EXPORT_SYMBOL(__init_rwsem);
@@ -1063,7 +1062,7 @@ int down_read_trylock(struct rw_semaphore *lock)
 
 read_exit:
 	this_cpu_inc(rwsem_reads);
-	read_stat_lock_acquire(&lock->key);
+	read_stat_lock_acquire(lock->key);
 	migrate_disable();
 	return 1;
 
@@ -1085,7 +1084,6 @@ int down_write_trylock(struct rw_semaphore *lock)
 	if (val) {
 		wait_for_visible_readers(lock);
 		this_cpu_inc(rwsem_writes);
-		//write_stat_lock_acquire(&lock->key);
 		migrate_disable();
 	}
 	return val;

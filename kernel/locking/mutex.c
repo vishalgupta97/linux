@@ -578,7 +578,7 @@ irq_release:
 	trace_contention_end(lock, 0);
 	preempt_enable();
 write_exit:
-	mutex_stat_lock_acquire(&lock->key);
+	mutex_stat_lock_acquire(lock->key);
 }
 
 __always_inline void mutex_lock(struct mutex *lock)
@@ -591,12 +591,12 @@ __always_inline void mutex_lock(struct mutex *lock)
 
 	might_sleep();
 
-	if(lock->key.ptr == NULL)
+	if(lock->key == NULL)
 		__mutex_lock(lock, FDS_QSPINLOCK);
-	else if(lock->key.ptr->lockm == FDS_TDLOCK)
+	else if(lock->key->lockm == FDS_TDLOCK)
 		md_mutex_lock(lock);
 	else
-		__mutex_lock(lock, lock->key.ptr->lockm);
+		__mutex_lock(lock, lock->key->lockm);
 }
 EXPORT_SYMBOL(mutex_lock);
 
@@ -633,7 +633,6 @@ EXPORT_SYMBOL(mutex_is_locked);
 int mutex_trylock(struct mutex *lock)
 {
 	if (!lock->locked && cmpxchg(&lock->locked, 0, 1) == 0) {
-		// mutex_stat_lock_acquire(&lock->key);
 		return 1;
 	}
 
@@ -762,8 +761,7 @@ void ___mutex_init(struct mutex *lock, const char *name,
 {
 	lock->tail = NULL;
 	atomic_set(&lock->state, 0);
-	lock->key.name = name;
-	lock->key.ptr = key;
+	lock->key = key;
 	init_fds_lock_key(key, name, DEFAULT_FDS_LOCK);
 }
 EXPORT_SYMBOL(___mutex_init);

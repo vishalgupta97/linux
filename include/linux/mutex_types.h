@@ -82,11 +82,11 @@ struct mutex {
 	union {
 		struct {
 			struct mutex_node *tail;
+			struct fds_lock_key *key;
 			union {
 				atomic_t state;
 				u8 locked;
 			};
-			struct fds_lock_key key;
 		};
 		char alignment[64];
 	};

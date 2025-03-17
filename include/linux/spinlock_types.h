@@ -21,7 +21,7 @@ typedef struct spinlock {
 # define LOCK_PADSIZE (offsetof(struct raw_spinlock, key))
 		struct {
 			u8 __padding[LOCK_PADSIZE];
-			struct fds_lock_key key;
+			struct fds_lock_key *key;
 		};
 	};
 } spinlock_t;
@@ -34,10 +34,7 @@ typedef struct spinlock {
 #define __SPIN_LOCK_INITIALIZER(lockname)                    \
 	{                                                    \
 		.rlock = ___SPIN_LOCK_INITIALIZER(lockname), \
-		.key = {                                     \
-			.name = #lockname,                   \
-			.ptr = NULL,                         \
-		},                                           \
+		.key = NULL                                  \
 	}
 
 #define __SPIN_LOCK_UNLOCKED(lockname) \

@@ -124,7 +124,6 @@ head_of_queue:
 		rq_tail =
 			per_cpu_ptr(&lock_rq_tail, select_delegation_cpu(lock));
 		if (READ_ONCE(*rq_tail) == 0xdeadbeef ||
-		    !task_is_running(dthreads[numa_node_id()]) ||
 		    cmpxchg(rq_tail, NULL, curr_node) != NULL) {
 			// Fallback to qspinlock
 			// this_cpu_inc(qspinlock_fallback);
@@ -431,8 +430,7 @@ queue:
 
 	if (curr_node->count > 0 || !in_task() || irqs_disabled() ||
 	    current->migration_disabled ||
-	    ((smp_processor_id() % num_cores_per_socket) == 0) ||
-	    !task_is_running(dthreads[numa_node_id()])) {
+	    ((smp_processor_id() % num_cores_per_socket) == 0)) {
 		struct komb_node *prev_node, *next_node;
 		u32 tail, idx;
 

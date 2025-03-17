@@ -14,7 +14,7 @@
 
 typedef struct raw_spinlock {
 	arch_spinlock_t raw_lock;
-	struct fds_lock_key key;
+	struct fds_lock_key *key;
 } raw_spinlock_t;
 
 #define SPINLOCK_MAGIC 0xdead4ead
@@ -22,21 +22,13 @@ typedef struct raw_spinlock {
 #define SPINLOCK_OWNER_INIT ((void *)-1L)
 
 #define RAW_SPIN_DEP_MAP_INIT(lockname) \
-	.key = {                        \
-		.name = #lockname,      \
-		.ptr = NULL,            \
-	}
+	.key = NULL 
+
 #define SPIN_DEP_MAP_INIT(lockname) \
-	.key = {                    \
-		.name = #lockname,  \
-		.ptr = NULL,        \
-	}
+	.key = NULL
 
 #define LOCAL_SPIN_DEP_MAP_INIT(lockname) \
-	.key = {                          \
-		.name = #lockname,        \
-		.ptr = NULL,              \
-	}
+	.key = NULL
 
 #ifdef CONFIG_DEBUG_SPINLOCK
 #define SPIN_DEBUG_INIT(lockname) \

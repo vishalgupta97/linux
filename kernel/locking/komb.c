@@ -645,7 +645,7 @@ __komb_spin_lock(struct qspinlock *lock, enum fds_lock_mechanisms lockm)
 		return;
 	}
 
-        goto queue;
+        //goto queue;
 
 	if (val == _Q_PENDING_VAL) {
 		cnt = _Q_PENDING_LOOPS;

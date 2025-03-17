@@ -5,6 +5,8 @@
 #define _LINUX_FEEDBACKSYNC_H
 
 #define NUM_BUCKETS 8192
+#define FDS_MAX_CPUS 256
+#define DEFAULT_FDS_LOCK FDS_QSPINLOCK
 
 enum fds_lock_mechanisms {
 	FDS_QSPINLOCK 	= (1 << 0),
@@ -17,21 +19,12 @@ enum fds_lock_mechanisms {
 };
 
 struct fds_lock_key {
-	struct fds_lock_key *ptr;
 	const char *name;
+	uint64_t bucket[FDS_MAX_CPUS];
 	enum fds_lock_mechanisms lockm;
 };
 
-#define DEFAULT_FDS_LOCK FDS_QSPINLOCK
-
-#define init_fds_lock_key(key, _name, _lockm) \
-	{                                     \
-		if (key->ptr == NULL) {       \
-			key->ptr = key;       \
-			key->name = _name;    \
-			key->lockm = _lockm;  \
-		}                             \
-	}
+void init_fds_lock_key(struct fds_lock_key *key, const char* _name, enum fds_lock_mechanisms _lockm);
 
 void read_stat_lock_acquire(struct fds_lock_key *key);
 void write_stat_lock_acquire(struct fds_lock_key *key);

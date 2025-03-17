@@ -73,7 +73,6 @@ head_of_queue:
 		rq_tail = per_cpu_ptr(&mutex_rq_tail,
 				      select_delegation_cpu(lock));
 		if (READ_ONCE(*rq_tail) == 0xdeadbeef ||
-		    !task_is_running(dthreads[numa_node_id()]) ||
 		    cmpxchg(rq_tail, NULL, curr_node) != NULL) {
 			print_debug("Delegation %d running something else\n",
 				    select_delegation_cpu(lock));
@@ -103,7 +102,7 @@ head_of_queue:
 			WRITE_ONCE(next_node->locked, false);
 			goto continue_with_cs_execution;
 		} else {
-			KOMB_BUG_ON(!task_is_running(dthreads[numa_node_id()]));
+			//KOMB_BUG_ON(!task_is_running(dthreads[numa_node_id()]));
 			print_debug("Added to the delegation thread: %d\n",
 				    select_delegation_cpu(lock));
 			wake_up_process(dthreads[numa_node_id()]);
@@ -195,8 +194,7 @@ md_mutex_lock_slowpath(struct mutex *lock)
 
 __attribute__((noipa)) noinline notrace void md_mutex_lock(struct mutex *lock)
 {
-	if (((smp_processor_id() % num_cores_per_socket) == 0) ||
-	    !task_is_running(dthreads[numa_node_id()])) {
+	if (((smp_processor_id() % num_cores_per_socket) == 0)) {
 		__mutex_lock(lock, FDS_QSPINLOCK);
 		return;
 	} else {
@@ -240,7 +238,7 @@ __attribute__((noipa)) noinline notrace void md_mutex_lock(struct mutex *lock)
 			}
 		}
 		preempt_enable();
-		mutex_stat_lock_acquire(&lock->key);
+		mutex_stat_lock_acquire(lock->key);
 	}
 }
 
