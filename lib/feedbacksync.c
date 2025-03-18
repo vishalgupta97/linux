@@ -139,8 +139,8 @@ void mutex_stat_lock_acquire(struct fds_lock_key *key)
 
 void spin_stat_lock_acquire(struct fds_lock_key *key)
 {
-	return;
-	//__stat_lock_acquire(key, SPIN_HASHTABLE);
+	//return;
+	__stat_lock_acquire(key, SPIN_HASHTABLE);
 }
 
 #define HASHTABLE_BITS 5
@@ -969,7 +969,7 @@ int fds_monitor(void *args)
 		print_komb_stats();
 		collect_fds_stats();
 		print_fds_stats();
-		monitor_fds_stats();
+		//monitor_fds_stats();
 		reset_fds_stats();
 		preempt_enable();
 monitor_end:

@@ -150,8 +150,8 @@ __always_inline int __check_exit_condition(enum fds_lock_mechanisms curr_lockm, 
 }
 
 __always_inline bool check_exit_condition(enum fds_lock_mechanisms curr_lockm, struct komb_node *my_node) {
-	return __check_exit_condition(curr_lockm, my_node);
-	/*int i = 0;
+	//return __check_exit_condition(curr_lockm, my_node) > 0;
+	int i = 0;
 	int exit_cond = 0;
 	while(true) {
 		exit_cond = __check_exit_condition(curr_lockm, my_node);
@@ -163,7 +163,7 @@ __always_inline bool check_exit_condition(enum fds_lock_mechanisms curr_lockm, s
 					return true;
 		}	
 	}
-	return true;*/
+	return true;
 }
 
 
@@ -376,6 +376,8 @@ __komb_spin_lock_longjmp(struct qspinlock *lock, int tail,
 	struct komb_node *prev_local_queue_tail;
 
 	old_tail = xchg_tail(lock, tail);
+
+        spin_stat_lock_acquire(curr_node->key);
 
 	if (old_tail & _Q_TAIL_MASK) {
 		prev_node = decode_tail(old_tail);
@@ -653,7 +655,8 @@ komb_spin_lock_slowpath(struct qspinlock *lock)
 #pragma GCC pop_options
 
 __attribute__((noipa)) noinline notrace void
-__komb_spin_lock(struct qspinlock *lock, enum fds_lock_mechanisms lockm)
+__komb_spin_lock(struct qspinlock *lock, enum fds_lock_mechanisms lockm,
+struct fds_lock_key *key)
 {
 //	u32 val, cnt;
 	struct komb_node *curr_node = NULL;
@@ -663,6 +666,7 @@ __komb_spin_lock(struct qspinlock *lock, enum fds_lock_mechanisms lockm)
 //		return;
 
 	if (lockm == FDS_TAS) {
+                spin_stat_lock_acquire(key);
 		while (atomic_cmpxchg_acquire(&lock->val, 0, _Q_LOCKED_VAL)) {
 			atomic_cond_read_relaxed(&lock->val, !(VAL));
 		}
@@ -700,6 +704,7 @@ __komb_spin_lock(struct qspinlock *lock, enum fds_lock_mechanisms lockm)
 
 queue:
 	curr_node = this_cpu_ptr(&komb_nodes[0]);
+        curr_node->key = key;
 	KOMB_BUG_ON(curr_node == NULL);
 
 	if (curr_node->count > 0 || !in_task() || irqs_disabled() ||
@@ -740,6 +745,8 @@ queue:
 		smp_wmb();
 
 		u32 old_tail = xchg_tail(lock, tail);
+
+                spin_stat_lock_acquire(key);
 
 		if (old_tail & _Q_TAIL_MASK) {
 			prev_node = decode_tail(old_tail);
@@ -837,7 +844,7 @@ void komb_spin_lock(struct qspinlock *lock)
 	//if (atomic_cmpxchg_acquire(&lock->val, 0, _Q_LOCKED_VAL) == 0)
 	//	return;
 
-	__komb_spin_lock(lock, FDS_QSPINLOCK);
+	__komb_spin_lock(lock, FDS_QSPINLOCK, NULL);
 }
 EXPORT_SYMBOL_GPL(komb_spin_lock);
 
@@ -847,7 +854,7 @@ __always_inline void komb_spin_lock_fds(struct qspinlock *lock,
 	if (key->lockm == FDS_TDLOCK)
 		kd_spin_lock(lock);
 	else
-		__komb_spin_lock(lock, key->lockm);
+		__komb_spin_lock(lock, key->lockm, key);
 }
 
 __attribute__((noipa)) noinline notrace void

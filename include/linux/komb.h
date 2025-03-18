@@ -18,6 +18,7 @@ struct komb_node {
 			struct komb_node *next;
 			struct qspinlock *lock;
 			struct task_struct *task_struct_ptr;
+                        struct fds_lock_key *key;
 			int tail;
 			int count;
 			int socket_id;
