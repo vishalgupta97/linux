@@ -332,7 +332,7 @@ struct files_struct *dup_fd(struct files_struct *oldf, unsigned int max_fds, int
 
 	atomic_set(&newf->count, 1);
 
-	spin_lock_init(&newf->file_lock);
+	spin_lock_init_tclock_fds(&newf->file_lock);
 	newf->resize_in_progress = false;
 	init_waitqueue_head(&newf->resize_wait);
 	newf->next_fd = 0;

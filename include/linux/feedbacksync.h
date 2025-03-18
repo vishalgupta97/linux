@@ -20,7 +20,7 @@ enum fds_lock_mechanisms {
 
 struct fds_lock_key {
 	const char *name;
-	uint64_t bucket[FDS_MAX_CPUS];
+	uint64_t bucket[FDS_MAX_CPUS * 8];
 	enum fds_lock_mechanisms lockm;
 };
 

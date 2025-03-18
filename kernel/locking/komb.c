@@ -630,12 +630,12 @@ komb_spin_lock_slowpath(struct qspinlock *lock)
 __attribute__((noipa)) noinline notrace void
 __komb_spin_lock(struct qspinlock *lock, enum fds_lock_mechanisms lockm)
 {
-	u32 val, cnt;
+//	u32 val, cnt;
 	struct komb_node *curr_node = NULL;
 
-	val = atomic_cmpxchg_acquire(&lock->val, 0, _Q_LOCKED_VAL);
-	if (val == 0)
-		return;
+//	val = atomic_cmpxchg_acquire(&lock->val, 0, _Q_LOCKED_VAL);
+//	if (val == 0)
+//		return;
 
 	if (lockm == FDS_TAS) {
 		while (atomic_cmpxchg_acquire(&lock->val, 0, _Q_LOCKED_VAL)) {
@@ -645,33 +645,33 @@ __komb_spin_lock(struct qspinlock *lock, enum fds_lock_mechanisms lockm)
 		return;
 	}
 
-        //goto queue;
-
-	if (val == _Q_PENDING_VAL) {
-		cnt = _Q_PENDING_LOOPS;
-		val = atomic_cond_read_relaxed(
-			&lock->val, (VAL != _Q_PENDING_VAL) || !cnt--);
-	}
-
-        //TODO: Check if the below condition is correct
-	if ((val & ~_Q_LOCKED_MASK) ||
-	    ((val & _Q_LOCKED_MASK) == _Q_LOCKED_IRQ_VAL))
-		goto queue;
-
-	val = komb_fetch_set_pending_acquire(lock);
-
-	if (unlikely(val & ~_Q_LOCKED_MASK)) {
-		if (!(val & _Q_PENDING_MASK))
-			clear_pending(lock);
-
-		goto queue;
-	}
-
-	if (val & _Q_LOCKED_MASK)
-		atomic_cond_read_acquire(&lock->val, !(VAL & _Q_LOCKED_MASK));
-
-	clear_pending_set_locked(lock);
-	return;
+//        goto queue;
+//
+//	if (val == _Q_PENDING_VAL) {
+//		cnt = _Q_PENDING_LOOPS;
+//		val = atomic_cond_read_relaxed(
+//			&lock->val, (VAL != _Q_PENDING_VAL) || !cnt--);
+//	}
+//
+//        //TODO: Check if the below condition is correct
+//	if ((val & ~_Q_LOCKED_MASK) ||
+//	    ((val & _Q_LOCKED_MASK) == _Q_LOCKED_IRQ_VAL))
+//		goto queue;
+//
+//	val = komb_fetch_set_pending_acquire(lock);
+//
+//	if (unlikely(val & ~_Q_LOCKED_MASK)) {
+//		if (!(val & _Q_PENDING_MASK))
+//			clear_pending(lock);
+//
+//		goto queue;
+//	}
+//
+//	if (val & _Q_LOCKED_MASK)
+//		atomic_cond_read_acquire(&lock->val, !(VAL & _Q_LOCKED_MASK));
+//
+//	clear_pending_set_locked(lock);
+//	return;
 
 queue:
 	curr_node = this_cpu_ptr(&komb_nodes[0]);
@@ -809,6 +809,9 @@ irq_release:
 
 void komb_spin_lock(struct qspinlock *lock)
 {
+	if (atomic_cmpxchg_acquire(&lock->val, 0, _Q_LOCKED_VAL) == 0)
+		return;
+
 	__komb_spin_lock(lock, FDS_QSPINLOCK);
 }
 EXPORT_SYMBOL_GPL(komb_spin_lock);
@@ -816,9 +819,6 @@ EXPORT_SYMBOL_GPL(komb_spin_lock);
 __always_inline void komb_spin_lock_fds(struct qspinlock *lock,
 					struct fds_lock_key *key)
 {
-	if (atomic_cmpxchg_acquire(&lock->val, 0, _Q_LOCKED_VAL) == 0)
-		return;
-
 	if (key->lockm == FDS_TDLOCK)
 		kd_spin_lock(lock);
 	else

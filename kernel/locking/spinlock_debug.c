@@ -22,12 +22,12 @@ void __raw_spin_lock_init(raw_spinlock_t *lock, const char *name,
 	init_fds_lock_key(key, name, DEFAULT_FDS_LOCK);
 }
 
-void __raw_spin_lock_init_disable_fds(raw_spinlock_t *lock, const char *name,
-				      struct fds_lock_key *key)
+void __raw_spin_lock_init_static_fds(raw_spinlock_t *lock, const char *name,
+				      struct fds_lock_key *key, enum fds_lock_mechanisms lockm)
 {
 	lock->raw_lock = (arch_spinlock_t)__ARCH_SPIN_LOCK_UNLOCKED;
 	lock->key = key;
-	init_fds_lock_key(key, name, FDS_DISABLE);
+	init_fds_lock_key(key, name, lockm);
 }
 
 EXPORT_SYMBOL(__raw_spin_lock_init);

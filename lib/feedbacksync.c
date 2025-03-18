@@ -56,7 +56,7 @@ __always_inline void init_fds_lock_key(struct fds_lock_key *key, const char* _na
         if (key->name == NULL) {      
                 key->name = _name;    
                 key->lockm = _lockm;
-                for(i = 0; i < FDS_MAX_CPUS; i++)
+                for(i = 0; i < (FDS_MAX_CPUS * 8); i++)
                         key->bucket[i] = 0;  
         }                             
 }
@@ -81,7 +81,7 @@ void __stat_lock_acquire(struct fds_lock_key *key, enum HASHTABLE_TYPE ht_type)
 		return;
 
 	struct lock_stat *stat_ptr = NULL;
-	uint64_t bucket = key->bucket[smp_processor_id()];
+	uint64_t bucket = key->bucket[smp_processor_id() * 8];
 
 	if(bucket) {
 		stat_ptr = get_stat_ptr(bucket, ht_type);
@@ -103,7 +103,7 @@ void __stat_lock_acquire(struct fds_lock_key *key, enum HASHTABLE_TYPE ht_type)
 			stat_ptr->key = key;
 			stat_ptr->counter = 1;
 			stat_ptr->name = kstrdup(key->name, GFP_KERNEL);
-			key->bucket[smp_processor_id()] = bucket;
+			key->bucket[smp_processor_id() * 8] = bucket;
 			//printk(KERN_ALERT "ALLOCATED cpuid: %d bucket: %ld addr1: %px addr2: %px name: %s\n", 
                         //   smp_processor_id(), bucket, stat_ptr->key, key, key->name);
 			goto out;
@@ -139,7 +139,7 @@ void mutex_stat_lock_acquire(struct fds_lock_key *key)
 
 void spin_stat_lock_acquire(struct fds_lock_key *key)
 {
-        return;
+	return;
 	//__stat_lock_acquire(key, SPIN_HASHTABLE);
 }
 
@@ -394,7 +394,7 @@ void print_fds_stats(void)
 #define IS_DIRECTION 2
 
 #define QSPINLOCK_LIMIT 10000
-#define MONITOR_TIME 5000 // In milliseconds
+#define MONITOR_TIME 10000 // In milliseconds
 
 #define QSPINLOCK_PER_SECOND 200000
 #define MUTEX_PER_SECOND 150000
