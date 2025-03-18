@@ -49,9 +49,9 @@ static inline bool check_tclock_node(struct komb_node *node)
 	return (node->lockm == FDS_TCLOCK);
 }
 
-__always_inline void clear_locked_set_completed(struct komb_node *lock)
+__always_inline void clear_locked_set_completed(struct komb_node *node)
 {
-	WRITE_ONCE(lock->locked_completed, 1);
+	WRITE_ONCE(node->locked_completed, 1);
 }
 
 __always_inline void clear_pending_set_locked(struct qspinlock *lock)
@@ -127,13 +127,20 @@ __always_inline void add_to_local_queue(struct komb_node *node)
 	ptr->is_local_queue_tail_last = true;
 }
 
-__always_inline bool check_exit_condition(enum fds_lock_mechanisms curr_lockm, struct komb_node *my_node) {
+__always_inline int __check_exit_condition(enum fds_lock_mechanisms curr_lockm, struct komb_node *my_node) {
 	// return (my_node == NULL || check_irq_node(my_node) ||
 	// 		my_node->next == NULL || check_irq_node(my_node->next));
 			
 	if(curr_lockm == FDS_TCLOCK) {
-		return (my_node == NULL || check_irq_node(my_node) || !check_tclock_node(my_node) ||
-			my_node->next == NULL || check_irq_node(my_node->next));
+	//	return (my_node == NULL || check_irq_node(my_node) || !check_tclock_node(my_node) ||
+	//		my_node->next == NULL || check_irq_node(my_node->next));
+		if(my_node == NULL || check_irq_node(my_node) || !check_tclock_node(my_node))
+			return 1;
+		else if(READ_ONCE(my_node->next) == NULL || check_irq_node(my_node->next))
+			return 2;
+		else
+			return 0;
+
 	} else if(curr_lockm == FDS_TDLOCK) {
 		return (my_node == NULL || check_irq_node(my_node) || check_tclock_node(my_node));
 	} else {
@@ -141,6 +148,24 @@ __always_inline bool check_exit_condition(enum fds_lock_mechanisms curr_lockm, s
 	}
 	return true;
 }
+
+__always_inline bool check_exit_condition(enum fds_lock_mechanisms curr_lockm, struct komb_node *my_node) {
+	return __check_exit_condition(curr_lockm, my_node);
+	/*int i = 0;
+	int exit_cond = 0;
+	while(true) {
+		exit_cond = __check_exit_condition(curr_lockm, my_node);
+		switch(exit_cond) {
+			case 0: return false;
+			case 1: return true;
+			case 2: i++;
+				if(i > 100)
+					return true;
+		}	
+	}
+	return true;*/
+}
+
 
 __always_inline struct komb_node *get_next_node(struct komb_node *my_node)
 {
@@ -809,8 +834,8 @@ irq_release:
 
 void komb_spin_lock(struct qspinlock *lock)
 {
-	if (atomic_cmpxchg_acquire(&lock->val, 0, _Q_LOCKED_VAL) == 0)
-		return;
+	//if (atomic_cmpxchg_acquire(&lock->val, 0, _Q_LOCKED_VAL) == 0)
+	//	return;
 
 	__komb_spin_lock(lock, FDS_QSPINLOCK);
 }

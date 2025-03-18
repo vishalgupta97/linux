@@ -994,7 +994,7 @@ static int __init feedback_sync_init(void)
 	komb_rwsem_init();
 
 	fdsthreads = kthread_create(fds_monitor, NULL, "fds_monitor");
-	kthread_bind(fdsthreads, 95);
+	kthread_bind(fdsthreads, 0);
 	if (fdsthreads) {
 		wake_up_process(fdsthreads);
 		return 0;

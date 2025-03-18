@@ -133,8 +133,9 @@ static inline void __raw_spin_lock(raw_spinlock_t *lock)
 	spin_acquire(&lock->dep_map, 0, 0, _RET_IP_);
 	if(do_raw_spin_trylock(lock))
 		return;
-        spin_stat_lock_acquire(lock->key);
-	do_raw_spin_lock(lock);
+	struct fds_lock_key *key = lock->key;
+        spin_stat_lock_acquire(key);
+	do_raw_spin_lock_fds(lock, key);
 	//LOCK_CONTENDED(lock, do_raw_spin_trylock, do_raw_spin_lock);
 }
 
