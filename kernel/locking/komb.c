@@ -133,7 +133,7 @@ __always_inline bool check_exit_condition(enum fds_lock_mechanisms curr_lockm, s
 			
 	if(curr_lockm == FDS_TCLOCK) {
 		return (my_node == NULL || check_irq_node(my_node) || !check_tclock_node(my_node) ||
-			my_node->next == NULL || check_irq_node(my_node->next)) || !check_tclock_node(my_node->next);
+			my_node->next == NULL || check_irq_node(my_node->next));
 	} else if(curr_lockm == FDS_TDLOCK) {
 		return (my_node == NULL || check_irq_node(my_node) || check_tclock_node(my_node));
 	} else {
