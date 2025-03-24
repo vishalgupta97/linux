@@ -10,7 +10,7 @@
 #include <linux/kernel.h>
 #include <linux/syscalls.h>
 
-//#if DSM_DEBUG
+#if DSM_DEBUG
 #define print_debug(fmt, ...)                                              \
 	({                                                                 \
 		printk(KERN_EMERG "[%d] komb (%s) lock(%px): " fmt,        \
@@ -21,10 +21,10 @@
 		printk(KERN_EMERG "[%d] komb (%s): " fmt, smp_processor_id(), \
 		       __func__, ##__VA_ARGS__);                              \
 	})
-/*#else
+#else
 #define print_debug(fmt, ...)
 #define print_debug_without_lock(fmt, ...)
-#endif*/
+#endif
 
 #if DEBUG_KOMB
 #define KOMB_BUG_ON(cond_expr) BUG_ON(cond_expr)

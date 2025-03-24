@@ -153,20 +153,20 @@ __always_inline int __check_rwsem_exit_condition(enum fds_lock_mechanisms curr_l
 }
 
 __always_inline bool check_rwsem_exit_condition(enum fds_lock_mechanisms curr_lockm, struct mutex_node *my_node) {
-	return __check_rwsem_exit_condition(curr_lockm, my_node) > 0;
-//	int i = 0;
-//	int exit_cond = 0;
-//	while(true) {
-//		exit_cond = __check_rwsem_exit_condition(curr_lockm, my_node);
-//		switch(exit_cond) {
-//			case 0: return false;
-//			case 1: return true;
-//			case 2: i++;
-//				if(i > 100)
-//					return true;
-//		}	
-//	}
-//	return true;
+//	return __check_rwsem_exit_condition(curr_lockm, my_node) > 0;
+	int i = 0;
+	int exit_cond = 0;
+	while(true) {
+		exit_cond = __check_rwsem_exit_condition(curr_lockm, my_node);
+		switch(exit_cond) {
+			case 0: return false;
+			case 1: return true;
+			case 2: i++;
+				if(i > 100)
+					return true;
+		}	
+	}
+	return true;
 }
 
 
@@ -251,7 +251,9 @@ static inline u64 komb_read_lock_slowpath(struct rw_semaphore *lock)
 }
 
 void check_and_set_rbias(struct rw_semaphore *lock, u64 cnts) {
-	if (!READ_ONCE(lock->rbias) &&
+	return;
+
+	/*if (!READ_ONCE(lock->rbias) &&
 	    (lock->key && lock->key->lockm == FDS_PERCPU)) {
 		if((cnts >> _KOMB_RWSEM_R_SHIFT) == 1) {
 			if(READ_ONCE(lock->percpu_index) == -1)
@@ -259,7 +261,7 @@ void check_and_set_rbias(struct rw_semaphore *lock, u64 cnts) {
 			smp_mb();
 			WRITE_ONCE(lock->rbias, 1);
 		}
-	}
+	}*/
 }
 
 __always_inline bool __down_read_fastpath(struct rw_semaphore *lock)
@@ -286,7 +288,7 @@ __always_inline bool __down_read_fastpath(struct rw_semaphore *lock)
 
 void down_read(struct rw_semaphore *lock)
 {
-	migrate_disable();
+	//migrate_disable();
 
 	if(__down_read_fastpath(lock)) {
 		goto read_exit;	
@@ -311,7 +313,7 @@ check_bias_and_exit:
 	check_and_set_rbias(lock, cnts);
 read_exit:
 	this_cpu_inc(rwsem_reads);
-	read_stat_lock_acquire(lock->key);
+	//read_stat_lock_acquire(lock->key);
 	return;
 }
 EXPORT_SYMBOL(down_read);
@@ -606,7 +608,7 @@ unlock:
 //	}
 
         //TODO: Check this
-	WRITE_ONCE(lock->wlocked, prev_locked_val);
+	//WRITE_ONCE(lock->wlocked, prev_locked_val);
 
 release:
 	return 0;
@@ -703,12 +705,55 @@ __komb_write_stack_switch(struct rw_semaphore *lock)
 #pragma GCC push_options
 #pragma GCC optimize("O3")
 __attribute__((noipa)) noinline notrace static
+void __down_write_tclock(struct rw_semaphore *lock)
+{
+	__komb_write_stack_switch(lock);
+
+	print_debug("current: %px wlocked: %d komb-curr-waiter_task: %px\n", current, lock->wlocked, READ_ONCE(current->komb_curr_waiter_task));
+
+	KOMB_BUG_ON(lock->wlocked == _KOMB_RWSEM_W_COMBINER &&
+		    READ_ONCE(current->komb_curr_waiter_task) == NULL);
+
+	if (READ_ONCE(current->komb_curr_waiter_task)) {
+		struct mutex_node *curr_node =
+			((struct task_struct *)current->komb_curr_waiter_task)
+				->komb_mutex_node;
+
+		if ((struct rw_semaphore *)curr_node->lock == lock) {
+			KOMB_BUG_ON(lock->wlocked != _KOMB_RWSEM_W_COMBINER);
+			struct mutex_node *next_node = get_next_node(curr_node);
+			print_debug("get_next_node called\n");
+			if (next_node == NULL)
+				current->komb_next_waiter_task = NULL;
+			else
+				current->komb_next_waiter_task =
+					next_node->task_struct_ptr;
+		}
+
+		wake_up_waiter(curr_node);
+
+		if (current->komb_prev_waiter_task) {
+			struct mutex_node *prev_node =
+				((struct task_struct *)
+					 current->komb_prev_waiter_task)
+					->komb_mutex_node;
+
+			KOMB_BUG_ON(prev_node->lock != lock);
+			print_debug("Waking up prev waiter: %d\n",
+				    prev_node->cpuid);
+			wake_up_waiter(prev_node);
+			clear_locked_set_completed(prev_node);
+			current->komb_prev_waiter_task = NULL;
+		}
+	}
+}
+#pragma GCC pop_options
+
 void __down_write(struct rw_semaphore *lock, enum fds_lock_mechanisms lockm)
 {
-	struct mutex_node *curr_node = get_komb_mutex_node(lock);
-
 	if (lockm == FDS_QSPINLOCK || lockm == FDS_PERCPU) {
 		struct mutex_node *prev, *next;
+		struct mutex_node *curr_node = get_komb_mutex_node(lock);
 
 		curr_node->locked = true;
 		curr_node->completed = KOMB_WAITER_UNPROCESSED;
@@ -777,52 +822,12 @@ irq_unlock:
 		return;
 	}
 
-	__komb_write_stack_switch(lock);
-
-	print_debug("current: %px wlocked: %d komb-curr-waiter_task: %px\n", current, lock->wlocked, READ_ONCE(current->komb_curr_waiter_task));
-
-	// TODO: Check if this condition is needed
-	KOMB_BUG_ON(lock->wlocked == _KOMB_RWSEM_W_COMBINER &&
-		    READ_ONCE(current->komb_curr_waiter_task) == NULL);
-
-	if (READ_ONCE(current->komb_curr_waiter_task)) {
-		struct mutex_node *curr_node =
-			((struct task_struct *)current->komb_curr_waiter_task)
-				->komb_mutex_node;
-
-		if ((struct rw_semaphore *)curr_node->lock == lock) {
-			KOMB_BUG_ON(lock->wlocked != _KOMB_RWSEM_W_COMBINER);
-			struct mutex_node *next_node = get_next_node(curr_node);
-			print_debug("get_next_node called\n");
-			if (next_node == NULL)
-				current->komb_next_waiter_task = NULL;
-			else
-				current->komb_next_waiter_task =
-					next_node->task_struct_ptr;
-		}
-
-		wake_up_waiter(curr_node);
-
-		if (current->komb_prev_waiter_task) {
-			struct mutex_node *prev_node =
-				((struct task_struct *)
-					 current->komb_prev_waiter_task)
-					->komb_mutex_node;
-
-			KOMB_BUG_ON(prev_node->lock != lock);
-			print_debug("Waking up prev waiter: %d\n",
-				    prev_node->cpuid);
-			wake_up_waiter(prev_node);
-			clear_locked_set_completed(prev_node);
-			current->komb_prev_waiter_task = NULL;
-		}
-	}
+	__down_write_tclock(lock);
 }
-#pragma GCC pop_options
 
 void down_write(struct rw_semaphore *lock)
 {
-	migrate_disable();
+	//migrate_disable();
 	u64 val, cnt;
 	struct fds_lock_key *key;
 	val = atomic_long_cmpxchg_acquire(&lock->cnts, 0, _KOMB_RWSEM_W_LOCKED);
@@ -909,7 +914,8 @@ void up_read(struct rw_semaphore *lock)
 		}
 	}
 read_exit:
-	migrate_enable();
+	//migrate_enable();
+	return;
 }
 EXPORT_SYMBOL(up_read);
 
@@ -923,7 +929,7 @@ __attribute__((noipa)) noinline notrace void up_write(struct rw_semaphore *lock)
 
 	uint64_t temp_lock_addr;
 
-	migrate_enable();
+	//migrate_enable();
 
 	j = 0;
 	max_idx = -1;
@@ -1073,8 +1079,8 @@ int down_read_trylock(struct rw_semaphore *lock)
 
 read_exit:
 	this_cpu_inc(rwsem_reads);
-	read_stat_lock_acquire(lock->key);
-	migrate_disable();
+	//read_stat_lock_acquire(lock->key);
+	//migrate_disable();
 	return 1;
 
 }
@@ -1095,7 +1101,7 @@ int down_write_trylock(struct rw_semaphore *lock)
 	if (val) {
 		wait_for_visible_readers(lock, key);
 		this_cpu_inc(rwsem_writes);
-		migrate_disable();
+		//migrate_disable();
 	}
 	return val;
 }

@@ -127,8 +127,8 @@ void read_stat_lock_acquire(struct fds_lock_key *key)
 
 void write_stat_lock_acquire(struct fds_lock_key *key)
 {
-        return;
-	//__stat_lock_acquire(key, WRITE_HASHTABLE);
+        //return;
+	__stat_lock_acquire(key, WRITE_HASHTABLE);
 }
 
 void mutex_stat_lock_acquire(struct fds_lock_key *key)
