@@ -220,7 +220,7 @@ unlock:
 		print_debug("Writer got the lock slowpath\n");
 		aqm_unlock(&lock->reader_wait_lock);
 
-		wait_for_visible_readers(lock);
+		wait_for_visible_readers(lock, curr_node->key);
 
 		rq_tail =
 			per_cpu_ptr(&rwsem_rq_tail, select_delegation_cpu(lock));
@@ -493,17 +493,10 @@ kombd_write_lock_slowpath(struct rw_semaphore *lock)
 void komb_rwsemd_down_write(struct rw_semaphore *lock)
 {
 	struct mutex_node *curr_node = NULL;
-	u64 val;
-	val = atomic_long_cmpxchg_acquire(&lock->cnts, 0, _KOMB_RWSEM_W_LOCKED);
-	if (val == 0) {
-		wait_for_visible_readers(lock);
-		return;
-	}
 
 	curr_node = rwsemd_get_mutex_node(lock);
 	KOMB_BUG_ON(curr_node == NULL);
 
-	preempt_disable();
 	kombd_write_lock_slowpath(lock);
 
 	if (current->komb_curr_waiter_task) {
@@ -539,9 +532,7 @@ void komb_rwsemd_down_write(struct rw_semaphore *lock)
 			rwsemd_clear_locked_set_completed(prev_node);
 			current->komb_prev_waiter_task = NULL;
 		}
-	}
-	
-	preempt_enable();
+	}	
 }
 
 static int __init rwsemd_init(void)

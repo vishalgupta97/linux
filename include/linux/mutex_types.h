@@ -52,6 +52,7 @@ struct mutex_node {
 			void *lock;
 			struct ww_acquire_ctx *ww_ctx;
 			enum fds_lock_mechanisms lockm;
+			struct fds_lock_key *key;
 		};
 		char alignment1[128];
 	};

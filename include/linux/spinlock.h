@@ -354,6 +354,13 @@ static __always_inline raw_spinlock_t *spinlock_check(spinlock_t *lock)
 						 #_lock, &__key, FDS_TCLOCK);       \
 	} while (0)
 
+#define spin_lock_init_tdlock_fds(_lock)                               \
+	do {                                                            \
+		static struct fds_lock_key __key;                       \
+		__raw_spin_lock_init_static_fds(spinlock_check(_lock), \
+						 #_lock, &__key, FDS_TDLOCK);       \
+	} while (0)
+
 extern struct task_struct *komb_get_current(void);
 
 static __always_inline void spin_lock(spinlock_t *lock)

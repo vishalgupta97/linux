@@ -85,14 +85,23 @@ static inline int rwsem_is_locked(struct rw_semaphore *sem)
 #define DECLARE_RWSEM(name) struct rw_semaphore name = __RWSEM_INITIALIZER(name)
 
 extern void __init_rwsem(struct rw_semaphore *sem, const char *name,
-			 struct fds_lock_key *key);
+			 struct fds_lock_key *key,
+			 enum fds_lock_mechanisms lockm);
 
 #define init_rwsem(sem)                            \
 	do {                                       \
 		static struct fds_lock_key __key;  \
                                                    \
-		__init_rwsem((sem), #sem, &__key); \
+		__init_rwsem((sem), #sem, &__key, DEFAULT_FDS_LOCK); \
 	} while (0)
+
+#define init_rwsem_static_tclock(sem)                            \
+	do {                                       \
+		static struct fds_lock_key __key;  \
+                                                   \
+		__init_rwsem((sem), #sem, &__key, FDS_TCLOCK); \
+	} while (0)
+
 
 extern void komb_rwsem_init(void);
 

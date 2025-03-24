@@ -97,7 +97,7 @@ static inline void vma_end_write_all(struct mm_struct *mm) {}
 
 static inline void mmap_init_lock(struct mm_struct *mm)
 {
-	init_rwsem(&mm->mmap_lock);
+	init_rwsem_static_tclock(&mm->mmap_lock);
 }
 
 static inline void mmap_write_lock(struct mm_struct *mm)

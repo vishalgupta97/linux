@@ -410,20 +410,6 @@ kd_spin_lock(struct qspinlock *lock)
 	struct shadow_stack *ptr;
 	uint32_t curr_cpuid, prev_cpuid;
 	struct komb_node *prev_node, *next_node;
-	u32 val, cnt;
-
-	val = atomic_cmpxchg_acquire(&lock->val, 0, _Q_LOCKED_VAL);
-	if (val == 0)
-		return;
-
-	KOMB_BUG_ON(!in_atomic());
-
-queue:
-	if (unlikely(system_state != SYSTEM_RUNNING)) {
-		while (!kd_spin_trylock(lock))
-			cpu_relax();
-		return;
-	}
 
 	curr_node = this_cpu_ptr(&komb_nodes[0]);
 	KOMB_BUG_ON(curr_node == NULL);
