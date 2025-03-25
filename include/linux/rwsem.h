@@ -102,6 +102,13 @@ extern void __init_rwsem(struct rw_semaphore *sem, const char *name,
 		__init_rwsem((sem), #sem, &__key, FDS_TCLOCK); \
 	} while (0)
 
+#define init_rwsem_static_percpu(sem)                            \
+	do {                                       \
+		static struct fds_lock_key __key;  \
+                                                   \
+		__init_rwsem((sem), #sem, &__key, FDS_PERCPU); \
+	} while (0)
+
 
 extern void komb_rwsem_init(void);
 

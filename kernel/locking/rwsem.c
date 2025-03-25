@@ -288,7 +288,7 @@ __always_inline bool __down_read_fastpath(struct rw_semaphore *lock)
 
 void down_read(struct rw_semaphore *lock)
 {
-	//migrate_disable();
+	migrate_disable();
 
 	if(__down_read_fastpath(lock)) {
 		goto read_exit;	
@@ -827,7 +827,6 @@ irq_unlock:
 
 void down_write(struct rw_semaphore *lock)
 {
-	//migrate_disable();
 	u64 val, cnt;
 	struct fds_lock_key *key;
 	val = atomic_long_cmpxchg_acquire(&lock->cnts, 0, _KOMB_RWSEM_W_LOCKED);
@@ -852,6 +851,7 @@ void down_write(struct rw_semaphore *lock)
 
 write_exit:
 	this_cpu_inc(rwsem_writes);
+	//migrate_disable();
 	return;
 }
 EXPORT_SYMBOL(down_write);
@@ -914,7 +914,7 @@ void up_read(struct rw_semaphore *lock)
 		}
 	}
 read_exit:
-	//migrate_enable();
+	migrate_enable();
 	return;
 }
 EXPORT_SYMBOL(up_read);
@@ -1080,7 +1080,7 @@ int down_read_trylock(struct rw_semaphore *lock)
 read_exit:
 	this_cpu_inc(rwsem_reads);
 	//read_stat_lock_acquire(lock->key);
-	//migrate_disable();
+	migrate_disable();
 	return 1;
 
 }
@@ -1132,6 +1132,7 @@ void downgrade_write(struct rw_semaphore *lock)
 			atomic_long_add_return_acquire(_KOMB_RWSEM_R_BIAS,
 						       &lock->cnts);
 			WRITE_ONCE(lock->wlocked, 0);
+			migrate_disable();
 			return;
 		}
 		BUG_ON(true);
