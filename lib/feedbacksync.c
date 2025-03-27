@@ -15,6 +15,7 @@
 #include <linux/cpumask.h>
 
 #include <fds/decision_tree.h>
+#include <fds/rwsem_decision_tree.h>
 
 static bool fds_running = false;
 static bool fds_oracle_running = false;
@@ -29,6 +30,7 @@ struct lock_stat {
 			struct fds_lock_key *key;
 			const char *name;
 			uint64_t counter;
+                        uint64_t read_counter;
 			struct hlist_node hnode;
 			cpumask_t contending_cpus;
 		};
@@ -64,7 +66,7 @@ __always_inline void init_fds_lock_key(struct fds_lock_key *key, const char* _na
 __always_inline struct lock_stat * get_stat_ptr(uint64_t bucket, enum HASHTABLE_TYPE ht_type) {
 	switch(ht_type) {
 	case READ_HASHTABLE:
-		return this_cpu_ptr(&read_lock_stats[bucket]);
+		//return this_cpu_ptr(&read_lock_stats[bucket]);
 	case WRITE_HASHTABLE:
 		return this_cpu_ptr(&write_lock_stats[bucket]);
 	case SPIN_HASHTABLE:
@@ -86,7 +88,10 @@ void __stat_lock_acquire(struct fds_lock_key *key, enum HASHTABLE_TYPE ht_type)
 	if(bucket) {
 		stat_ptr = get_stat_ptr(bucket, ht_type);
 		if(stat_ptr->key == key) {
-			stat_ptr->counter++;
+                        if(ht_type == READ_HASHTABLE)
+                                stat_ptr->read_counter++;
+                        else
+			        stat_ptr->counter++;
 			goto out;	
 		}
 		printk(KERN_ALERT "CHECK cpuid: %d bucket: %ld addr1: %px addr2: %px name: %s\n", 
@@ -102,13 +107,18 @@ void __stat_lock_acquire(struct fds_lock_key *key, enum HASHTABLE_TYPE ht_type)
 				this_cpu_inc(collisions);
 			stat_ptr->key = key;
 			stat_ptr->counter = 1;
+                        if(ht_type == READ_HASHTABLE)
+                                stat_ptr->read_counter = 1;
 			stat_ptr->name = kstrdup(key->name, GFP_KERNEL);
 			key->bucket[smp_processor_id() * 8] = bucket;
 			//printk(KERN_ALERT "ALLOCATED cpuid: %d bucket: %ld addr1: %px addr2: %px name: %s\n", 
                         //   smp_processor_id(), bucket, stat_ptr->key, key, key->name);
 			goto out;
 		} else if (stat_ptr->key == key) {
-			stat_ptr->counter++;
+                        if(ht_type == READ_HASHTABLE)
+                                stat_ptr->read_counter++;
+                        else
+			        stat_ptr->counter++;
 			goto out;
 		}
 		bucket++;
@@ -121,8 +131,8 @@ out:
 
 void read_stat_lock_acquire(struct fds_lock_key *key)
 {
-        return;
-	//__stat_lock_acquire(key, READ_HASHTABLE);
+        //return;
+	__stat_lock_acquire(key, READ_HASHTABLE);
 }
 
 void write_stat_lock_acquire(struct fds_lock_key *key)
@@ -147,7 +157,7 @@ void spin_stat_lock_acquire(struct fds_lock_key *key)
 
 static DEFINE_SPINLOCK(stat_ht_lock);
 
-DEFINE_HASHTABLE(read_stats_ht, HASHTABLE_BITS);
+//DEFINE_HASHTABLE(read_stats_ht, HASHTABLE_BITS);
 DEFINE_HASHTABLE(write_stats_ht, HASHTABLE_BITS);
 DEFINE_HASHTABLE(spin_stats_ht, HASHTABLE_BITS);
 DEFINE_HASHTABLE(mutex_stats_ht, HASHTABLE_BITS);
@@ -164,9 +174,11 @@ inline bool __collect_fds_stats(struct lock_stat *stat, struct lock_stat *tmp, i
 		if (stat->key == tmp->key) {
 			if(stat->counter > 0) {
 				tmp->counter += stat->counter;
+				tmp->read_counter += stat->read_counter;
 				cpumask_set_cpu(cpu, &tmp->contending_cpus);
 			}
-			stat->counter = 0; 
+			stat->counter = 0;
+			stat->read_counter = 0; 
 
 			return true;
 		}
@@ -222,7 +234,7 @@ void collect_fds_stats(void)
 
 	for (j = 0; j < NUM_BUCKETS; j++) {
 		for_each_online_cpu(i) {
-			stat = per_cpu_ptr(&read_lock_stats[j], i);
+			/*stat = per_cpu_ptr(&read_lock_stats[j], i);
 			if (stat->counter > 0) {
 				bool found = false;
 				hash_for_each(read_stats_ht, bkt, tmp, hnode) {
@@ -235,7 +247,7 @@ void collect_fds_stats(void)
 					hash_add(read_stats_ht, &stat->hnode,
 						 stat->key);
 				}
-			}
+			}*/
 
 			stat = per_cpu_ptr(&write_lock_stats[j], i);
 			if (stat->counter > 0) {
@@ -298,6 +310,7 @@ void collect_fds_stats(void)
 
 void __reset_fds_stats(struct lock_stat *tmp) {
 	tmp->counter = 0;
+	tmp->read_counter = 0;
 	cpumask_clear(&tmp->contending_cpus);
 }
 
@@ -313,9 +326,9 @@ void reset_fds_stats(void)
 
 	spin_lock(&stat_ht_lock);
 
-	hash_for_each(read_stats_ht, bkt, tmp, hnode) {
+	/*hash_for_each(read_stats_ht, bkt, tmp, hnode) {
 		__reset_fds_stats(tmp);
-	}
+	}*/
 	hash_for_each(write_stats_ht, bkt, tmp, hnode) {
 		__reset_fds_stats(tmp);
 	}
@@ -335,9 +348,9 @@ inline void __print_fds_stats(struct lock_stat *tmp, const char *type,
 			      uint64_t *count)
 {
 	if (tmp->counter) {
-		if (tmp->counter > PRINT_COUNT_LIMIT)
-			printk(KERN_ALERT "%s Name: %s, Counter: %ld Contending_CPUs: %d\n", type,
-			       tmp->name, tmp->counter, cpumask_weight(&tmp->contending_cpus));
+		if (tmp->counter > PRINT_COUNT_LIMIT || tmp->read_counter > PRINT_COUNT_LIMIT)
+			printk(KERN_ALERT "%s Name: %s, Counter: %ld Read Counter: %ld Contending_CPUs: %d\n", type,
+			       tmp->name, tmp->counter, tmp->read_counter, cpumask_weight(&tmp->contending_cpus));
 		*count = *count + 1;
 	}
 }
@@ -355,9 +368,9 @@ void print_fds_stats(void)
 
 	spin_lock(&stat_ht_lock);
 
-	hash_for_each(read_stats_ht, bkt, tmp, hnode) {
+	/*hash_for_each(read_stats_ht, bkt, tmp, hnode) {
 		__print_fds_stats(tmp, "READ", &rcount);
-	}
+	}*/
 
 	hash_for_each(write_stats_ht, bkt, tmp, hnode) {
 		__print_fds_stats(tmp, "WRITE", &wcount);
@@ -442,10 +455,10 @@ static void reset_fds(void)
 
 	spin_lock(&stat_ht_lock);
 
-	hash_for_each(read_stats_ht, bkt, tmp, hnode) {
+	/*hash_for_each(read_stats_ht, bkt, tmp, hnode) {
 		tmp->key->lockm = DEFAULT_FDS_LOCK;
 		__reset_fds_stats(tmp);
-	}
+	}*/
 	hash_for_each(write_stats_ht, bkt, tmp, hnode) {
 		tmp->key->lockm = DEFAULT_FDS_LOCK;
 		__reset_fds_stats(tmp);
@@ -707,6 +720,8 @@ inline void __find_contending_locks(struct lock_stat *tmp, const char *type,
         bool is_lock_contending = false;
 
         switch(ltype) {
+		case FDS_WRITE_SEM:
+			is_lock_contending = ((tmp->counter / elapsed_time) > QSPINLOCK_PER_SECOND || (tmp->read_counter / elapsed_time) > QSPINLOCK_PER_SECOND);
                 case FDS_MUTEX:
                         is_lock_contending = (tmp->counter / elapsed_time) > MUTEX_PER_SECOND;
                         break;
@@ -739,10 +754,10 @@ void find_contending_locks(void)
 
 	spin_lock(&stat_ht_lock);
 
-	hash_for_each(read_stats_ht, bkt, tmp, hnode) {
+	/*hash_for_each(read_stats_ht, bkt, tmp, hnode) {
 		__find_contending_locks(tmp, "READ SEM", FDS_READ_SEM,
 					elapsed_time);
-	}
+	}*/
 
 	hash_for_each(write_stats_ht, bkt, tmp, hnode) {
 		__find_contending_locks(tmp, "WRITE SEM", FDS_WRITE_SEM,
@@ -851,13 +866,53 @@ static const struct proc_ops oracle_proc_ops = {
 	.proc_write = fds_oracle_write,
 };
 
+inline enum fds_lock_mechanisms get_optimal_rwsem(struct lock_stat *tmp) 
+{
+	int max_value, max_index, j;
+	long feature_vector[8];
+	feature_vector[0] = 2;
+	feature_vector[1] = (tmp->counter * 100) / (tmp->read_counter + tmp->counter);
+	feature_vector[2] = cpumask_weight(&tmp->contending_cpus);
+	feature_vector[3] = (tmp->counter + tmp->read_counter) / (MONITOR_TIME / 1000);
+	max_value = 0;
+	max_index = 0;
+	j = 0;
+	for(j = 0; j < 4; j++) {
+		if(j > 0)
+			feature_vector[4 + (j - 1)] = 0;
+		feature_vector[4 + j] = 1;
+		int value = rwsem_decision_tree(feature_vector);
+		if(value > max_value) {
+			max_value = value;
+			max_index = 4 + j;
+		}
+	}
+	printk(KERN_ALERT "RWRATIO: %ld CPUCNT:%ld RPS:%ld max_value: %d max_index: %d\n",
+			feature_vector[1], feature_vector[2], feature_vector[3],
+			max_value, max_index);
+	enum fds_lock_mechanisms next_lock_type = FDS_QSPINLOCK;
+	switch(max_index) {
+		case 4:
+		case 5:
+			next_lock_type = FDS_TCLOCK;
+			break;
+		case 6:
+			next_lock_type = FDS_PERCPU;
+			break;
+		case 7:
+			next_lock_type = FDS_QSPINLOCK;
+			break;
+	}
+	return next_lock_type;
+}
+
 inline void __monitor_fds_stats(struct lock_stat *tmp, const char *type,
 				enum fds_lock_type ltype)
 {
 	int i, j;
 	long feature_vector[8];
 	int max_value, max_index;
-	if (tmp->counter > QSPINLOCK_LIMIT) {
+	if (tmp->counter > QSPINLOCK_LIMIT || tmp->read_counter > QSPINLOCK_LIMIT) {
 		enum fds_lock_mechanisms before = tmp->key->lockm;
 		switch (ltype) {
 		case FDS_SPINLOCK:
@@ -896,11 +951,15 @@ inline void __monitor_fds_stats(struct lock_stat *tmp, const char *type,
 					next_lock_type = FDS_TCLOCK;
 					break;
 				case 6:
-					next_lock_type = FDS_TDLOCK;
+					next_lock_type = FDS_TCLOCK; //Change to TDLOCK
 					break;
 			}
 			tmp->key->lockm = next_lock_type;
 			break;
+		case FDS_WRITE_SEM:
+			tmp->key->lockm = get_optimal_rwsem(tmp);
+			break;
+
 		/*case FDS_READ_SEM:
 			for(i = 0; i < NELEMS(fds_read_sem_implementations); i++)
 				if(tmp->key->lockm == fds_read_sem_implementations[i])
@@ -925,6 +984,8 @@ inline void __monitor_fds_stats(struct lock_stat *tmp, const char *type,
 		       type, tmp->name, tmp->counter,
 		       get_str_lockm(before),
 		       get_str_lockm(tmp->key->lockm));
+	} else {
+		tmp->key->lockm = FDS_QSPINLOCK;
 	}
 }
 
@@ -935,9 +996,9 @@ void monitor_fds_stats(void)
 
 	spin_lock(&stat_ht_lock);
 
-	hash_for_each(read_stats_ht, bkt, tmp, hnode) {
+	/*hash_for_each(read_stats_ht, bkt, tmp, hnode) {
 		__monitor_fds_stats(tmp, "READ SEM", FDS_READ_SEM);
-	}
+	}*/
 
 	hash_for_each(write_stats_ht, bkt, tmp, hnode) {
 		__monitor_fds_stats(tmp, "WRITE SEM", FDS_WRITE_SEM);
@@ -947,9 +1008,9 @@ void monitor_fds_stats(void)
 		__monitor_fds_stats(tmp, "SPINLOCK", FDS_SPINLOCK);
 	}
 
-	hash_for_each(mutex_stats_ht, bkt, tmp, hnode) {
+	/*hash_for_each(mutex_stats_ht, bkt, tmp, hnode) {
 		__monitor_fds_stats(tmp, "MUTEX", FDS_MUTEX);
-	}
+	}*/
 
 	spin_unlock(&stat_ht_lock);
 }
@@ -969,7 +1030,7 @@ int fds_monitor(void *args)
 		print_komb_stats();
 		collect_fds_stats();
 		print_fds_stats();
-		//monitor_fds_stats();
+		monitor_fds_stats();
 		reset_fds_stats();
 		preempt_enable();
 monitor_end:

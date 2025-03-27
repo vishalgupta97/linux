@@ -139,7 +139,7 @@ __always_inline int __check_rwsem_exit_condition(enum fds_lock_mechanisms curr_l
 	//		my_node->next == NULL || check_irq_node(my_node->next));
 		if(my_node == NULL || check_irq_node(my_node) || !check_tclock_node(my_node))
 			return 1;
-		else if(READ_ONCE(my_node->next) == NULL || check_irq_node(my_node->next))
+		else if(READ_ONCE(my_node->next) == NULL || check_irq_node(my_node->next) || !check_tclock_node(my_node))
 			return 2;
 		else
 			return 0;
@@ -147,7 +147,8 @@ __always_inline int __check_rwsem_exit_condition(enum fds_lock_mechanisms curr_l
 	} else if(curr_lockm == FDS_TDLOCK) {
 		return (my_node == NULL || check_irq_node(my_node) || check_tclock_node(my_node));
 	} else {
-		BUG_ON(true);
+		return 1;
+		//BUG_ON(true);
 	}
 	return true;
 }
@@ -310,10 +311,10 @@ void down_read(struct rw_semaphore *lock)
 	preempt_enable();
 
 check_bias_and_exit:
+	read_stat_lock_acquire(lock->key);
 	check_and_set_rbias(lock, cnts);
 read_exit:
 	this_cpu_inc(rwsem_reads);
-	//read_stat_lock_acquire(lock->key);
 	return;
 }
 EXPORT_SYMBOL(down_read);
@@ -1068,21 +1069,19 @@ int down_read_trylock(struct rw_semaphore *lock)
 	u64 cnts =
 		atomic_long_add_return_acquire(_KOMB_RWSEM_R_BIAS, &lock->cnts);
 	if (likely(!(cnts & _KOMB_RWSEM_W_WMASK))) {
-		check_and_set_rbias(lock, cnts);
-		this_cpu_inc(rwsem_reads);
-		//print_debug("Reader got the lock\n");
-		goto read_exit;
+		goto check_bias_and_exit;
 	}
 	(void)atomic_long_sub_return_release(_KOMB_RWSEM_R_BIAS, &lock->cnts);
 
 	return 0;
 
+check_bias_and_exit:
+	read_stat_lock_acquire(lock->key);
+	check_and_set_rbias(lock, cnts);
 read_exit:
 	this_cpu_inc(rwsem_reads);
-	//read_stat_lock_acquire(lock->key);
-	migrate_disable();
+        migrate_disable();
 	return 1;
-
 }
 EXPORT_SYMBOL(down_read_trylock);
 
