@@ -7,6 +7,7 @@
 #include <linux/rwsem.h>
 #include <linux/tracepoint-defs.h>
 #include <linux/types.h>
+#include <linux/alt_locks.h>
 
 #define MMAP_LOCK_INITIALIZER(name) \
 	.mmap_lock = __ALT_RWSEM_INITIALIZER((name).mmap_lock),

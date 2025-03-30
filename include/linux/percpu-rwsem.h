@@ -156,4 +156,10 @@ static inline void percpu_rwsem_acquire(struct percpu_rw_semaphore *sem,
 	lock_acquire(&sem->dep_map, 0, 1, read, 1, NULL, ip);
 }
 
+static inline void percpu_down_write_nested(struct percpu_rw_semaphore *sem)
+{
+	percpu_down_write(sem);
+}
+
+extern void percpu_downgrade_write(struct percpu_rw_semaphore *sem);
 #endif
