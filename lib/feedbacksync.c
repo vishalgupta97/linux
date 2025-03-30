@@ -17,6 +17,8 @@
 #include <fds/decision_tree.h>
 #include <fds/rwsem_decision_tree.h>
 
+#include <fds/rwsem_random_forest.h>
+
 static bool fds_running = false;
 static bool fds_oracle_running = false;
 
@@ -722,6 +724,7 @@ inline void __find_contending_locks(struct lock_stat *tmp, const char *type,
         switch(ltype) {
 		case FDS_WRITE_SEM:
 			is_lock_contending = ((tmp->counter / elapsed_time) > QSPINLOCK_PER_SECOND || (tmp->read_counter / elapsed_time) > QSPINLOCK_PER_SECOND);
+                        break;
                 case FDS_MUTEX:
                         is_lock_contending = (tmp->counter / elapsed_time) > MUTEX_PER_SECOND;
                         break;
@@ -866,7 +869,7 @@ static const struct proc_ops oracle_proc_ops = {
 	.proc_write = fds_oracle_write,
 };
 
-inline enum fds_lock_mechanisms get_optimal_rwsem(struct lock_stat *tmp) 
+inline enum fds_lock_mechanisms get_optimal_rwsem_decision_tree_regression(struct lock_stat *tmp) 
 {
 	int max_value, max_index, j;
 	long feature_vector[8];
@@ -905,6 +908,28 @@ inline enum fds_lock_mechanisms get_optimal_rwsem(struct lock_stat *tmp)
 	}
 	return next_lock_type;
 }
+
+inline enum fds_lock_mechanisms get_optimal_rwsem_random_forest_classifier(struct lock_stat *tmp) 
+{
+	int feature_vector[3];
+	feature_vector[0] = (tmp->counter * 100) / (tmp->read_counter + tmp->counter);
+	feature_vector[1] = cpumask_weight(&tmp->contending_cpus);
+	feature_vector[2] = (tmp->counter + tmp->read_counter) / (MONITOR_TIME / 1000);
+	int optimal_index = predict_rwsem_random_forest(feature_vector) ;
+	enum fds_lock_mechanisms next_lock_type = FDS_QSPINLOCK;
+	switch(optimal_index) {
+		case 0: next_lock_type = FDS_PERCPU; break;
+		case 1: next_lock_type = FDS_QSPINLOCK; break;
+		case 2: next_lock_type = FDS_TCLOCK; break;
+		case 3: next_lock_type = FDS_TCLOCK; break; //TDLOCK
+	}
+
+	printk(KERN_ALERT "RWRATIO: %ld CPUCNT:%ld RPS:%ld next_lock: %s\n",
+			feature_vector[0], feature_vector[1], feature_vector[2],
+			get_str_lockm(next_lock_type));
+	return next_lock_type;
+}
+
 
 inline void __monitor_fds_stats(struct lock_stat *tmp, const char *type,
 				enum fds_lock_type ltype)
@@ -957,7 +982,7 @@ inline void __monitor_fds_stats(struct lock_stat *tmp, const char *type,
 			tmp->key->lockm = next_lock_type;
 			break;
 		case FDS_WRITE_SEM:
-			tmp->key->lockm = get_optimal_rwsem(tmp);
+			tmp->key->lockm = get_optimal_rwsem_random_forest_classifier(tmp);
 			break;
 
 		/*case FDS_READ_SEM:

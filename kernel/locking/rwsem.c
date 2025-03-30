@@ -251,18 +251,15 @@ static inline u64 komb_read_lock_slowpath(struct rw_semaphore *lock)
 	return cnts;
 }
 
-void check_and_set_rbias(struct rw_semaphore *lock, u64 cnts) {
-	return;
-
-	/*if (!READ_ONCE(lock->rbias) &&
-	    (lock->key && lock->key->lockm == FDS_PERCPU)) {
+void check_and_set_rbias(struct rw_semaphore *lock, u64 cnts, struct fds_lock_key *key) {
+	if ((lock->key && lock->key->lockm == FDS_PERCPU) && !(READ_ONCE(lock->rbias))) {
 		if((cnts >> _KOMB_RWSEM_R_SHIFT) == 1) {
 			if(READ_ONCE(lock->percpu_index) == -1)
 				WRITE_ONCE(lock->percpu_index, alloc_from_percpu_table(lock));
 			smp_mb();
 			WRITE_ONCE(lock->rbias, 1);
 		}
-	}*/
+	}
 }
 
 __always_inline bool __down_read_fastpath(struct rw_semaphore *lock)
@@ -291,6 +288,7 @@ void down_read(struct rw_semaphore *lock)
 {
 	migrate_disable();
 
+        struct fds_lock_key *key = lock->key; 
 	if(__down_read_fastpath(lock)) {
 		goto read_exit;	
 	}
@@ -311,8 +309,8 @@ void down_read(struct rw_semaphore *lock)
 	preempt_enable();
 
 check_bias_and_exit:
-	read_stat_lock_acquire(lock->key);
-	check_and_set_rbias(lock, cnts);
+	read_stat_lock_acquire(key);
+	check_and_set_rbias(lock, cnts, key);
 read_exit:
 	this_cpu_inc(rwsem_reads);
 	return;
@@ -910,6 +908,7 @@ void up_read(struct rw_semaphore *lock)
 			KOMB_BUG_ON(lock->wlocked != _KOMB_RWSEM_W_DOWNGRADE);
 			lock->wlocked = _KOMB_RWSEM_W_COMBINER;
 			up_write(lock);
+                        return; // For combiner, no need to enable migration.
 		} else {
 			BUG_ON(true);
 		}
@@ -951,7 +950,7 @@ __attribute__((noipa)) noinline notrace void up_write(struct rw_semaphore *lock)
 			//if (lock->key.ptr && lock->key.ptr->lockm == FDS_PERCPU)
 			//	WRITE_ONCE(lock->rbias, 1);
 			// cnts passed to allow allocated as well if needed.
-			check_and_set_rbias(lock, _KOMB_RWSEM_R_BIAS);
+			check_and_set_rbias(lock, _KOMB_RWSEM_R_BIAS, lock->key);
 			//print_debug("Writer releasing on fastpath\n");			
 			WRITE_ONCE(lock->wlocked, 0);
 		} else if (lock->wlocked == _KOMB_RWSEM_W_COMBINER) {
@@ -1063,6 +1062,7 @@ EXPORT_SYMBOL(down_read_interruptible);
 
 int down_read_trylock(struct rw_semaphore *lock)
 {
+        struct fds_lock_key *key = lock->key;
 	if(__down_read_fastpath(lock)) 
 		goto read_exit;
 
@@ -1076,8 +1076,8 @@ int down_read_trylock(struct rw_semaphore *lock)
 	return 0;
 
 check_bias_and_exit:
-	read_stat_lock_acquire(lock->key);
-	check_and_set_rbias(lock, cnts);
+	read_stat_lock_acquire(key);
+	check_and_set_rbias(lock, cnts, key);
 read_exit:
 	this_cpu_inc(rwsem_reads);
         migrate_disable();
@@ -1131,8 +1131,7 @@ void downgrade_write(struct rw_semaphore *lock)
 			atomic_long_add_return_acquire(_KOMB_RWSEM_R_BIAS,
 						       &lock->cnts);
 			WRITE_ONCE(lock->wlocked, 0);
-			migrate_disable();
-			return;
+                        goto downgrade_exit;
 		}
 		BUG_ON(true);
 		return;
@@ -1143,8 +1142,11 @@ void downgrade_write(struct rw_semaphore *lock)
 		this_cpu_inc(rwsem_downgrade);
 #endif
 		lock->wlocked = _KOMB_RWSEM_W_DOWNGRADE;
-		return;
+                return; //For Combiner, no need to disable migration.
 	}
 	BUG_ON(true);
+downgrade_exit:
+        migrate_disable();
+        return;
 }
 EXPORT_SYMBOL(downgrade_write);
