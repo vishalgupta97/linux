@@ -145,8 +145,8 @@ void write_stat_lock_acquire(struct fds_lock_key *key)
 
 void mutex_stat_lock_acquire(struct fds_lock_key *key)
 {
-        return;
-	//__stat_lock_acquire(key, MUTEX_HASHTABLE);
+        //return;
+	__stat_lock_acquire(key, MUTEX_HASHTABLE);
 }
 
 void spin_stat_lock_acquire(struct fds_lock_key *key)

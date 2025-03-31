@@ -308,8 +308,8 @@ void down_read(struct rw_semaphore *lock)
 	cnts = komb_read_lock_slowpath(lock);
 	preempt_enable();
 
-check_bias_and_exit:
 	read_stat_lock_acquire(key);
+check_bias_and_exit:
 	check_and_set_rbias(lock, cnts, key);
 read_exit:
 	this_cpu_inc(rwsem_reads);
@@ -1076,7 +1076,7 @@ int down_read_trylock(struct rw_semaphore *lock)
 	return 0;
 
 check_bias_and_exit:
-	read_stat_lock_acquire(key);
+	//read_stat_lock_acquire(key);
 	check_and_set_rbias(lock, cnts, key);
 read_exit:
 	this_cpu_inc(rwsem_reads);
