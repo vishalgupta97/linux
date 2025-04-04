@@ -27,6 +27,12 @@ static inline void mutex_destroy(struct mutex *lock)
 		___mutex_init((mutex), #mutex, &__key); \
 	} while (0)
 
+#define ___MUTEX_INITIALIZER(lockname, keyaddr)                                         \
+	{                                                                     \
+		.tail = NULL, .state = ATOMIC_INIT(0), 			      \
+		.key = keyaddr                                                   \
+	}
+
 #define __MUTEX_INITIALIZER(lockname)                                         \
 	{                                                                     \
 		.tail = NULL, .state = ATOMIC_INIT(0), 			      \
@@ -34,7 +40,8 @@ static inline void mutex_destroy(struct mutex *lock)
 	}
 
 #define DEFINE_MUTEX(mutexname) \
-	struct mutex mutexname = __MUTEX_INITIALIZER(mutexname)
+	struct fds_lock_key key_##mutexname = __FDS_LOCK_KEY_INITIALIZER(mutexname); \
+	struct mutex mutexname = ___MUTEX_INITIALIZER(mutexname, &key_##mutexname)
 
 extern void ___mutex_init(struct mutex *lock, const char *name,
 			  struct fds_lock_key *key);
