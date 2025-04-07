@@ -17,6 +17,8 @@
 //#include <fds/decision_tree.h>
 //#include <fds/rwsem_decision_tree.h>
 
+#include <fds/srv8_spinlock_random_forest.h>
+#include <fds/srv8_rwsem_random_forest.h>
 #include <fds/srv9_spinlock_random_forest.h>
 #include <fds/srv9_rwsem_random_forest.h>
 
@@ -915,7 +917,7 @@ inline enum fds_lock_mechanisms get_optimal_spinlock_random_forest_classifier(st
 	int feature_vector[2];
 	feature_vector[0] = cpumask_weight(&tmp->contending_cpus);
 	feature_vector[1] = (tmp->counter) / (MONITOR_TIME / 1000);
-	int optimal_index = predict_spinlock_random_forest(feature_vector) ;
+	int optimal_index = predict_srv8_spinlock_random_forest(feature_vector) ;
 	enum fds_lock_mechanisms next_lock_type = FDS_QSPINLOCK;
 	switch(optimal_index) {
 		case 0: next_lock_type = FDS_QSPINLOCK; break; //AQS
@@ -937,7 +939,7 @@ inline enum fds_lock_mechanisms get_optimal_rwsem_random_forest_classifier(struc
 	feature_vector[0] = (tmp->counter * 100) / (tmp->read_counter + tmp->counter);
 	feature_vector[1] = cpumask_weight(&tmp->contending_cpus);
 	feature_vector[2] = (tmp->counter + tmp->read_counter) / (MONITOR_TIME / 1000);
-	int optimal_index = predict_rwsem_random_forest(feature_vector) ;
+	int optimal_index = predict_srv8_rwsem_random_forest(feature_vector) ;
 	enum fds_lock_mechanisms next_lock_type = FDS_QSPINLOCK;
 	switch(optimal_index) {
 		case 0: next_lock_type = FDS_PERCPU; break;
