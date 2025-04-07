@@ -14,10 +14,11 @@
 #include <linux/math.h>
 #include <linux/cpumask.h>
 
-#include <fds/decision_tree.h>
-#include <fds/rwsem_decision_tree.h>
+//#include <fds/decision_tree.h>
+//#include <fds/rwsem_decision_tree.h>
 
-#include <fds/rwsem_random_forest.h>
+#include <fds/srv9_spinlock_random_forest.h>
+#include <fds/srv9_rwsem_random_forest.h>
 
 static bool fds_running = false;
 static bool fds_oracle_running = false;
@@ -409,7 +410,7 @@ void print_fds_stats(void)
 #define IS_DIRECTION 2
 
 #define QSPINLOCK_LIMIT 10000
-#define MONITOR_TIME 10000 // In milliseconds
+#define MONITOR_TIME 5000 // In milliseconds
 
 #define QSPINLOCK_PER_SECOND 200000
 #define MUTEX_PER_SECOND 150000
@@ -869,45 +870,66 @@ static const struct proc_ops oracle_proc_ops = {
 	.proc_write = fds_oracle_write,
 };
 
-inline enum fds_lock_mechanisms get_optimal_rwsem_decision_tree_regression(struct lock_stat *tmp) 
+//inline enum fds_lock_mechanisms get_optimal_rwsem_decision_tree_regression(struct lock_stat *tmp) 
+//{
+//	int max_value, max_index, j;
+//	long feature_vector[8];
+//	feature_vector[0] = 2;
+//	feature_vector[1] = (tmp->counter * 100) / (tmp->read_counter + tmp->counter);
+//	feature_vector[2] = cpumask_weight(&tmp->contending_cpus);
+//	feature_vector[3] = (tmp->counter + tmp->read_counter) / (MONITOR_TIME / 1000);
+//	max_value = 0;
+//	max_index = 0;
+//	j = 0;
+//	for(j = 0; j < 4; j++) {
+//		if(j > 0)
+//			feature_vector[4 + (j - 1)] = 0;
+//		feature_vector[4 + j] = 1;
+//		int value = rwsem_decision_tree(feature_vector);
+//		if(value > max_value) {
+//			max_value = value;
+//			max_index = 4 + j;
+//		}
+//	}
+//	printk(KERN_ALERT "RWRATIO: %ld CPUCNT:%ld RPS:%ld max_value: %d max_index: %d\n",
+//			feature_vector[1], feature_vector[2], feature_vector[3],
+//			max_value, max_index);
+//	enum fds_lock_mechanisms next_lock_type = FDS_QSPINLOCK;
+//	switch(max_index) {
+//		case 4:
+//		case 5:
+//			next_lock_type = FDS_TCLOCK;
+//			break;
+//		case 6:
+//			next_lock_type = FDS_PERCPU;
+//			break;
+//		case 7:
+//			next_lock_type = FDS_QSPINLOCK;
+//			break;
+//	}
+//	return next_lock_type;
+//}
+
+inline enum fds_lock_mechanisms get_optimal_spinlock_random_forest_classifier(struct lock_stat *tmp) 
 {
-	int max_value, max_index, j;
-	long feature_vector[8];
-	feature_vector[0] = 2;
-	feature_vector[1] = (tmp->counter * 100) / (tmp->read_counter + tmp->counter);
-	feature_vector[2] = cpumask_weight(&tmp->contending_cpus);
-	feature_vector[3] = (tmp->counter + tmp->read_counter) / (MONITOR_TIME / 1000);
-	max_value = 0;
-	max_index = 0;
-	j = 0;
-	for(j = 0; j < 4; j++) {
-		if(j > 0)
-			feature_vector[4 + (j - 1)] = 0;
-		feature_vector[4 + j] = 1;
-		int value = rwsem_decision_tree(feature_vector);
-		if(value > max_value) {
-			max_value = value;
-			max_index = 4 + j;
-		}
-	}
-	printk(KERN_ALERT "RWRATIO: %ld CPUCNT:%ld RPS:%ld max_value: %d max_index: %d\n",
-			feature_vector[1], feature_vector[2], feature_vector[3],
-			max_value, max_index);
+	int feature_vector[2];
+	feature_vector[0] = cpumask_weight(&tmp->contending_cpus);
+	feature_vector[1] = (tmp->counter) / (MONITOR_TIME / 1000);
+	int optimal_index = predict_spinlock_random_forest(feature_vector) ;
 	enum fds_lock_mechanisms next_lock_type = FDS_QSPINLOCK;
-	switch(max_index) {
-		case 4:
-		case 5:
-			next_lock_type = FDS_TCLOCK;
-			break;
-		case 6:
-			next_lock_type = FDS_PERCPU;
-			break;
-		case 7:
-			next_lock_type = FDS_QSPINLOCK;
-			break;
+	switch(optimal_index) {
+		case 0: next_lock_type = FDS_QSPINLOCK; break; //AQS
+		case 1: next_lock_type = FDS_QSPINLOCK; break;
+		case 2: next_lock_type = FDS_TCLOCK; break;
+		case 3: next_lock_type = FDS_TCLOCK; break; //TDLOCK
 	}
+
+	printk(KERN_ALERT "SPINLOCK CPUCNT:%ld RPS:%ld next_lock: %s\n",
+			feature_vector[0], feature_vector[1],
+			get_str_lockm(next_lock_type));
 	return next_lock_type;
 }
+
 
 inline enum fds_lock_mechanisms get_optimal_rwsem_random_forest_classifier(struct lock_stat *tmp) 
 {
@@ -924,7 +946,7 @@ inline enum fds_lock_mechanisms get_optimal_rwsem_random_forest_classifier(struc
 		case 3: next_lock_type = FDS_TCLOCK; break; //TDLOCK
 	}
 
-	printk(KERN_ALERT "RWRATIO: %ld CPUCNT:%ld RPS:%ld next_lock: %s\n",
+	printk(KERN_ALERT "RWSEM RWRATIO: %ld CPUCNT:%ld RPS:%ld next_lock: %s\n",
 			feature_vector[0], feature_vector[1], feature_vector[2],
 			get_str_lockm(next_lock_type));
 	return next_lock_type;
@@ -946,40 +968,42 @@ inline void __monitor_fds_stats(struct lock_stat *tmp, const char *type,
 //					break;
 //			tmp->key->lockm = fds_spinlock_implementations[(i+1) % NELEMS(fds_spinlock_implementations)];
 			
-			feature_vector[0] = 4;
-			feature_vector[1] = cpumask_weight(&tmp->contending_cpus);
-			feature_vector[2] = tmp->counter / (MONITOR_TIME / 1000);
-			max_value = 0;
-			max_index = 0;
-			j = 0;
-			for(j = 0; j < 5; j++) {
-				if(j > 0)
-					feature_vector[3 + (j - 1)] = 0;
-				feature_vector[3 + j] = 1;
-				int value = decision_tree(feature_vector);
-				if(value > max_value) {
-					max_value = value;
-					max_index = 3 + j;
-				}
-			}
-			printk(KERN_ALERT "feature_vector: %ld %ld %ld max_value: %d max_index: %d\n",
-					feature_vector[0], feature_vector[1], feature_vector[2],
-					max_value, max_index);
-			enum fds_lock_mechanisms next_lock_type = FDS_QSPINLOCK;
-			switch(max_index) {
-				case 3:
-				case 4:
-				case 7:
-					next_lock_type = FDS_QSPINLOCK;
-					break;
-				case 5:
-					next_lock_type = FDS_TCLOCK;
-					break;
-				case 6:
-					next_lock_type = FDS_TCLOCK; //Change to TDLOCK
-					break;
-			}
-			tmp->key->lockm = next_lock_type;
+//			feature_vector[0] = 4;
+//			feature_vector[1] = cpumask_weight(&tmp->contending_cpus);
+//			feature_vector[2] = tmp->counter / (MONITOR_TIME / 1000);
+//			max_value = 0;
+//			max_index = 0;
+//			j = 0;
+//			for(j = 0; j < 5; j++) {
+//				if(j > 0)
+//					feature_vector[3 + (j - 1)] = 0;
+//				feature_vector[3 + j] = 1;
+//				int value = decision_tree(feature_vector);
+//				if(value > max_value) {
+//					max_value = value;
+//					max_index = 3 + j;
+//				}
+//			}
+//			printk(KERN_ALERT "feature_vector: %ld %ld %ld max_value: %d max_index: %d\n",
+//					feature_vector[0], feature_vector[1], feature_vector[2],
+//					max_value, max_index);
+//			enum fds_lock_mechanisms next_lock_type = FDS_QSPINLOCK;
+//			switch(max_index) {
+//				case 3:
+//				case 4:
+//				case 7:
+//					next_lock_type = FDS_QSPINLOCK;
+//					break;
+//				case 5:
+//					next_lock_type = FDS_TCLOCK;
+//					break;
+//				case 6:
+//					next_lock_type = FDS_TCLOCK; //Change to TDLOCK
+//					break;
+//			}
+//			tmp->key->lockm = next_lock_type;
+//			break;
+			tmp->key->lockm = get_optimal_spinlock_random_forest_classifier(tmp);
 			break;
 		case FDS_WRITE_SEM:
 			tmp->key->lockm = get_optimal_rwsem_random_forest_classifier(tmp);
