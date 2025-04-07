@@ -24,6 +24,12 @@ struct fds_lock_key {
 	enum fds_lock_mechanisms lockm;
 };
 
+#define __FDS_LOCK_KEY_INITIALIZER(keyname) \
+{\
+	.name = #keyname, \
+	.lockm = FDS_QSPINLOCK \
+}
+
 void init_fds_lock_key(struct fds_lock_key *key, const char* _name, enum fds_lock_mechanisms _lockm);
 
 void read_stat_lock_acquire(struct fds_lock_key *key);
