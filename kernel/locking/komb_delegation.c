@@ -7,7 +7,7 @@
 
 static struct task_struct **dthreads;
 static int num_delegation_threads = 1;
-static int num_cores_per_socket = 1;
+int num_cores_per_socket = 1;
 
 static DEFINE_PER_CPU_ALIGNED(struct komb_node, *lock_rq_tail);
 
@@ -19,7 +19,7 @@ void park_komb_thread(void)
 	//Park
 	__set_current_state(TASK_INTERRUPTIBLE);
 	if (READ_ONCE(*rq_tail) == NULL && cmpxchg(rq_tail, NULL, NULL) == NULL)
-		schedule_preempt_disabled();
+		schedule(); //_preempt_disabled();
 	__set_current_state(TASK_RUNNING);
 }
 
@@ -30,6 +30,7 @@ tdlock_run_combiner(struct komb_node *curr_node)
 {
 	struct shadow_stack *ptr;
 	struct qspinlock *lock;
+        struct komb_node *prev_node;
 
 	KOMB_BUG_ON(curr_node == NULL);
 	KOMB_BUG_ON((smp_processor_id() % num_cores_per_socket) != 0);
@@ -58,7 +59,8 @@ tdlock_run_combiner(struct komb_node *curr_node)
 	KOMB_BUG_ON(ptr->prev_cs_cpu == -1 || ptr->prev_cs_cpu == 0);
 
 	ptr->curr_cs_cpu = -1;
-	return per_cpu_ptr(&komb_nodes[0], ptr->prev_cs_cpu);
+	prev_node = per_cpu_ptr(&komb_nodes[0], ptr->prev_cs_cpu);
+        return prev_node;
 }
 #pragma GCC pop_options
 
@@ -78,6 +80,7 @@ __kd_spin_lock_slowpath(struct qspinlock *lock)
 
 	curr_node = this_cpu_ptr(&komb_nodes[0]);
 	idx = curr_node->count++;
+        KOMB_BUG_ON(idx != 0);
 	tail = encode_tail(smp_processor_id(), idx);
 
 	curr_node->locked = true;
@@ -96,6 +99,8 @@ __kd_spin_lock_slowpath(struct qspinlock *lock)
 	print_debug("my_tail: %x\n", tail);
 
 	old_tail = xchg_tail(lock, tail);
+
+        spin_stat_lock_acquire(curr_node->key);
 
 	if (old_tail & _Q_TAIL_MASK) {
 		prev_node = decode_tail(old_tail);
@@ -170,8 +175,10 @@ head_of_queue:
 	}
 
 continue_with_cs_execution:
+	curr_node = this_cpu_ptr(&komb_nodes[0]);
 	if (curr_node->irqs_disabled) {
 		ptr->irqs_disabled = curr_node->irqs_disabled;
+                curr_node->irqs_disabled = 0;
 	}
 	curr_node->count--;
 	KOMB_BUG_ON((char *)curr_node->rsp == 0);
@@ -200,7 +207,7 @@ int komb_thread(void *args)
 		cond_resched();
 	}
 
-	preempt_disable();
+	//preempt_disable();
 
 	while (true) {
 		print_debug("komb thread waiting for lock\n");
@@ -325,7 +332,7 @@ int komb_thread(void *args)
 	}
 
 	BUG_ON(true);
-	preempt_enable();
+	//preempt_enable();
 
 	return 0;
 }
@@ -404,7 +411,7 @@ inline bool kd_spin_trylock(struct qspinlock *lock)
 }
 
 __attribute__((noipa)) noinline notrace void
-kd_spin_lock(struct qspinlock *lock)
+kd_spin_lock(struct qspinlock *lock, struct fds_lock_key *key)
 {
 	struct komb_node *curr_node = NULL;
 	struct shadow_stack *ptr;
@@ -413,6 +420,7 @@ kd_spin_lock(struct qspinlock *lock)
 
 	curr_node = this_cpu_ptr(&komb_nodes[0]);
 	KOMB_BUG_ON(curr_node == NULL);
+        curr_node->key = key;
 
 	if (curr_node->count > 0 || !in_task() || irqs_disabled() ||
 	    current->migration_disabled ||
@@ -451,6 +459,8 @@ kd_spin_lock(struct qspinlock *lock)
 		smp_wmb();
 
 		u32 old_tail = xchg_tail(lock, tail);
+
+                spin_stat_lock_acquire(key);
 
 		if (old_tail & _Q_TAIL_MASK) {
 			prev_node = decode_tail(old_tail);
@@ -626,7 +636,7 @@ static int __init kd_init(void)
 	int i;
 
 	for_each_possible_cpu(i) {
-		*per_cpu_ptr(&lock_rq_tail, i) = 0;
+		*per_cpu_ptr(&lock_rq_tail, i) = NULL;
 	}
 
 	num_delegation_threads = num_online_nodes();

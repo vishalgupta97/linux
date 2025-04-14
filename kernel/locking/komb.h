@@ -80,6 +80,8 @@
 DECLARE_PER_CPU_SHARED_ALIGNED(struct komb_node, komb_nodes[MAX_NODES]);
 DECLARE_PER_CPU_SHARED_ALIGNED(struct shadow_stack, local_shadow_stack);
 
+extern int num_cores_per_socket;
+
 u32 encode_tail(int cpu, int idx);
 struct komb_node *decode_tail(u32 tail);
 void clear_locked_set_completed(struct komb_node *lock);

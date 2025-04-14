@@ -87,6 +87,6 @@ extern void komb_spin_lock_fds(struct qspinlock *lock,
 			       struct fds_lock_key *key);
 extern void komb_spin_unlock(struct qspinlock *lock);
 
-extern void kd_spin_lock(struct qspinlock *lock);
-extern void kd_spin_unlock(struct qspinlock *lock);
+extern void kd_spin_lock(struct qspinlock *lock, struct fds_lock_key *key);
+//extern void kd_spin_unlock(struct qspinlock *lock);
 #endif

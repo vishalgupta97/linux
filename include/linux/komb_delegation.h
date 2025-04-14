@@ -1,6 +1,9 @@
 #ifndef __KOMB_DELEGATION_H__
 #define __KOMB_DELEGATION_H__
 
+// FILE NOT USED
+BUG_ON(true);
+
 #define ENABLE_IRQS_CHECK 1
 #include <asm/qspinlock.h>
 
@@ -14,7 +17,7 @@
  * TODO (Correctness optimization): 
  * Add for BIG ENDIAN
  */
-struct kd_node {
+/*struct kd_node {
 	union {
 		struct {
 			struct kd_node *next;
@@ -42,7 +45,7 @@ struct kd_node {
 		};
 		char alignment[128];
 	};
-};
+};*/
 
 /*
  * komb_init and komb_free should be called only when the system boots up and
@@ -55,7 +58,7 @@ void kd_free(void);
  * Public API
  */
 extern void kd_spin_lock_init(struct qspinlock *lock);
-extern void kd_spin_lock(struct qspinlock *lock);
+extern void kd_spin_lock(struct qspinlock *lock, struct fds_lock_key *key);
 extern bool kd_spin_trylock(struct qspinlock *lock);
 extern void kd_spin_unlock(struct qspinlock *lock);
 extern int kd_spin_is_locked(struct qspinlock *lock);

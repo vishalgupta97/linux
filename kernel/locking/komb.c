@@ -704,8 +704,8 @@ struct fds_lock_key *key)
 
 queue:
 	curr_node = this_cpu_ptr(&komb_nodes[0]);
-        curr_node->key = key;
 	KOMB_BUG_ON(curr_node == NULL);
+        curr_node->key = key;
 
 	if (curr_node->count > 0 || !in_task() || irqs_disabled() ||
 	    current->migration_disabled || lockm == FDS_QSPINLOCK ||
@@ -851,8 +851,8 @@ EXPORT_SYMBOL_GPL(komb_spin_lock);
 __always_inline void komb_spin_lock_fds(struct qspinlock *lock,
 					struct fds_lock_key *key)
 {
-	if (key->lockm == FDS_TDLOCK)
-		kd_spin_lock(lock);
+	if (key->lockm == FDS_TDLOCK && ((smp_processor_id() % num_cores_per_socket) != 0))
+		kd_spin_lock(lock, key);
 	else
 		__komb_spin_lock(lock, key->lockm, key);
 }
@@ -896,6 +896,7 @@ komb_spin_unlock(struct qspinlock *lock)
 #ifdef KOMB_STATS
 			this_cpu_inc(ooo_unlocks);
 #endif
+			BUG_ON(true);
 			lock->locked = _Q_UNLOCKED_OOO_VAL;
 			print_debug("OOO unlock\n");
 		} else
