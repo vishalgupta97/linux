@@ -81,9 +81,7 @@
  */
 struct qnode {
 	struct mcs_spinlock mcs;
-#ifdef CONFIG_PARAVIRT_SPINLOCKS
 	long reserved[2];
-#endif
 };
 
 /*
@@ -289,6 +287,33 @@ static __always_inline u32  __pv_wait_head_or_lock(struct qspinlock *lock,
 
 #endif /* _GEN_PV_LOCK_SLOWPATH */
 
+/*
+ * __try_clear_tail - try to clear tail by setting the lock value to
+ * _Q_LOCKED_VAL.
+ * @lock: Pointer to the queued spinlock structure
+ * @val: Current value of the lock
+ * @node: Pointer to the MCS node of the lock holder
+ */
+static __always_inline bool __try_clear_tail(struct qspinlock *lock,
+					     u32 val,
+					     struct mcs_spinlock *node)
+{
+	return atomic_try_cmpxchg_relaxed(&lock->val, &val, _Q_LOCKED_VAL);
+}
+
+/*
+ * __mcs_lock_handoff - pass the MCS lock to the next waiter
+ * @node: Pointer to the MCS node of the lock holder
+ * @next: Pointer to the MCS node of the first waiter in the MCS queue
+ */
+static __always_inline void __mcs_lock_handoff(struct mcs_spinlock *node,
+					       struct mcs_spinlock *next)
+{
+	arch_mcs_lock_handoff(&next->locked, 1);
+}
+
+#include "qspinlock_cna.h"
+
 /**
  * queued_spin_lock_slowpath - acquire the queued spinlock
  * @lock: Pointer to queued spinlock structure
@@ -433,7 +458,7 @@ pv_queue:
 
 	node->locked = 0;
 	node->next = NULL;
-	pv_init_node(node);
+	cna_init_node(node, tail);
 
 	/*
 	 * We touched a (possibly) cold cacheline in the per-cpu queue node;
@@ -471,7 +496,7 @@ pv_queue:
 		WRITE_ONCE(prev->next, node);
 
 		pv_wait_node(node, prev);
-		arch_mcs_spin_lock_contended(&node->locked);
+		arch_mcs_spin_wait(&node->locked);
 
 		/*
 		 * While waiting for the MCS lock, the next pointer may have
@@ -505,7 +530,7 @@ pv_queue:
 	 * If PV isn't active, 0 will be returned instead.
 	 *
 	 */
-	if ((val = pv_wait_head_or_lock(lock, node)))
+	if ((val = cna_wait_head_or_lock(lock, node)))
 		goto locked;
 
 	val = atomic_cond_read_acquire(&lock->val, !(VAL & _Q_LOCKED_PENDING_MASK));
@@ -533,7 +558,7 @@ locked:
 	 *       PENDING will make the uncontended transition fail.
 	 */
 	if ((val & _Q_TAIL_MASK) == tail) {
-		if (atomic_try_cmpxchg_relaxed(&lock->val, &val, _Q_LOCKED_VAL))
+		if (cna_try_clear_tail(lock, val, node))
 			goto release; /* No contention */
 	}
 
@@ -550,7 +575,7 @@ locked:
 	if (!next)
 		next = smp_cond_load_relaxed(&node->next, (VAL));
 
-	arch_mcs_spin_unlock_contended(&next->locked);
+	cna_lock_handoff(node, next);
 	pv_kick_node(lock, next);
 
 release:
