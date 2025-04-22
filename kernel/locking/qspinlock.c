@@ -154,7 +154,7 @@ static inline u32 xor_random(void)
  * Return false with probability 1 / @range.
  * @range must be a power of 2.
  */
-#define INTRA_SOCKET_HANDOFF_PROB_ARG	0x10000
+#define INTRA_SOCKET_HANDOFF_PROB_ARG	0x100000
 
 static bool probably(void)
 {
