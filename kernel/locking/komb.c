@@ -661,8 +661,9 @@ komb_spin_lock_slowpath(struct qspinlock *lock)
 __attribute__((noipa)) noinline notrace void
 komb_spin_lock(struct qspinlock *lock)
 {
-	u32 val, cnt;
+	u32 val, cnt, j;
 	struct komb_node *curr_node = NULL;
+	struct shadow_stack *ptr = this_cpu_ptr(&local_shadow_stack);
 
 	val = atomic_cmpxchg_acquire(&lock->val, 0, _Q_LOCKED_VAL);
 	if (val == 0)
@@ -694,11 +695,15 @@ komb_spin_lock(struct qspinlock *lock)
 	return;
 
 queue:
-
 	curr_node = this_cpu_ptr(&komb_nodes[0]);
 	KOMB_BUG_ON(curr_node == NULL);
 
-	if (curr_node->count > 0 || !in_task() || irqs_disabled() ||
+	j = 0;
+	for (j = 0; j < 8; j++)
+		if (ptr->lock_addr[j] != NULL)
+			break;
+
+	if (curr_node->count > 0 || j != 8 || !in_task() || irqs_disabled() ||
 	    current->migration_disabled) {
 		struct komb_node *prev_node, *next_node;
 		u32 tail, idx;
@@ -912,7 +917,7 @@ komb_spin_unlock(struct qspinlock *lock)
 	ptr = this_cpu_ptr(&local_shadow_stack);
 	if (ptr->irqs_disabled) {
 		ptr->irqs_disabled = false;
-		local_irq_disable();
+		//local_irq_disable();
 	}
 	return;
 }
