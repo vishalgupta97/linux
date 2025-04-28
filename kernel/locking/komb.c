@@ -450,7 +450,7 @@ __komb_spin_lock_longjmp(struct qspinlock *lock, int tail,
 	ptr->irqs_disabled = false;
 	KOMB_BUG_ON(ptr->prev_cs_cpu != -1);
 
-	curr_node->count--;
+	//curr_node->count--;
 	prev_locked_val = lock->locked;
 	KOMB_BUG_ON(prev_locked_val >= _Q_LOCKED_COMBINER_VAL);
 
@@ -503,7 +503,7 @@ __komb_spin_lock_longjmp(struct qspinlock *lock, int tail,
 	}
 	lock->locked = prev_locked_val;
 
-	return 0;
+	//return 0;
 release:
 	curr_node->count--;
 	return 0;
@@ -669,6 +669,7 @@ komb_spin_lock(struct qspinlock *lock)
 	if (val == 0)
 		return;
 
+	goto queue;
 	if (val == _Q_PENDING_VAL) {
 		cnt = _Q_PENDING_LOOPS;
 		val = atomic_cond_read_relaxed(
@@ -912,7 +913,7 @@ komb_spin_unlock(struct qspinlock *lock)
 	KOMB_BUG_ON(incoming_rsp_ptr == 0xdeadbeef);
 	KOMB_BUG_ON(outgoing_rsp_ptr == 0xdeadbeef);
 
-	curr_node->irqs_disabled = irqs_disabled();
+	//curr_node->irqs_disabled = irqs_disabled();
 	komb_context_switch(incoming_rsp_ptr, outgoing_rsp_ptr);
 	ptr = this_cpu_ptr(&local_shadow_stack);
 	if (ptr->irqs_disabled) {
