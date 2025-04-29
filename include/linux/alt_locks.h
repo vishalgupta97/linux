@@ -17,7 +17,7 @@
 #define alt_mutex_unlock 		mutex_unlock
 #define alt_mutex_trylock 		mutex_trylock
 
-#define alt_rw_semaphore 		percpu_rwsem
+#define alt_rw_semaphore 		percpu_rw_semaphore
 #define __ALT_RWSEM_INITIALIZER 	DEFINE_PER_CPU
 #define alt_rwsem_assert_held 		percpu_rwsem_assert_held
 #define alt_rwsem_assert_held_write 	percpu_rwsem_assert_held_write
