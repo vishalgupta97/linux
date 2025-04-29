@@ -52,8 +52,8 @@ int wrap_directory_iterator(struct file *file,
 	 * lock unconditionally if it mattered, but see above on why
 	 * this does the very simplistic conversion.
 	 */
-	up_read(&inode->i_rwsem);
-	down_write(&inode->i_rwsem);
+	alt_up_read(&inode->i_rwsem);
+	alt_down_write(&inode->i_rwsem);
 
 	/*
 	 * Since we dropped the inode lock, we should do the
@@ -66,7 +66,7 @@ int wrap_directory_iterator(struct file *file,
 	if (!IS_DEADDIR(inode))
 		ret = iter(file, ctx);
 
-	downgrade_write(&inode->i_rwsem);
+	alt_downgrade_write(&inode->i_rwsem);
 	return ret;
 }
 EXPORT_SYMBOL(wrap_directory_iterator);
@@ -100,7 +100,7 @@ int iterate_dir(struct file *file, struct dir_context *ctx)
 	if (res)
 		goto out;
 
-	res = down_read_killable(&inode->i_rwsem);
+	res = alt_down_read_killable(&inode->i_rwsem);
 	if (res)
 		goto out;
 

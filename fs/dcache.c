@@ -2918,7 +2918,7 @@ struct dentry *d_ancestor(struct dentry *p1, struct dentry *p2)
 static int __d_unalias(struct dentry *dentry, struct dentry *alias)
 {
 	struct alt_mutex *m1 = NULL;
-	struct rw_semaphore *m2 = NULL;
+	struct alt_rw_semaphore *m2 = NULL;
 	int ret = -ESTALE;
 
 	/* If alias and dentry share a parent, then no extra locks required */
@@ -2937,7 +2937,7 @@ out_unalias:
 	ret = 0;
 out_err:
 	if (m2)
-		up_read(m2);
+		alt_up_read(m2);
 	if (m1)
 		alt_mutex_unlock(m1);
 	return ret;
