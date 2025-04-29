@@ -677,7 +677,7 @@ struct inode {
 
 	/* Misc */
 	unsigned long		i_state;
-	struct rw_semaphore	i_rwsem;
+	struct alt_rw_semaphore	i_rwsem;
 
 	unsigned long		dirtied_when;	/* jiffies of first dirtying */
 	unsigned long		dirtied_time_when;
@@ -790,47 +790,47 @@ enum inode_i_mutex_lock_class
 
 static inline void inode_lock(struct inode *inode)
 {
-	down_write(&inode->i_rwsem);
+	alt_down_write(&inode->i_rwsem);
 }
 
 static inline void inode_unlock(struct inode *inode)
 {
-	up_write(&inode->i_rwsem);
+	alt_up_write(&inode->i_rwsem);
 }
 
 static inline void inode_lock_shared(struct inode *inode)
 {
-	down_read(&inode->i_rwsem);
+	alt_down_read(&inode->i_rwsem);
 }
 
 static inline void inode_unlock_shared(struct inode *inode)
 {
-	up_read(&inode->i_rwsem);
+	alt_up_read(&inode->i_rwsem);
 }
 
 static inline int inode_trylock(struct inode *inode)
 {
-	return down_write_trylock(&inode->i_rwsem);
+	return alt_down_write_trylock(&inode->i_rwsem);
 }
 
 static inline int inode_trylock_shared(struct inode *inode)
 {
-	return down_read_trylock(&inode->i_rwsem);
+	return alt_down_read_trylock(&inode->i_rwsem);
 }
 
 static inline int inode_is_locked(struct inode *inode)
 {
-	return rwsem_is_locked(&inode->i_rwsem);
+	return alt_rwsem_is_locked(&inode->i_rwsem);
 }
 
 static inline void inode_lock_nested(struct inode *inode, unsigned subclass)
 {
-	down_write_nested(&inode->i_rwsem, subclass);
+	alt_down_write_nested(&inode->i_rwsem, subclass);
 }
 
 static inline void inode_lock_shared_nested(struct inode *inode, unsigned subclass)
 {
-	down_read_nested(&inode->i_rwsem, subclass);
+	alt_down_read_nested(&inode->i_rwsem, subclass);
 }
 
 static inline void filemap_invalidate_lock(struct address_space *mapping)

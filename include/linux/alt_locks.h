@@ -34,5 +34,7 @@
 #define alt_up_read			komb_up_read
 #define alt_up_read_non_owner		komb_up_read
 #define alt_rwsem_is_contended		komb_rwsem_is_contended
-
+#define alt_rwsem_is_locked		komb_rwsem_is_locked
+#define alt_down_read_nested		komb_down_read_nested
+#define alt_down_write_trylock		komb_down_write_trylock
 #endif
