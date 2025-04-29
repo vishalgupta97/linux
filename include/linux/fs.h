@@ -1338,7 +1338,7 @@ struct super_block {
 	int s_stack_depth;
 
 	/* s_inode_list_lock protects s_inodes */
-	spinlock_t		s_inode_list_lock ____cacheline_aligned_in_smp;
+	alt_spinlock_t		s_inode_list_lock ____cacheline_aligned_in_smp;
 	struct list_head	s_inodes;	/* all inodes */
 
 	spinlock_t		s_inode_wblist_lock;

@@ -470,10 +470,10 @@ long nr_blockdev_pages(void)
 	struct inode *inode;
 	long ret = 0;
 
-	spin_lock(&blockdev_superblock->s_inode_list_lock);
+	alt_spin_lock(&blockdev_superblock->s_inode_list_lock);
 	list_for_each_entry(inode, &blockdev_superblock->s_inodes, i_sb_list)
 		ret += inode->i_mapping->nrpages;
-	spin_unlock(&blockdev_superblock->s_inode_list_lock);
+	alt_spin_unlock(&blockdev_superblock->s_inode_list_lock);
 
 	return ret;
 }
@@ -1211,7 +1211,7 @@ void sync_bdevs(bool wait)
 {
 	struct inode *inode, *old_inode = NULL;
 
-	spin_lock(&blockdev_superblock->s_inode_list_lock);
+	alt_spin_lock(&blockdev_superblock->s_inode_list_lock);
 	list_for_each_entry(inode, &blockdev_superblock->s_inodes, i_sb_list) {
 		struct address_space *mapping = inode->i_mapping;
 		struct block_device *bdev;
@@ -1224,7 +1224,7 @@ void sync_bdevs(bool wait)
 		}
 		__iget(inode);
 		spin_unlock(&inode->i_lock);
-		spin_unlock(&blockdev_superblock->s_inode_list_lock);
+		alt_spin_unlock(&blockdev_superblock->s_inode_list_lock);
 		/*
 		 * We hold a reference to 'inode' so it couldn't have been
 		 * removed from s_inodes list while we dropped the
@@ -1253,9 +1253,9 @@ void sync_bdevs(bool wait)
 		}
 		mutex_unlock(&bdev->bd_disk->open_mutex);
 
-		spin_lock(&blockdev_superblock->s_inode_list_lock);
+		alt_spin_lock(&blockdev_superblock->s_inode_list_lock);
 	}
-	spin_unlock(&blockdev_superblock->s_inode_list_lock);
+	alt_spin_unlock(&blockdev_superblock->s_inode_list_lock);
 	iput(old_inode);
 }
 

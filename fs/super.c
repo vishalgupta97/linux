@@ -360,7 +360,7 @@ static struct super_block *alloc_super(struct file_system_type *type, int flags,
 	INIT_HLIST_BL_HEAD(&s->s_roots);
 	mutex_init(&s->s_sync_lock);
 	INIT_LIST_HEAD(&s->s_inodes);
-	spin_lock_init(&s->s_inode_list_lock);
+	alt_spin_lock_init(&s->s_inode_list_lock);
 	INIT_LIST_HEAD(&s->s_inodes_wb);
 	spin_lock_init(&s->s_inode_wblist_lock);
 
@@ -657,13 +657,13 @@ void generic_shutdown_super(struct super_block *sb)
 			 */
 			struct inode *inode;
 
-			spin_lock(&sb->s_inode_list_lock);
+			alt_spin_lock(&sb->s_inode_list_lock);
 			list_for_each_entry(inode, &sb->s_inodes, i_sb_list) {
 				inode->i_op = VFS_PTR_POISON;
 				inode->i_sb = VFS_PTR_POISON;
 				inode->i_mapping = VFS_PTR_POISON;
 			}
-			spin_unlock(&sb->s_inode_list_lock);
+			alt_spin_unlock(&sb->s_inode_list_lock);
 		}
 	}
 	/*

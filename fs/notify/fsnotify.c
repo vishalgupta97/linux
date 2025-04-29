@@ -39,7 +39,7 @@ static void fsnotify_unmount_inodes(struct super_block *sb)
 {
 	struct inode *inode, *iput_inode = NULL;
 
-	spin_lock(&sb->s_inode_list_lock);
+	alt_spin_lock(&sb->s_inode_list_lock);
 	list_for_each_entry(inode, &sb->s_inodes, i_sb_list) {
 		/*
 		 * We cannot __iget() an inode in state I_FREEING,
@@ -68,7 +68,7 @@ static void fsnotify_unmount_inodes(struct super_block *sb)
 
 		__iget(inode);
 		spin_unlock(&inode->i_lock);
-		spin_unlock(&sb->s_inode_list_lock);
+		alt_spin_unlock(&sb->s_inode_list_lock);
 
 		iput(iput_inode);
 
@@ -80,9 +80,9 @@ static void fsnotify_unmount_inodes(struct super_block *sb)
 		iput_inode = inode;
 
 		cond_resched();
-		spin_lock(&sb->s_inode_list_lock);
+		alt_spin_lock(&sb->s_inode_list_lock);
 	}
-	spin_unlock(&sb->s_inode_list_lock);
+	alt_spin_unlock(&sb->s_inode_list_lock);
 
 	iput(iput_inode);
 }

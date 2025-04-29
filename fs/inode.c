@@ -492,18 +492,18 @@ static void inode_lru_list_del(struct inode *inode)
  */
 void inode_sb_list_add(struct inode *inode)
 {
-	spin_lock(&inode->i_sb->s_inode_list_lock);
+	alt_spin_lock(&inode->i_sb->s_inode_list_lock);
 	list_add(&inode->i_sb_list, &inode->i_sb->s_inodes);
-	spin_unlock(&inode->i_sb->s_inode_list_lock);
+	alt_spin_unlock(&inode->i_sb->s_inode_list_lock);
 }
 EXPORT_SYMBOL_GPL(inode_sb_list_add);
 
 static inline void inode_sb_list_del(struct inode *inode)
 {
 	if (!list_empty(&inode->i_sb_list)) {
-		spin_lock(&inode->i_sb->s_inode_list_lock);
+		alt_spin_lock(&inode->i_sb->s_inode_list_lock);
 		list_del_init(&inode->i_sb_list);
-		spin_unlock(&inode->i_sb->s_inode_list_lock);
+		alt_spin_unlock(&inode->i_sb->s_inode_list_lock);
 	}
 }
 
@@ -717,7 +717,7 @@ void evict_inodes(struct super_block *sb)
 	LIST_HEAD(dispose);
 
 again:
-	spin_lock(&sb->s_inode_list_lock);
+	alt_spin_lock(&sb->s_inode_list_lock);
 	list_for_each_entry_safe(inode, next, &sb->s_inodes, i_sb_list) {
 		if (atomic_read(&inode->i_count))
 			continue;
@@ -739,13 +739,13 @@ again:
 		 * bit so we don't livelock.
 		 */
 		if (need_resched()) {
-			spin_unlock(&sb->s_inode_list_lock);
+			alt_spin_unlock(&sb->s_inode_list_lock);
 			cond_resched();
 			dispose_list(&dispose);
 			goto again;
 		}
 	}
-	spin_unlock(&sb->s_inode_list_lock);
+	alt_spin_unlock(&sb->s_inode_list_lock);
 
 	dispose_list(&dispose);
 }
@@ -763,7 +763,7 @@ void invalidate_inodes(struct super_block *sb)
 	LIST_HEAD(dispose);
 
 again:
-	spin_lock(&sb->s_inode_list_lock);
+	alt_spin_lock(&sb->s_inode_list_lock);
 	list_for_each_entry_safe(inode, next, &sb->s_inodes, i_sb_list) {
 		spin_lock(&inode->i_lock);
 		if (inode->i_state & (I_NEW | I_FREEING | I_WILL_FREE)) {
@@ -780,13 +780,13 @@ again:
 		spin_unlock(&inode->i_lock);
 		list_add(&inode->i_lru, &dispose);
 		if (need_resched()) {
-			spin_unlock(&sb->s_inode_list_lock);
+			alt_spin_unlock(&sb->s_inode_list_lock);
 			cond_resched();
 			dispose_list(&dispose);
 			goto again;
 		}
 	}
-	spin_unlock(&sb->s_inode_list_lock);
+	alt_spin_unlock(&sb->s_inode_list_lock);
 
 	dispose_list(&dispose);
 }
