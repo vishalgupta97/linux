@@ -176,7 +176,7 @@ int futex_wake(u32 __user *uaddr, unsigned int flags, int nr_wake, u32 bitset)
 	if (!futex_hb_waiters_pending(hb))
 		return ret;
 
-	spin_lock(&hb->lock);
+	alt_spin_lock(&hb->lock);
 
 	plist_for_each_entry_safe(this, next, &hb->chain, list) {
 		if (futex_match (&this->key, &key)) {
@@ -195,7 +195,7 @@ int futex_wake(u32 __user *uaddr, unsigned int flags, int nr_wake, u32 bitset)
 		}
 	}
 
-	spin_unlock(&hb->lock);
+	alt_spin_unlock(&hb->lock);
 	wake_up_q(&wake_q);
 	return ret;
 }
@@ -349,7 +349,7 @@ void futex_wait_queue(struct futex_hash_bucket *hb, struct futex_q *q,
 	 * futex_queue() calls spin_unlock() upon completion, both serializing
 	 * access to the hash list and forcing another memory barrier.
 	 */
-	set_current_state(TASK_INTERRUPTIBLE|TASK_FREEZABLE);
+	komb_set_current_state(TASK_INTERRUPTIBLE|TASK_FREEZABLE);
 	futex_queue(q, hb);
 
 	/* Arm the timer */
@@ -369,7 +369,7 @@ void futex_wait_queue(struct futex_hash_bucket *hb, struct futex_q *q,
 		if (!timeout || timeout->task)
 			schedule();
 	}
-	__set_current_state(TASK_RUNNING);
+	komb_set_current_state(TASK_RUNNING);
 }
 
 /**

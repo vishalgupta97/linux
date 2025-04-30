@@ -10,6 +10,8 @@
 #define alt_spin_lock			komb_spin_lock
 #define alt_spin_unlock			komb_spin_unlock
 #define __ALT_SPIN_LOCK_UNLOCKED	__KOMB_SPIN_LOCK_UNLOCKED
+#define alt_spin_lock_nested		komb_spin_lock_nested
+#define alt_lockdep_assert_held(l)	do { (void)(l); } while (0)
 
 #define alt_mutex 			komb_mutex
 #define alt_mutex_init 			komb_mutex_init

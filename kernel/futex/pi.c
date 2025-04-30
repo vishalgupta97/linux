@@ -789,7 +789,7 @@ retry:
 	 */
 handle_err:
 	raw_spin_unlock_irq(&pi_state->pi_mutex.wait_lock);
-	spin_unlock(q->lock_ptr);
+	alt_spin_unlock(q->lock_ptr);
 
 	switch (err) {
 	case -EFAULT:
@@ -806,7 +806,7 @@ handle_err:
 		break;
 	}
 
-	spin_lock(q->lock_ptr);
+	alt_spin_lock(q->lock_ptr);
 	raw_spin_lock_irq(&pi_state->pi_mutex.wait_lock);
 
 	/*
@@ -846,7 +846,7 @@ static int fixup_pi_state_owner(u32 __user *uaddr, struct futex_q *q,
 	struct futex_pi_state *pi_state = q->pi_state;
 	int ret;
 
-	lockdep_assert_held(q->lock_ptr);
+	alt_lockdep_assert_held(q->lock_ptr);
 
 	raw_spin_lock_irq(&pi_state->pi_mutex.wait_lock);
 	ret = __fixup_pi_state_owner(uaddr, q, argowner);
@@ -1012,7 +1012,7 @@ retry_private:
 	 * before __rt_mutex_start_proxy_lock() is done.
 	 */
 	raw_spin_lock_irq(&q.pi_state->pi_mutex.wait_lock);
-	spin_unlock(q.lock_ptr);
+	alt_spin_unlock(q.lock_ptr);
 	/*
 	 * __rt_mutex_start_proxy_lock() unconditionally enqueues the @rt_waiter
 	 * such that futex_unlock_pi() is guaranteed to observe the waiter when
@@ -1059,7 +1059,7 @@ cleanup:
 	 * spinlock/rtlock (which might enqueue its own rt_waiter) and fix up
 	 * the
 	 */
-	spin_lock(q.lock_ptr);
+	alt_spin_lock(q.lock_ptr);
 	/*
 	 * Waiter is unqueued.
 	 */
@@ -1078,7 +1078,7 @@ no_block:
 		ret = (res < 0) ? res : 0;
 
 	futex_unqueue_pi(&q);
-	spin_unlock(q.lock_ptr);
+	alt_spin_unlock(q.lock_ptr);
 	goto out;
 
 out_unlock_put_key:
@@ -1134,7 +1134,7 @@ retry:
 		return ret;
 
 	hb = futex_hash(&key);
-	spin_lock(&hb->lock);
+	alt_spin_lock(&hb->lock);
 retry_hb:
 
 	/*
@@ -1192,7 +1192,7 @@ retry_hb:
 		}
 
 		get_pi_state(pi_state);
-		spin_unlock(&hb->lock);
+		alt_spin_unlock(&hb->lock);
 
 		/* drops pi_state->pi_mutex.wait_lock */
 		ret = wake_futex_pi(uaddr, uval, pi_state, rt_waiter);
@@ -1231,7 +1231,7 @@ retry_hb:
 	 * owner.
 	 */
 	if ((ret = futex_cmpxchg_value_locked(&curval, uaddr, uval, 0))) {
-		spin_unlock(&hb->lock);
+		alt_spin_unlock(&hb->lock);
 		switch (ret) {
 		case -EFAULT:
 			goto pi_faulted;
@@ -1251,7 +1251,7 @@ retry_hb:
 	ret = (curval == uval) ? 0 : -EAGAIN;
 
 out_unlock:
-	spin_unlock(&hb->lock);
+	alt_spin_unlock(&hb->lock);
 	return ret;
 
 pi_retry:

@@ -825,22 +825,22 @@ int futex_wait_requeue_pi(u32 __user *uaddr, unsigned int flags,
 	switch (futex_requeue_pi_wakeup_sync(&q)) {
 	case Q_REQUEUE_PI_IGNORE:
 		/* The waiter is still on uaddr1 */
-		spin_lock(&hb->lock);
+		alt_spin_lock(&hb->lock);
 		ret = handle_early_requeue_pi_wakeup(hb, &q, to);
-		spin_unlock(&hb->lock);
+		alt_spin_unlock(&hb->lock);
 		break;
 
 	case Q_REQUEUE_PI_LOCKED:
 		/* The requeue acquired the lock */
 		if (q.pi_state && (q.pi_state->owner != current)) {
-			spin_lock(q.lock_ptr);
+			alt_spin_lock(q.lock_ptr);
 			ret = fixup_pi_owner(uaddr2, &q, true);
 			/*
 			 * Drop the reference to the pi state which the
 			 * requeue_pi() code acquired for us.
 			 */
 			put_pi_state(q.pi_state);
-			spin_unlock(q.lock_ptr);
+			alt_spin_unlock(q.lock_ptr);
 			/*
 			 * Adjust the return value. It's either -EFAULT or
 			 * success (1) but the caller expects 0 for success.
@@ -860,7 +860,7 @@ int futex_wait_requeue_pi(u32 __user *uaddr, unsigned int flags,
 		if (ret && !rt_mutex_cleanup_proxy_lock(pi_mutex, &rt_waiter))
 			ret = 0;
 
-		spin_lock(q.lock_ptr);
+		alt_spin_lock(q.lock_ptr);
 		debug_rt_mutex_free_waiter(&rt_waiter);
 		/*
 		 * Fixup the pi_state owner and possibly acquire the lock if we
@@ -875,7 +875,7 @@ int futex_wait_requeue_pi(u32 __user *uaddr, unsigned int flags,
 			ret = (res < 0) ? res : 0;
 
 		futex_unqueue_pi(&q);
-		spin_unlock(q.lock_ptr);
+		alt_spin_unlock(q.lock_ptr);
 
 		if (ret == -EINTR) {
 			/*

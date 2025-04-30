@@ -515,7 +515,7 @@ void __futex_unqueue(struct futex_q *q)
 
 	if (WARN_ON_SMP(!q->lock_ptr) || WARN_ON(plist_node_empty(&q->list)))
 		return;
-	lockdep_assert_held(q->lock_ptr);
+	alt_lockdep_assert_held(q->lock_ptr);
 
 	hb = container_of(q->lock_ptr, struct futex_hash_bucket, lock);
 	plist_del(&q->list, &hb->chain);
@@ -542,14 +542,14 @@ struct futex_hash_bucket *futex_q_lock(struct futex_q *q)
 
 	q->lock_ptr = &hb->lock;
 
-	spin_lock(&hb->lock);
+	alt_spin_lock(&hb->lock);
 	return hb;
 }
 
 void futex_q_unlock(struct futex_hash_bucket *hb)
 	__releases(&hb->lock)
 {
-	spin_unlock(&hb->lock);
+	alt_spin_unlock(&hb->lock);
 	futex_hb_waiters_dec(hb);
 }
 
@@ -569,7 +569,7 @@ void __futex_queue(struct futex_q *q, struct futex_hash_bucket *hb)
 
 	plist_node_init(&q->list, prio);
 	plist_add(&q->list, &hb->chain);
-	q->task = current;
+	q->task = komb_get_current();
 }
 
 /**
@@ -585,7 +585,7 @@ void __futex_queue(struct futex_q *q, struct futex_hash_bucket *hb)
  */
 int futex_unqueue(struct futex_q *q)
 {
-	spinlock_t *lock_ptr;
+	alt_spinlock_t *lock_ptr;
 	int ret = 0;
 
 	/* In the common case we don't take the spinlock, which is nice. */
@@ -597,7 +597,7 @@ retry:
 	 */
 	lock_ptr = READ_ONCE(q->lock_ptr);
 	if (lock_ptr != NULL) {
-		spin_lock(lock_ptr);
+		alt_spin_lock(lock_ptr);
 		/*
 		 * q->lock_ptr can change between reading it and
 		 * spin_lock(), causing us to take the wrong lock.  This
@@ -612,14 +612,14 @@ retry:
 		 * we can detect whether we acquired the correct lock.
 		 */
 		if (unlikely(lock_ptr != q->lock_ptr)) {
-			spin_unlock(lock_ptr);
+			alt_spin_unlock(lock_ptr);
 			goto retry;
 		}
 		__futex_unqueue(q);
 
 		BUG_ON(q->pi_state);
 
-		spin_unlock(lock_ptr);
+		alt_spin_unlock(lock_ptr);
 		ret = 1;
 	}
 
@@ -1002,7 +1002,7 @@ static void exit_pi_state_list(struct task_struct *curr)
 		}
 		raw_spin_unlock_irq(&curr->pi_lock);
 
-		spin_lock(&hb->lock);
+		alt_spin_lock(&hb->lock);
 		raw_spin_lock_irq(&pi_state->pi_mutex.wait_lock);
 		raw_spin_lock(&curr->pi_lock);
 		/*
@@ -1012,7 +1012,7 @@ static void exit_pi_state_list(struct task_struct *curr)
 		if (head->next != next) {
 			/* retain curr->pi_lock for the loop invariant */
 			raw_spin_unlock(&pi_state->pi_mutex.wait_lock);
-			spin_unlock(&hb->lock);
+			alt_spin_unlock(&hb->lock);
 			put_pi_state(pi_state);
 			continue;
 		}
@@ -1024,7 +1024,7 @@ static void exit_pi_state_list(struct task_struct *curr)
 
 		raw_spin_unlock(&curr->pi_lock);
 		raw_spin_unlock_irq(&pi_state->pi_mutex.wait_lock);
-		spin_unlock(&hb->lock);
+		alt_spin_unlock(&hb->lock);
 
 		rt_mutex_futex_unlock(&pi_state->pi_mutex);
 		put_pi_state(pi_state);
@@ -1165,7 +1165,7 @@ static int __init futex_init(void)
 	for (i = 0; i < futex_hashsize; i++) {
 		atomic_set(&futex_queues[i].waiters, 0);
 		plist_head_init(&futex_queues[i].chain);
-		spin_lock_init(&futex_queues[i].lock);
+		alt_spin_lock_init(&futex_queues[i].lock);
 	}
 
 	return 0;

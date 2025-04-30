@@ -874,10 +874,16 @@ __always_inline struct task_struct *komb_get_current(void)
 	}
 
 	if(ptr->lock_addr[0] != NULL) {
-		printk(KERN_ALERT "Spinlock combiner asking for current\n");
-		BUG_ON(true);
+		//printk(KERN_ALERT "Spinlock combiner asking for current\n");
+		//BUG_ON(true);
+		return per_cpu_ptr(&komb_nodes[0], ptr->curr_cs_cpu)->task_struct_ptr;
 	}
 
 	return get_current();
 }
 EXPORT_SYMBOL(komb_get_current);
+
+__always_inline void komb_set_current_state(unsigned int state)
+{
+	smp_store_mb(komb_get_current()->__state, state);
+}

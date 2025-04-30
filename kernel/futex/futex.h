@@ -6,6 +6,7 @@
 #include <linux/rtmutex.h>
 #include <linux/sched/wake_q.h>
 #include <linux/compat.h>
+#include <linux/alt_locks.h>
 
 #ifdef CONFIG_PREEMPT_RT
 #include <linux/rcuwait.h>
@@ -114,7 +115,7 @@ static inline bool should_fail_futex(bool fshared)
  */
 struct futex_hash_bucket {
 	atomic_t waiters;
-	spinlock_t lock;
+	alt_spinlock_t lock;
 	struct plist_head chain;
 } ____cacheline_aligned_in_smp;
 
@@ -172,7 +173,7 @@ struct futex_q {
 	struct plist_node list;
 
 	struct task_struct *task;
-	spinlock_t *lock_ptr;
+	alt_spinlock_t *lock_ptr;
 	futex_wake_fn *wake;
 	void *wake_data;
 	union futex_key key;
@@ -249,7 +250,7 @@ static inline void futex_queue(struct futex_q *q, struct futex_hash_bucket *hb)
 	__releases(&hb->lock)
 {
 	__futex_queue(q, hb);
-	spin_unlock(&hb->lock);
+	alt_spin_unlock(&hb->lock);
 }
 
 extern void futex_unqueue_pi(struct futex_q *q);
@@ -319,17 +320,17 @@ double_lock_hb(struct futex_hash_bucket *hb1, struct futex_hash_bucket *hb2)
 	if (hb1 > hb2)
 		swap(hb1, hb2);
 
-	spin_lock(&hb1->lock);
+	alt_spin_lock(&hb1->lock);
 	if (hb1 != hb2)
-		spin_lock_nested(&hb2->lock, SINGLE_DEPTH_NESTING);
+		alt_spin_lock_nested(&hb2->lock, SINGLE_DEPTH_NESTING);
 }
 
 static inline void
 double_unlock_hb(struct futex_hash_bucket *hb1, struct futex_hash_bucket *hb2)
 {
-	spin_unlock(&hb1->lock);
+	alt_spin_unlock(&hb1->lock);
 	if (hb1 != hb2)
-		spin_unlock(&hb2->lock);
+		alt_spin_unlock(&hb2->lock);
 }
 
 /* syscalls */
@@ -382,5 +383,8 @@ extern int futex_wake_op(u32 __user *uaddr1, unsigned int flags,
 extern int futex_unlock_pi(u32 __user *uaddr, unsigned int flags);
 
 extern int futex_lock_pi(u32 __user *uaddr, unsigned int flags, ktime_t *time, int trylock);
+
+extern struct task_struct *komb_get_current(void);
+extern void komb_set_current_state(unsigned int state);
 
 #endif /* _FUTEX_H */

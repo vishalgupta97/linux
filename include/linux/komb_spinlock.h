@@ -85,4 +85,5 @@ extern int komb_spin_is_contended(struct qspinlock *lock);
 extern int komb_spin_trylock(struct qspinlock *lock);
 extern void komb_spin_lock(struct qspinlock *lock);
 extern void komb_spin_unlock(struct qspinlock *lock);
+extern void komb_spin_lock_nested(struct qspinlock *lock, int level);
 #endif
