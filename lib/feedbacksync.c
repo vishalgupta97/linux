@@ -86,7 +86,7 @@ __always_inline struct lock_stat * get_stat_ptr(uint64_t bucket, enum HASHTABLE_
 
 void __stat_lock_acquire(struct fds_lock_key *key, enum HASHTABLE_TYPE ht_type)
 {
-	if (!fds_running || key == NULL || key->lockm == FDS_DISABLE)
+	if (!fds_running || key == NULL) // || key->lockm == FDS_DISABLE)
 		return;
 
 	struct lock_stat *stat_ptr = NULL;
@@ -965,6 +965,9 @@ inline void __monitor_fds_stats(struct lock_stat *tmp, const char *type,
 	int max_value, max_index;
 	if (tmp->counter > QSPINLOCK_LIMIT || tmp->read_counter > QSPINLOCK_LIMIT) {
 		enum fds_lock_mechanisms before = tmp->key->lockm;
+		if(before == FDS_DISABLE)
+			return;
+
 		switch (ltype) {
 		case FDS_SPINLOCK:
 //			for(i = 0; i < NELEMS(fds_spinlock_implementations); i++)
