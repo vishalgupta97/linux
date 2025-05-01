@@ -414,7 +414,7 @@ void print_fds_stats(void)
 #define IS_DIRECTION 2
 
 #define QSPINLOCK_LIMIT 10000
-#define MONITOR_TIME 5000 // In milliseconds
+#define MONITOR_TIME 10000 // In milliseconds
 
 #define QSPINLOCK_PER_SECOND 200000
 #define MUTEX_PER_SECOND 150000
@@ -540,8 +540,8 @@ static inline const char *get_str_lockm(enum fds_lock_mechanisms lockm)
 	switch (lockm) {
 	case FDS_QSPINLOCK:
 		return "QSPINLOCK";
-	case FDS_TAS:
-		return "TAS";
+	case FDS_CNA:
+		return "CNA";
 	case FDS_TCLOCK:
 		return "TCLOCK";
 	case FDS_TDLOCK:
@@ -563,7 +563,7 @@ static long num_contending_locks = 0;
 
 static struct contending_locks observed_locks[MAX_CONTENDING_LOCKS];
 
-static enum fds_lock_mechanisms fds_spinlock_implementations[] = { FDS_TAS, FDS_QSPINLOCK, FDS_TCLOCK, FDS_TDLOCK};
+static enum fds_lock_mechanisms fds_spinlock_implementations[] = { FDS_QSPINLOCK, FDS_CNA, FDS_TCLOCK}; //, FDS_TDLOCK};
 static enum fds_lock_mechanisms fds_mutex_implementations[] = { FDS_QSPINLOCK, FDS_TCLOCK, FDS_TDLOCK };
 static enum fds_lock_mechanisms fds_read_sem_implementations[] = { FDS_QSPINLOCK, FDS_PERCPU};
 static enum fds_lock_mechanisms fds_write_sem_implementations[] = {FDS_QSPINLOCK, FDS_TCLOCK, FDS_TDLOCK};
@@ -970,11 +970,12 @@ inline void __monitor_fds_stats(struct lock_stat *tmp, const char *type,
 
 		switch (ltype) {
 		case FDS_SPINLOCK:
-//			for(i = 0; i < NELEMS(fds_spinlock_implementations); i++)
-//				if(tmp->key->lockm == fds_spinlock_implementations[i])
-//					break;
-//			tmp->key->lockm = fds_spinlock_implementations[(i+1) % NELEMS(fds_spinlock_implementations)];
-			
+			for(i = 0; i < NELEMS(fds_spinlock_implementations); i++)
+				if(tmp->key->lockm == fds_spinlock_implementations[i])
+					break;
+			tmp->key->lockm = fds_spinlock_implementations[(i+1) % NELEMS(fds_spinlock_implementations)];
+			break;
+
 //			feature_vector[0] = 4;
 //			feature_vector[1] = cpumask_weight(&tmp->contending_cpus);
 //			feature_vector[2] = tmp->counter / (MONITOR_TIME / 1000);
@@ -1010,8 +1011,9 @@ inline void __monitor_fds_stats(struct lock_stat *tmp, const char *type,
 //			}
 //			tmp->key->lockm = next_lock_type;
 //			break;
-			tmp->key->lockm = get_optimal_spinlock_random_forest_classifier(tmp);
-			break;
+
+//			tmp->key->lockm = get_optimal_spinlock_random_forest_classifier(tmp);
+//			break;
 		case FDS_WRITE_SEM:
 			tmp->key->lockm = get_optimal_rwsem_random_forest_classifier(tmp);
 			break;

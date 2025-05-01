@@ -665,14 +665,14 @@ struct fds_lock_key *key)
 //	if (val == 0)
 //		return;
 
-	if (lockm == FDS_TAS) {
-                spin_stat_lock_acquire(key);
-		while (atomic_cmpxchg_acquire(&lock->val, 0, _Q_LOCKED_VAL)) {
-			atomic_cond_read_relaxed(&lock->val, !(VAL));
-		}
-
-		return;
-	}
+//	if (lockm == FDS_TAS) {
+//                spin_stat_lock_acquire(key);
+//		while (atomic_cmpxchg_acquire(&lock->val, 0, _Q_LOCKED_VAL)) {
+//			atomic_cond_read_relaxed(&lock->val, !(VAL));
+//		}
+//
+//		return;
+//	}
 
 //        goto queue;
 //
@@ -701,8 +701,8 @@ struct fds_lock_key *key)
 //
 //	clear_pending_set_locked(lock);
 //	return;
-
-queue:
+//
+//queue:
 	curr_node = this_cpu_ptr(&komb_nodes[0]);
 	KOMB_BUG_ON(curr_node == NULL);
         curr_node->key = key;
@@ -767,12 +767,12 @@ queue:
 
 		if (((val & _Q_TAIL_MASK) == tail) &&
 		    atomic_try_cmpxchg_relaxed(&lock->val, &val,
-					       _Q_LOCKED_IRQ_VAL)) {
+					       _Q_LOCKED_VAL)) {
 			//print_debug("IRQ only one in the queue unlocked\n");
 			goto irq_release;
 		}
 
-		while (true) {
+		/*while (true) {
 			val = atomic_cond_read_relaxed(
 				&lock->val, !(VAL & _Q_LOCKED_PENDING_MASK));
 
@@ -785,7 +785,10 @@ queue:
 			if (atomic_cmpxchg_acquire(&lock->val, val, new_val) ==
 			    val)
 				break;
-		}
+		}*/
+
+		//TODO: Check if this is correct.
+		set_locked(lock);
 
 		//print_debug("IRQ got the lock\n");
 
@@ -848,11 +851,15 @@ void komb_spin_lock(struct qspinlock *lock)
 }
 EXPORT_SYMBOL_GPL(komb_spin_lock);
 
+extern void cna_spin_lock_slowpath(struct qspinlock *lock, struct fds_lock_key *key);
+
 __always_inline void komb_spin_lock_fds(struct qspinlock *lock,
 					struct fds_lock_key *key)
 {
 	if (key->lockm == FDS_TDLOCK && ((smp_processor_id() % num_cores_per_socket) != 0))
 		kd_spin_lock(lock, key);
+	else if(key->lockm == FDS_CNA)
+		cna_spin_lock_slowpath(lock, key);
 	else
 		__komb_spin_lock(lock, key->lockm, key);
 }
@@ -872,12 +879,6 @@ komb_spin_unlock(struct qspinlock *lock)
 	max_idx = -1;
 	my_idx = -1;
 
-	// if (lock->locked == _Q_LOCKED_VAL ||
-	//     lock->locked == _Q_LOCKED_IRQ_VAL) {
-	// 	lock->locked = false;
-	// 	return;
-	// }
-
 	for (j = 0; j < 8; j++) {
 		temp_lock_addr = ptr->lock_addr[j];
 		if (temp_lock_addr != NULL)
@@ -889,8 +890,7 @@ komb_spin_unlock(struct qspinlock *lock)
 	}
 
 	if (my_idx == -1) {
-		if (lock->locked == _Q_LOCKED_VAL ||
-		    lock->locked == _Q_LOCKED_IRQ_VAL)
+		if (lock->locked == _Q_LOCKED_VAL)
 			lock->locked = false;
 		else if (lock->locked == _Q_LOCKED_COMBINER_VAL) {
 #ifdef KOMB_STATS

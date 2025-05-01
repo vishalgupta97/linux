@@ -481,12 +481,12 @@ kd_spin_lock(struct qspinlock *lock, struct fds_lock_key *key)
 
 		if (((val & _Q_TAIL_MASK) == tail) &&
 		    atomic_try_cmpxchg_relaxed(&lock->val, &val,
-					       _Q_LOCKED_IRQ_VAL)) {
+					       _Q_LOCKED_VAL)) {
 			print_debug("IRQ only one in the queue unlocked\n");
 			goto irq_release;
 		}
 
-		while (true) {
+		/*while (true) {
 			val = atomic_cond_read_relaxed(
 				&lock->val, !(VAL & _Q_LOCKED_PENDING_MASK));
 
@@ -499,7 +499,9 @@ kd_spin_lock(struct qspinlock *lock, struct fds_lock_key *key)
 			if (atomic_cmpxchg_acquire(&lock->val, val, new_val) ==
 			    val)
 				break;
-		}
+		}*/
+
+		set_locked(lock);
 
 		print_debug("IRQ got the lock\n");
 

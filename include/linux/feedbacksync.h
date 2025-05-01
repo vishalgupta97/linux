@@ -10,12 +10,13 @@
 
 enum fds_lock_mechanisms {
 	FDS_QSPINLOCK 	= (1 << 0),
-	FDS_TAS 	= (1 << 1),
-	FDS_TCLOCK	= (1 << 2),
-	FDS_TDLOCK	= (1 << 3),
-	FDS_LOCKM_MAX	= (1 << 4),
-	FDS_PERCPU	= (1 << 5),
-	FDS_DISABLE	= (1 << 6),
+	FDS_CNA 	= (1 << 1),
+	FDS_SHFLLOCK    = (1 << 2),
+	FDS_TCLOCK	= (1 << 3),
+	FDS_TDLOCK	= (1 << 4),
+	FDS_LOCKM_MAX	= (1 << 5),
+	FDS_PERCPU	= (1 << 6),
+	FDS_DISABLE	= (1 << 7),
 };
 
 struct fds_lock_key {

@@ -75,7 +75,7 @@
 #define _Q_LOCKED_PENDING_MASK (_Q_LOCKED_MASK | _Q_PENDING_MASK)
 #define _Q_LOCKED_COMBINER_VAL 7
 #define _Q_UNLOCKED_OOO_VAL 15 //Unlocked a lock out-of-order
-#define _Q_LOCKED_IRQ_VAL 31 // Lock Stealing by IRQ
+//#define _Q_LOCKED_IRQ_VAL 31 // Lock Stealing by IRQ
 
 DECLARE_PER_CPU_SHARED_ALIGNED(struct komb_node, komb_nodes[MAX_NODES]);
 DECLARE_PER_CPU_SHARED_ALIGNED(struct shadow_stack, local_shadow_stack);

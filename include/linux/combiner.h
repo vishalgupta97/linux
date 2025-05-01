@@ -11,7 +11,7 @@
 #include <linux/percpu.h>
 
 #define DSM_DEBUG 0
-#define DEBUG_KOMB 0
+#define DEBUG_KOMB 1
 
 #define KOMB_STATS 1
 

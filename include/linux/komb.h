@@ -19,6 +19,10 @@ struct komb_node {
 			struct qspinlock *lock;
 			struct task_struct *task_struct_ptr;
                         struct fds_lock_key *key;
+			u64 start_time;
+			int cna_numa_node;
+			u32 cna_encoded_tail;
+			u32 cna_queue;
 			int tail;
 			int count;
 			int socket_id;
