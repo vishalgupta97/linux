@@ -238,8 +238,14 @@ static int cna_order_queue(struct komb_node *node)
 	struct komb_node *next = READ_ONCE(node->next);
 	int numa_node, next_numa_node;
 
-	if (!next || !check_cna_node(next))
+	if (!next)
 		return 0;
+
+	if(!check_cna_node(next)) {
+		//if(READ_ONCE(node->cna_queue))
+		WRITE_ONCE(node->start_time, FLUSH_SECONDARY_QUEUE);
+		return 1;
+	}
 
 	numa_node = node->cna_numa_node;
 	next_numa_node = next->cna_numa_node;
@@ -284,7 +290,7 @@ static __always_inline u32 cna_wait_head_or_lock(struct qspinlock *lock,
 		 * Try and put the time otherwise spent spin waiting on
 		 * _Q_LOCKED_PENDING_MASK to use by sorting our lists.
 		 */
-		while (LOCK_IS_BUSY(lock) && !cna_order_queue(node))
+		while (!cna_order_queue(node) && LOCK_IS_BUSY(lock))
 			cpu_relax();
 	} else {
 		node->start_time = FLUSH_SECONDARY_QUEUE;
@@ -296,38 +302,47 @@ static __always_inline u32 cna_wait_head_or_lock(struct qspinlock *lock,
 static inline void cna_lock_handoff(struct komb_node *node,
 				 struct komb_node *next)
 {
-	u32 val = 1;
+	next = node->next;
+	if(!check_cna_node(next) && node->cna_queue > 1) {
+		next = cna_splice_head(NULL, 0, node, next);		
+	}
+	else {
+		if (node->start_time != FLUSH_SECONDARY_QUEUE) {
+			if (node->cna_queue > 1) {
 
-	if (node->start_time != FLUSH_SECONDARY_QUEUE) {
-		if (node->cna_queue > 1) {
-			val = node->cna_queue;	/* preseve secondary queue */
+				/*
+				* We have a local waiter, either real or fake one;
+				* reload @next in case it was changed by cna_order_queue().
+				*/
+				//next = node->next;
+
+				KOMB_BUG_ON(!check_cna_node(next));
+
+				/*
+				* Pass over NUMA node id of primary queue, to maintain the
+				* preference even if the next waiter is on a different node.
+				*/
+				next->cna_queue = node->cna_queue; /* preserve secondary queue */
+				next->cna_numa_node = node->cna_numa_node;
+				next->start_time = node->start_time;
+			} else {
+				KOMB_BUG_ON(node->start_time != 0);
+			}
+		} else {
+			/*
+			* We decided to flush the secondary queue;
+			* this can only happen if that queue is not empty.
+			*/
+			KOMB_BUG_ON(node->cna_queue <= 1);
 
 			/*
-			 * We have a local waiter, either real or fake one;
-			 * reload @next in case it was changed by cna_order_queue().
-			 */
-			next = node->next;
- 
-			/*
-			 * Pass over NUMA node id of primary queue, to maintain the
-			 * preference even if the next waiter is on a different node.
-			 */
-			next->cna_numa_node = node->cna_numa_node;
-			next->start_time = node->start_time;
+			* Splice the secondary queue onto the primary queue and pass the lock
+			* to the longest waiting remote waiter.
+			*/
+			next = cna_splice_head(NULL, 0, node, next);
 		}
-	} else {
- 		/*
-		 * We decided to flush the secondary queue;
-		 * this can only happen if that queue is not empty.
- 		 */
-		WARN_ON(node->cna_queue <= 1);
- 		/*
-		 * Splice the secondary queue onto the primary queue and pass the lock
-		 * to the longest waiting remote waiter.
- 		 */
-		next = cna_splice_head(NULL, 0, node, next);
- 	}
-
+	}
+	
 	WRITE_ONCE(next->locked, false);
 }
 

@@ -529,6 +529,10 @@ __komb_spin_lock_slowpath(struct qspinlock *lock)
 	// curr_node->my_preempt_count = preempt_count();
 	curr_node->diff_preempt_count = 0;
 	curr_node->lockm = FDS_TCLOCK;
+	curr_node->cna_numa_node = 0;
+	curr_node->start_time = 0;
+	curr_node->cna_queue = 0;
+	curr_node->cna_encoded_tail = 0;
 
 	print_debug("Adding node for tclock\n");
 
@@ -738,6 +742,10 @@ struct fds_lock_key *key)
 		// curr_node->my_preempt_count = preempt_count();
 		curr_node->diff_preempt_count = 0;
 		curr_node->lockm = FDS_QSPINLOCK;
+		curr_node->cna_numa_node = 0;
+		curr_node->start_time = 0;
+		curr_node->cna_queue = 0;
+		curr_node->cna_encoded_tail = 0;
 
 		uint64_t prev_rsp = curr_node->rsp;
 		curr_node->rsp = 0xdeadbeef;
