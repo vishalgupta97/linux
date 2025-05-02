@@ -19,7 +19,8 @@ void __raw_spin_lock_init(raw_spinlock_t *lock, const char *name,
 {
 	lock->raw_lock = (arch_spinlock_t)__ARCH_SPIN_LOCK_UNLOCKED;       
 	lock->key = key;
-	init_fds_lock_key(key, name, DEFAULT_FDS_LOCK);
+	if(key)
+		init_fds_lock_key(key, name, DEFAULT_FDS_LOCK);
 }
 
 void __raw_spin_lock_init_static_fds(raw_spinlock_t *lock, const char *name,

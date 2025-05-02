@@ -108,6 +108,11 @@ extern void __raw_spin_lock_init_static_fds(raw_spinlock_t *lock,
 		__raw_spin_lock_init((lock), #lock, &__key); \
 	} while (0)
 
+#define raw_spin_lock_init_disable_fds(lock)                 \
+	do {                                                 \
+		__raw_spin_lock_init((lock), #lock, NULL); \
+	} while (0)
+
 #define raw_spin_is_locked(lock) arch_spin_is_locked(&(lock)->raw_lock)
 
 #ifdef arch_spin_is_contended
@@ -362,6 +367,7 @@ static __always_inline raw_spinlock_t *spinlock_check(spinlock_t *lock)
 	} while (0)
 
 extern struct task_struct *komb_get_current(void);
+extern void komb_set_current_state(unsigned int state);
 
 static __always_inline void spin_lock(spinlock_t *lock)
 {

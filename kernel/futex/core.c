@@ -569,7 +569,7 @@ void __futex_queue(struct futex_q *q, struct futex_hash_bucket *hb)
 
 	plist_node_init(&q->list, prio);
 	plist_add(&q->list, &hb->chain);
-	q->task = current;
+	q->task = komb_get_current();
 }
 
 /**
@@ -1165,7 +1165,7 @@ static int __init futex_init(void)
 	for (i = 0; i < futex_hashsize; i++) {
 		atomic_set(&futex_queues[i].waiters, 0);
 		plist_head_init(&futex_queues[i].chain);
-		spin_lock_init_disable_fds(&futex_queues[i].lock);
+		spin_lock_init(&futex_queues[i].lock);
 	}
 
 	return 0;
