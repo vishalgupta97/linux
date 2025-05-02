@@ -416,8 +416,8 @@ void print_fds_stats(void)
 #define QSPINLOCK_LIMIT 10000
 #define MONITOR_TIME 10000 // In milliseconds
 
-#define QSPINLOCK_PER_SECOND 200000
-#define MUTEX_PER_SECOND 150000
+#define QSPINLOCK_PER_SECOND 15000
+#define MUTEX_PER_SECOND 15000
 
 uint64_t value = 0;
 uint64_t direction = 0;
@@ -564,9 +564,9 @@ static long num_contending_locks = 0;
 static struct contending_locks observed_locks[MAX_CONTENDING_LOCKS];
 
 static enum fds_lock_mechanisms fds_spinlock_implementations[] = { FDS_QSPINLOCK, FDS_CNA, FDS_TCLOCK}; //, FDS_TDLOCK};
-static enum fds_lock_mechanisms fds_mutex_implementations[] = { FDS_QSPINLOCK, FDS_TCLOCK, FDS_TDLOCK };
+static enum fds_lock_mechanisms fds_mutex_implementations[] = { FDS_QSPINLOCK, FDS_TCLOCK}; //, FDS_TDLOCK };
 static enum fds_lock_mechanisms fds_read_sem_implementations[] = { FDS_QSPINLOCK, FDS_PERCPU};
-static enum fds_lock_mechanisms fds_write_sem_implementations[] = {FDS_QSPINLOCK, FDS_TCLOCK, FDS_TDLOCK};
+static enum fds_lock_mechanisms fds_write_sem_implementations[] = {FDS_QSPINLOCK, FDS_TCLOCK}; //, FDS_TDLOCK};
 
 #define NELEMS(x) (sizeof(x) / sizeof((x)[0]))
 
