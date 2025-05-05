@@ -157,7 +157,7 @@ static int init_file(struct file *f, int flags, const struct cred *cred)
 
 	rwlock_init(&f->f_owner.lock);
 	spin_lock_init(&f->f_lock);
-	mutex_init(&f->f_pos_lock);
+	alt_mutex_init(&f->f_pos_lock);
 	f->f_flags = flags;
 	f->f_mode = OPEN_FMODE(flags);
 	/* f->f_version: 0 */
