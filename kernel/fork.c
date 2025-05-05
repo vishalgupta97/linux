@@ -606,6 +606,7 @@ void free_task(struct task_struct *tsk)
 	if (tsk->flags & PF_KTHREAD)
 		free_kthread_struct(tsk);
 	bpf_task_storage_free(tsk);
+	vfree(tsk->aqm_node);
 	free_task_struct(tsk);
 }
 EXPORT_SYMBOL(free_task);
@@ -1194,6 +1195,9 @@ static struct task_struct *dup_task_struct(struct task_struct *orig, int node)
 	tsk->mm_cid_active = 0;
 	tsk->migrate_from_cpu = -1;
 #endif
+	
+	tsk->aqm_node = vzalloc(sizeof(struct aqm_node));
+
 	return tsk;
 
 free_stack:

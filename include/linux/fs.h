@@ -49,6 +49,8 @@
 #include <asm/byteorder.h>
 #include <uapi/linux/fs.h>
 
+#include <linux/aqm.h>
+
 struct backing_dev_info;
 struct bdi_writeback;
 struct bio;
@@ -1000,7 +1002,7 @@ struct file {
 	spinlock_t		f_lock;
 	fmode_t			f_mode;
 	atomic_long_t		f_count;
-	struct mutex		f_pos_lock;
+	struct aqm_mutex	f_pos_lock;
 	loff_t			f_pos;
 	unsigned int		f_flags;
 	struct fown_struct	f_owner;

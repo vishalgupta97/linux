@@ -1188,14 +1188,14 @@ unsigned long __fdget_pos(unsigned int fd)
 
 	if (file && file_needs_f_pos_lock(file)) {
 		v |= FDPUT_POS_UNLOCK;
-		mutex_lock(&file->f_pos_lock);
+		aqm_lock(&file->f_pos_lock);
 	}
 	return v;
 }
 
 void __f_unlock_pos(struct file *f)
 {
-	mutex_unlock(&f->f_pos_lock);
+	aqm_unlock(&f->f_pos_lock);
 }
 
 /*
