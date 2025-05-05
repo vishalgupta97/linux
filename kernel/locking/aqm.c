@@ -82,14 +82,19 @@ static inline void set_waitcount(struct aqm_node *node, int count)
 static void wake_up_waiter(struct aqm_node *node)
 {
         struct task_struct *task = node->task;
-        DEFINE_WAKE_Q(wake_q);
+        /*DEFINE_WAKE_Q(wake_q);
         wake_q_add(&wake_q, task);
-        wake_up_q(&wake_q);
+        wake_up_q(&wake_q);*/
+        get_task_struct(task);
+        wake_up_process(task);
+        put_task_struct(task);
 }
 
 static void schedule_out_curr_task(void)
 {
+        preempt_enable();
         schedule();
+        preempt_disable();
 }
 
 static inline int force_update_node(struct aqm_node *node, u8 state)
@@ -115,11 +120,11 @@ static inline int force_update_node(struct aqm_node *node, u8 state)
 
 static void park_waiter(struct aqm_node *node, long state)
 {
+        set_current_state(state);
         if (cmpxchg(&node->lstatus, _AQ_MCS_STATUS_PWAIT,
                     _AQ_MCS_STATUS_PARKED) != _AQ_MCS_STATUS_PWAIT)
                 goto out_acquired;
 
-        set_current_state(state);
         schedule_out_curr_task();
 
      out_acquired:
@@ -137,6 +142,8 @@ void aqm_init(struct aqm_mutex *lock)
 static void shuffle_waiters(struct aqm_mutex *lock, struct aqm_node *node,
                             int is_next_waiter)
 {
+        return;
+
         struct aqm_node *curr, *prev, *next, *last, *sleader, *qend;
         int nid;
         int curr_locked_count;
@@ -347,6 +354,8 @@ static void __aqm_lock_slowpath(struct aqm_mutex *lock, struct aqm_node *node)
         long state = TASK_INTERRUPTIBLE;
 	/* int disable_steal = false; */
 
+        preempt_disable();
+
         node->next = NULL;
         node->last_visited = NULL;
         node->locked = _AQ_MCS_STATUS_PWAIT;
@@ -464,6 +473,7 @@ static void __aqm_lock_slowpath(struct aqm_mutex *lock, struct aqm_node *node)
         }
 
      out:
+        preempt_enable();
         return;
 	/* if (disable_steal) */
 	/* 	enable_stealing(lock); */
