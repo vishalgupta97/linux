@@ -414,7 +414,7 @@ void print_fds_stats(void)
 #define IS_DIRECTION 2
 
 #define QSPINLOCK_LIMIT 10000
-#define MONITOR_TIME 10000 // In milliseconds
+#define MONITOR_TIME 5000 // In milliseconds
 
 #define QSPINLOCK_PER_SECOND 15000
 #define MUTEX_PER_SECOND 15000
@@ -924,8 +924,8 @@ inline enum fds_lock_mechanisms get_optimal_spinlock_random_forest_classifier(st
 	switch(optimal_index) {
 		case 0: next_lock_type = FDS_QSPINLOCK; break; //AQS
 		case 1: next_lock_type = FDS_QSPINLOCK; break;
-		case 2: next_lock_type = FDS_TDLOCK; break; //TCLOCK
-		case 3: next_lock_type = FDS_TDLOCK; break; //TDLOCK
+		case 2: next_lock_type = FDS_TCLOCK; break; //TCLOCK
+		case 3: next_lock_type = FDS_TCLOCK; break; //TDLOCK
 	}
 
 	printk(KERN_ALERT "SPINLOCK CPUCNT:%ld RPS:%ld next_lock: %s\n",
@@ -970,11 +970,11 @@ inline void __monitor_fds_stats(struct lock_stat *tmp, const char *type,
 
 		switch (ltype) {
 		case FDS_SPINLOCK:
-			for(i = 0; i < NELEMS(fds_spinlock_implementations); i++)
-				if(tmp->key->lockm == fds_spinlock_implementations[i])
-					break;
-			tmp->key->lockm = fds_spinlock_implementations[(i+1) % NELEMS(fds_spinlock_implementations)];
-			break;
+//			for(i = 0; i < NELEMS(fds_spinlock_implementations); i++)
+//				if(tmp->key->lockm == fds_spinlock_implementations[i])
+//					break;
+//			tmp->key->lockm = fds_spinlock_implementations[(i+1) % NELEMS(fds_spinlock_implementations)];
+//			break;
 
 //			feature_vector[0] = 4;
 //			feature_vector[1] = cpumask_weight(&tmp->contending_cpus);
@@ -1012,10 +1012,13 @@ inline void __monitor_fds_stats(struct lock_stat *tmp, const char *type,
 //			tmp->key->lockm = next_lock_type;
 //			break;
 
-//			tmp->key->lockm = get_optimal_spinlock_random_forest_classifier(tmp);
-//			break;
+			tmp->key->lockm = get_optimal_spinlock_random_forest_classifier(tmp);
+			break;
 		case FDS_WRITE_SEM:
 			tmp->key->lockm = get_optimal_rwsem_random_forest_classifier(tmp);
+			break;
+		case FDS_MUTEX:
+			tmp->key->lockm = get_optimal_spinlock_random_forest_classifier(tmp);
 			break;
 
 		/*case FDS_READ_SEM:
@@ -1066,9 +1069,9 @@ void monitor_fds_stats(void)
 		__monitor_fds_stats(tmp, "SPINLOCK", FDS_SPINLOCK);
 	}
 
-	/*hash_for_each(mutex_stats_ht, bkt, tmp, hnode) {
+	hash_for_each(mutex_stats_ht, bkt, tmp, hnode) {
 		__monitor_fds_stats(tmp, "MUTEX", FDS_MUTEX);
-	}*/
+	}
 
 	spin_unlock(&stat_ht_lock);
 }
