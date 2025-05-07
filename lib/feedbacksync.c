@@ -963,8 +963,8 @@ inline void __monitor_fds_stats(struct lock_stat *tmp, const char *type,
 	int i, j;
 	long feature_vector[8];
 	int max_value, max_index;
-	if (tmp->counter > QSPINLOCK_LIMIT || tmp->read_counter > QSPINLOCK_LIMIT) {
-		enum fds_lock_mechanisms before = tmp->key->lockm;
+	enum fds_lock_mechanisms before = tmp->key->lockm;
+	if (tmp->counter > QSPINLOCK_LIMIT || tmp->read_counter > QSPINLOCK_LIMIT || before != FDS_QSPINLOCK) {
 		if(before == FDS_DISABLE)
 			return;
 
@@ -1116,7 +1116,7 @@ static int __init feedback_sync_init(void)
 	komb_rwsem_init();
 
 	fdsthreads = kthread_create(fds_monitor, NULL, "fds_monitor");
-	kthread_bind(fdsthreads, 0);
+	kthread_bind(fdsthreads, 223);
 	if (fdsthreads) {
 		wake_up_process(fdsthreads);
 		return 0;
