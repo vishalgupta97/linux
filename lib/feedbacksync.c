@@ -947,7 +947,7 @@ inline enum fds_lock_mechanisms get_optimal_rwsem_random_forest_classifier(struc
 		case 0: next_lock_type = FDS_PERCPU; break;
 		case 1: next_lock_type = FDS_QSPINLOCK; break;
 		case 2: next_lock_type = FDS_TCLOCK; break;
-		case 3: next_lock_type = FDS_TDLOCK; break; //TDLOCK
+		case 3: next_lock_type = FDS_TCLOCK; break; //TDLOCK
 	}
 
 	printk(KERN_ALERT "RWSEM RWRATIO: %ld CPUCNT:%ld RPS:%ld next_lock: %s\n",
