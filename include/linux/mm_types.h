@@ -3,6 +3,7 @@
 #define _LINUX_MM_TYPES_H
 
 #include <linux/mm_types_task.h>
+#include <linux/alt_locks.h>
 
 #include <linux/auxvec.h>
 #include <linux/kref.h>
@@ -21,8 +22,6 @@
 #include <linux/percpu_counter.h>
 
 #include <asm/mmu.h>
-
-#include <linux/alt_locks.h>
 
 #ifndef AT_VECTOR_SIZE_ARCH
 #define AT_VECTOR_SIZE_ARCH 0

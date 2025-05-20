@@ -44,7 +44,7 @@ is_static struct percpu_rw_semaphore name = {				\
 
 extern bool __percpu_down_read(struct percpu_rw_semaphore *, bool);
 
-static inline void percpu_down_read(struct percpu_rw_semaphore *sem)
+inline void percpu_down_read(struct percpu_rw_semaphore *sem)
 {
 	might_sleep();
 
@@ -70,7 +70,7 @@ static inline void percpu_down_read(struct percpu_rw_semaphore *sem)
 	preempt_enable();
 }
 
-static inline bool percpu_down_read_trylock(struct percpu_rw_semaphore *sem)
+inline bool percpu_down_read_trylock(struct percpu_rw_semaphore *sem)
 {
 	bool ret = true;
 
@@ -94,7 +94,7 @@ static inline bool percpu_down_read_trylock(struct percpu_rw_semaphore *sem)
 	return ret;
 }
 
-static inline void percpu_up_read(struct percpu_rw_semaphore *sem)
+inline void percpu_up_read(struct percpu_rw_semaphore *sem)
 {
 	rwsem_release(&sem->dep_map, _RET_IP_);
 
@@ -122,44 +122,49 @@ static inline void percpu_up_read(struct percpu_rw_semaphore *sem)
 }
 
 extern bool percpu_is_read_locked(struct percpu_rw_semaphore *);
+extern bool percpu_rwsem_is_locked(struct percpu_rw_semaphore *);
 extern void percpu_down_write(struct percpu_rw_semaphore *);
+extern bool percpu_down_write_trylock(struct percpu_rw_semaphore *);
 extern void percpu_up_write(struct percpu_rw_semaphore *);
 
-static inline bool percpu_is_write_locked(struct percpu_rw_semaphore *sem)
+inline bool percpu_is_write_locked(struct percpu_rw_semaphore *sem)
 {
 	return atomic_read(&sem->block);
 }
 
 extern int __percpu_init_rwsem(struct percpu_rw_semaphore *,
-				const char *, struct lock_class_key *);
+				const char *);
 
 extern void percpu_free_rwsem(struct percpu_rw_semaphore *);
 
 #define percpu_init_rwsem(sem)					\
 ({								\
-	static struct lock_class_key rwsem_key;			\
-	__percpu_init_rwsem(sem, #sem, &rwsem_key);		\
+	__percpu_init_rwsem(sem, #sem); 		\
 })
 
 #define percpu_rwsem_is_held(sem)	lockdep_is_held(sem)
 #define percpu_rwsem_assert_held(sem)	lockdep_assert_held(sem)
 
-static inline void percpu_rwsem_release(struct percpu_rw_semaphore *sem,
+inline void percpu_rwsem_release(struct percpu_rw_semaphore *sem,
 					bool read, unsigned long ip)
 {
 	lock_release(&sem->dep_map, ip);
 }
 
-static inline void percpu_rwsem_acquire(struct percpu_rw_semaphore *sem,
+inline void percpu_rwsem_acquire(struct percpu_rw_semaphore *sem,
 					bool read, unsigned long ip)
 {
 	lock_acquire(&sem->dep_map, 0, 1, read, 1, NULL, ip);
 }
 
-static inline void percpu_down_write_nested(struct percpu_rw_semaphore *sem)
-{
-	percpu_down_write(sem);
-}
+//static inline void percpu_down_write_nested(struct percpu_rw_semaphore *sem)
+//{
+//	percpu_down_write(sem);
+//}
 
 extern void percpu_downgrade_write(struct percpu_rw_semaphore *sem);
+
+# define percpu_down_read_nested(sem, subclass)			percpu_down_read(sem)
+# define percpu_down_write_nested(sem, subclass)		percpu_down_write(sem)
+# define percpu_down_read_non_owner(sem)			percpu_down_read(sem)
 #endif
