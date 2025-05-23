@@ -18,6 +18,10 @@ DEFINE_PER_CPU_ALIGNED(uint64_t, fixing_preempt_count);
 DEFINE_PER_CPU_ALIGNED(uint64_t, ooo_unlocks);
 #endif
 
+#if FDS_MEASURE_TIME
+DEFINE_PER_CPU_ALIGNED(uint64_t, spinlock_cs_time);
+#endif
+
 DEFINE_PER_CPU_SHARED_ALIGNED(struct komb_node, komb_nodes[MAX_NODES]);
 DEFINE_PER_CPU_SHARED_ALIGNED(struct shadow_stack, local_shadow_stack);
 
@@ -397,7 +401,7 @@ __komb_spin_lock_longjmp(struct qspinlock *lock, int tail,
 			// 	curr_node->diff_preempt_count = 0;
 			// }
 
-			for (j = 7; j >= 0; j--)
+			for (j = 6; j >= 0; j--)
 				if (ptr->lock_addr[j] != NULL)
 					break;
 
@@ -464,12 +468,12 @@ __komb_spin_lock_longjmp(struct qspinlock *lock, int tail,
 	ptr->local_queue_head = NULL;
 	ptr->local_queue_tail = NULL;
 
-	j = 7;
-	for (j = 7; j >= 0; j--)
+	j = 6;
+	for (j = 6; j >= 0; j--)
 		if (ptr->lock_addr[j] != NULL)
 			break;
 	j += 1;
-	KOMB_BUG_ON(j >= 8 || j < 0);
+	KOMB_BUG_ON(j >= 7 || j < 0);
 	ptr->lock_addr[j] = lock;
 
 	run_combiner(lock, next_node);
@@ -813,6 +817,9 @@ struct fds_lock_key *key)
 irq_release:
 		curr_node = this_cpu_ptr(&komb_nodes[0]);
 		curr_node->count--;
+		LOCK_START_TIMING_PER_CPU(spinlock_cs_time);
+		struct shadow_stack *ptr = this_cpu_ptr(&local_shadow_stack);
+		ptr->lock_addr[7] = key;
 		return;
 	} else {
 		curr_node = this_cpu_ptr(&komb_nodes[0]);
@@ -876,6 +883,7 @@ __attribute__((noipa)) noinline notrace void
 komb_spin_unlock(struct qspinlock *lock)
 {
 	struct shadow_stack *ptr = this_cpu_ptr(&local_shadow_stack);
+	struct fds_lock_key *key;
 	int from_cpuid = ptr->curr_cs_cpu;
 	void *incoming_rsp_ptr, *outgoing_rsp_ptr;
 
@@ -887,7 +895,7 @@ komb_spin_unlock(struct qspinlock *lock)
 	max_idx = -1;
 	my_idx = -1;
 
-	for (j = 0; j < 8; j++) {
+	for (j = 0; j < 7; j++) {
 		temp_lock_addr = ptr->lock_addr[j];
 		if (temp_lock_addr != NULL)
 			max_idx = j;
@@ -898,8 +906,9 @@ komb_spin_unlock(struct qspinlock *lock)
 	}
 
 	if (my_idx == -1) {
-		if (lock->locked == _Q_LOCKED_VAL)
+		if (lock->locked == _Q_LOCKED_VAL) {
 			lock->locked = false;
+		}
 		else if (lock->locked == _Q_LOCKED_COMBINER_VAL) {
 #ifdef KOMB_STATS
 			this_cpu_inc(ooo_unlocks);
@@ -1002,6 +1011,145 @@ komb_spin_unlock(struct qspinlock *lock)
 	return;
 }
 EXPORT_SYMBOL_GPL(komb_spin_unlock);
+
+__attribute__((noipa)) noinline notrace void
+komb_spin_unlock_fds(struct qspinlock *lock, struct fds_lock_key *key)
+{
+	struct shadow_stack *ptr = this_cpu_ptr(&local_shadow_stack);
+	int from_cpuid = ptr->curr_cs_cpu;
+	void *incoming_rsp_ptr, *outgoing_rsp_ptr;
+
+	int j, max_idx, my_idx, waiter_preempt_count;
+
+	uint64_t temp_lock_addr;
+
+	j = 0;
+	max_idx = -1;
+	my_idx = -1;
+
+	for (j = 0; j < 7; j++) {
+		temp_lock_addr = ptr->lock_addr[j];
+		if (temp_lock_addr != NULL)
+			max_idx = j;
+		if (temp_lock_addr == lock)
+			my_idx = j;
+		if (temp_lock_addr == NULL)
+			break;
+	}
+
+	if (my_idx == -1) {
+		if (lock->locked == _Q_LOCKED_VAL) {
+			lock->locked = false;
+			if(key != NULL && key == ptr->lock_addr[7]) {
+				LOCK_END_TIMING_PER_CPU(spinlock_cs_time);
+				spin_stat_lock_time(key, LOCK_GET_TIMING_DIFF(spinlock_cs_time));
+				ptr->lock_addr[7] = NULL;
+			} else if(key != NULL) {
+				//BUG_ON(true);
+			}
+		}
+		else if (lock->locked == _Q_LOCKED_COMBINER_VAL) {
+#ifdef KOMB_STATS
+			this_cpu_inc(ooo_unlocks);
+#endif
+			BUG_ON(true);
+			lock->locked = _Q_UNLOCKED_OOO_VAL;
+			print_debug("OOO unlock\n");
+		} else
+			BUG_ON(true);
+		return;
+	}
+
+	KOMB_BUG_ON(lock->locked != _Q_LOCKED_COMBINER_VAL);
+	KOMB_BUG_ON(from_cpuid == -1);
+	KOMB_BUG_ON(max_idx < 0);
+
+	if (my_idx < max_idx) {
+#ifdef KOMB_STATS
+		this_cpu_inc(ooo_unlocks);
+#endif
+		lock->locked = _Q_UNLOCKED_OOO_VAL;
+		return;
+	}
+
+	struct komb_node *curr_node = per_cpu_ptr(&komb_nodes[0], from_cpuid);
+	struct komb_node *next_node = ptr->next_node_ptr;
+
+	uint64_t counter = ptr->counter_val;
+
+	// if (next_node == NULL ||
+	//     (next_node->lockm == FDS_TCLOCK && next_node->next == NULL) ||
+	//     check_irq_node(next_node) ||
+	//     (next_node->lockm == FDS_TCLOCK &&
+	//      check_irq_node(next_node->next)) ||
+	//     counter >= komb_batch_size || need_resched()) {
+
+        // if (next_node == NULL ||
+	//     (next_node->next == NULL) ||
+	//     check_irq_node(next_node) ||
+	//     (check_irq_node(next_node->next)) ||
+	//     counter >= komb_batch_size || need_resched()) {
+
+	if(check_exit_condition(curr_node->lockm, next_node) ||
+	    counter >= komb_batch_size || need_resched()) {
+		incoming_rsp_ptr = &(ptr->local_shadow_stack_ptr);
+		ptr->curr_cs_cpu = -1;
+		ptr->prev_cs_cpu = curr_node->cpuid;
+
+	} else {
+		ptr->is_local_queue_tail_last = false;
+		ptr->curr_cs_cpu = next_node->cpuid;
+		ptr->prev_cs_cpu = curr_node->cpuid;
+		incoming_rsp_ptr = &(next_node->rsp);
+		ptr->counter_val = counter + 1;
+		print_debug("Jumping to the next waiter: %d\n",
+			    next_node->cpuid);
+
+		// if(preempt_count() != next_node->my_preempt_count) {
+		// 	printk(KERN_ALERT "preempt_count current: %d next: %d\n",
+		// 		preempt_count(), next_node->my_preempt_count);
+		// 	BUG_ON(true);
+		// }
+	}
+
+	outgoing_rsp_ptr = &(curr_node->rsp);
+
+	// waiter_preempt_count = preempt_count();
+
+	// if (ptr->curr_preempt_count != waiter_preempt_count) {
+	// 	BUG_ON(true);
+	// 	BUG_ON(irq_count() > 0);
+	// 	if (waiter_preempt_count < ptr->curr_preempt_count) {
+	// 		printk(KERN_ALERT "preempt_count prev: %d curr: %d\n",
+	// 		       waiter_preempt_count, ptr->curr_preempt_count);
+	// 		BUG_ON(true);
+	// 	}
+	// 	printk(KERN_ALERT "preempt_count prev: %d curr: %d\n",
+	// 		       waiter_preempt_count, ptr->curr_preempt_count);
+	// 	curr_node->diff_preempt_count =
+	// 	 	(waiter_preempt_count - ptr->curr_preempt_count);
+	// 	this_cpu_inc(fixing_preempt_count);
+	// 	__preempt_count_sub(curr_node->diff_preempt_count);
+	// 	BUG_ON(preempt_count() != ptr->curr_preempt_count);
+	// }
+
+
+	KOMB_BUG_ON(incoming_rsp_ptr == NULL);
+	KOMB_BUG_ON(outgoing_rsp_ptr == NULL);
+	KOMB_BUG_ON(incoming_rsp_ptr == 0xdeadbeef);
+	KOMB_BUG_ON(outgoing_rsp_ptr == 0xdeadbeef);
+
+	//curr_node->irqs_disabled = irqs_disabled();
+	KOMB_BUG_ON(irqs_disabled());
+	komb_context_switch(incoming_rsp_ptr, outgoing_rsp_ptr);
+	ptr = this_cpu_ptr(&local_shadow_stack);
+	if (ptr->irqs_disabled) {
+		ptr->irqs_disabled = false;
+		local_irq_disable();
+	}
+	return;
+}
+EXPORT_SYMBOL_GPL(komb_spin_unlock_fds);
 
 __always_inline int komb_spin_trylock(struct qspinlock *lock)
 {

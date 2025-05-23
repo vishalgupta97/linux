@@ -8,6 +8,8 @@
 #define FDS_MAX_CPUS 256
 #define DEFAULT_FDS_LOCK FDS_QSPINLOCK
 
+#define FDS_MEASURE_TIME 1
+
 enum fds_lock_mechanisms {
 	FDS_QSPINLOCK 	= (1 << 0),
 	FDS_CNA 	= (1 << 1),
@@ -37,6 +39,10 @@ void read_stat_lock_acquire(struct fds_lock_key *key);
 void write_stat_lock_acquire(struct fds_lock_key *key);
 void mutex_stat_lock_acquire(struct fds_lock_key *key);
 void spin_stat_lock_acquire(struct fds_lock_key *key);
+void read_stat_lock_time(struct fds_lock_key *key, uint64_t time);
+void write_stat_lock_time(struct fds_lock_key *key, uint64_t time);
+void mutex_stat_lock_time(struct fds_lock_key *key, uint64_t time);
+void spin_stat_lock_time(struct fds_lock_key *key, uint64_t time);
 void print_fds_stats(void);
 
 #endif

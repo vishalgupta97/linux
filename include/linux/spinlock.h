@@ -214,6 +214,17 @@ static inline void do_raw_spin_unlock(raw_spinlock_t *lock) __releases(lock)
 	arch_spin_unlock(&lock->raw_lock);
 	__release(lock);
 }
+
+static inline void do_raw_spin_unlock_fds(raw_spinlock_t *lock, struct fds_lock_key *key) __releases(lock)
+{
+	mmiowb_spin_unlock();
+	if(key)
+		arch_spin_unlock_fds(&lock->raw_lock, key);
+	else
+		arch_spin_unlock(&lock->raw_lock);
+	__release(lock);
+}
+
 #endif
 
 /*

@@ -12,6 +12,8 @@
 #include <linux/feedbacksync.h>
 #include <asm-generic/qspinlock.h>
 
+#include <fds/timing_stats.h>
+
 #if DEBUG_KOMB
 #define KOMB_BUG_ON(cond_expr) BUG_ON(cond_expr)
 #else

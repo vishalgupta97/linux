@@ -27,6 +27,8 @@
 static bool fds_running = false;
 static bool fds_oracle_running = false;
 
+static long monitor_time = 5000; // In milli seconds
+
 /*
 	------------------------- Lock Stat Collector -------------------
 */
@@ -39,6 +41,10 @@ struct lock_stat {
 			uint64_t counter;
                         uint64_t read_counter;
 			struct hlist_node hnode;
+			uint64_t min_counter;
+			uint64_t max_counter;
+			uint64_t total_cs_time;
+			uint64_t total_cs_count;
 			cpumask_t contending_cpus;
 		};
 		char alignment[128];
@@ -66,7 +72,7 @@ __always_inline void init_fds_lock_key(struct fds_lock_key *key, const char* _na
                 key->name = _name;    
                 key->lockm = _lockm;
                 for(i = 0; i < (FDS_MAX_CPUS * 8); i++)
-                        key->bucket[i] = 0;  
+                        key->bucket[i] = 0;
         }                             
 }
 
@@ -83,6 +89,48 @@ __always_inline struct lock_stat * get_stat_ptr(uint64_t bucket, enum HASHTABLE_
 	}
 	return NULL;
 }
+
+void __stat_lock_time(struct fds_lock_key *key, enum HASHTABLE_TYPE ht_type, uint64_t time)
+{
+	if (!fds_running || key == NULL || time <= 0) // || key->lockm == FDS_DISABLE)
+		return;
+
+	struct lock_stat *stat_ptr = NULL;
+	uint64_t bucket = key->bucket[smp_processor_id() * 8];
+
+	if(bucket) {
+		stat_ptr = get_stat_ptr(bucket, ht_type);
+		if(stat_ptr->key == key) {
+			stat_ptr->total_cs_time += time;
+			stat_ptr->total_cs_count++;
+			return;	
+		}
+		printk(KERN_ALERT "CHECK cpuid: %d bucket: %ld addr1: %px addr2: %px name: %s\n", 
+                        smp_processor_id(), bucket, stat_ptr->key, key, key->name);
+	}
+	BUG_ON(true);
+}
+
+void read_stat_lock_time(struct fds_lock_key *key, uint64_t time)
+{
+	__stat_lock_time(key, READ_HASHTABLE, time);
+}
+
+void write_stat_lock_time(struct fds_lock_key *key, uint64_t time)
+{
+	__stat_lock_time(key, WRITE_HASHTABLE, time);
+}
+
+void mutex_stat_lock_time(struct fds_lock_key *key, uint64_t time)
+{
+	__stat_lock_time(key, MUTEX_HASHTABLE, time);
+}
+
+void spin_stat_lock_time(struct fds_lock_key *key, uint64_t time)
+{
+	__stat_lock_time(key, SPIN_HASHTABLE, time);
+}
+
 
 void __stat_lock_acquire(struct fds_lock_key *key, enum HASHTABLE_TYPE ht_type)
 {
@@ -169,12 +217,26 @@ DEFINE_HASHTABLE(write_stats_ht, HASHTABLE_BITS);
 DEFINE_HASHTABLE(spin_stats_ht, HASHTABLE_BITS);
 DEFINE_HASHTABLE(mutex_stats_ht, HASHTABLE_BITS);
 
+inline void set_min_max_counter(struct lock_stat *stat, struct lock_stat *tmp)
+{
+	if(tmp->max_counter == 0) {
+		tmp->max_counter = stat->counter;
+		tmp->min_counter = stat->counter;
+		return;
+	}
+	if(stat->counter > tmp->max_counter)
+		tmp->max_counter = stat->counter;
+	if(stat->counter < tmp->min_counter)
+		tmp->min_counter = stat->counter;
+}
+
 inline bool __collect_fds_stats(struct lock_stat *stat, struct lock_stat *tmp, int cpu)
 {
 	if (stat == tmp) {
-		if(stat->counter > 0)
+		if(stat->counter > 0) {
 			cpumask_set_cpu(cpu, &tmp->contending_cpus);
-
+			set_min_max_counter(stat, tmp);
+		}
 		return true;
 	}
 	if (stat->key != NULL && tmp->key != NULL) {
@@ -182,11 +244,17 @@ inline bool __collect_fds_stats(struct lock_stat *stat, struct lock_stat *tmp, i
 			if(stat->counter > 0) {
 				tmp->counter += stat->counter;
 				tmp->read_counter += stat->read_counter;
+				tmp->total_cs_time += stat->total_cs_time;
+				tmp->total_cs_count += stat->total_cs_count;
 				cpumask_set_cpu(cpu, &tmp->contending_cpus);
+				set_min_max_counter(stat, tmp);
 			}
 			stat->counter = 0;
 			stat->read_counter = 0; 
-
+			stat->total_cs_time = 0;
+			stat->total_cs_count = 0;
+			stat->min_counter = 0;
+			stat->max_counter = 0;
 			return true;
 		}
 	}
@@ -266,6 +334,7 @@ void collect_fds_stats(void)
 				}
 				if (!found) {
 					cpumask_set_cpu(i, &stat->contending_cpus);
+					set_min_max_counter(stat, stat);
 					hash_add(write_stats_ht, &stat->hnode,
 						 stat->key);
 				}
@@ -281,6 +350,7 @@ void collect_fds_stats(void)
 				}
 				if (!found) {
 					cpumask_set_cpu(i, &stat->contending_cpus);
+					set_min_max_counter(stat, stat);
 					hash_add(spin_stats_ht, &stat->hnode,
 						 stat->key);
 				}
@@ -296,6 +366,7 @@ void collect_fds_stats(void)
 				}
 				if (!found) {
 					cpumask_set_cpu(i, &stat->contending_cpus);
+					set_min_max_counter(stat, stat);
 					hash_add(mutex_stats_ht, &stat->hnode,
 						 stat->key);
 				}
@@ -319,6 +390,10 @@ void __reset_fds_stats(struct lock_stat *tmp) {
 	tmp->counter = 0;
 	tmp->read_counter = 0;
 	cpumask_clear(&tmp->contending_cpus);
+	tmp->min_counter = 0;
+	tmp->max_counter = 0;
+	tmp->total_cs_count = 0;
+	tmp->total_cs_time = 0;
 }
 
 void reset_fds_stats(void)
@@ -356,8 +431,8 @@ inline void __print_fds_stats(struct lock_stat *tmp, const char *type,
 {
 	if (tmp->counter) {
 		if (tmp->counter > PRINT_COUNT_LIMIT || tmp->read_counter > PRINT_COUNT_LIMIT)
-			printk(KERN_ALERT "%s Name: %s, Counter: %ld Read Counter: %ld Contending_CPUs: %d\n", type,
-			       tmp->name, tmp->counter, tmp->read_counter, cpumask_weight(&tmp->contending_cpus));
+			printk(KERN_ALERT "%s Name: %s, Counter: %ld Max Counter: %ld Min Counter: %ld Read Counter: %ld Contending_CPUs: %d total_cs_time: %ld total_cs_count: %ld\n", type,
+			       tmp->name, tmp->counter, tmp->max_counter, tmp->min_counter, tmp->read_counter, cpumask_weight(&tmp->contending_cpus), tmp->total_cs_time, tmp->total_cs_count);
 		*count = *count + 1;
 	}
 }
@@ -414,7 +489,6 @@ void print_fds_stats(void)
 #define IS_DIRECTION 2
 
 #define QSPINLOCK_LIMIT 10000
-#define MONITOR_TIME 5000 // In milliseconds
 
 #define QSPINLOCK_PER_SECOND 15000
 #define MUTEX_PER_SECOND 15000
@@ -874,6 +948,36 @@ static const struct proc_ops oracle_proc_ops = {
 	.proc_write = fds_oracle_write,
 };
 
+static ssize_t fds_monitor_time_write(struct file *file, const char __user *buffer,
+				size_t count, loff_t *pos)
+{
+	char buf[64];
+
+	if (count > 64)
+		return -EINVAL;
+
+	if (copy_from_user(buf, buffer, count))
+		return -EFAULT;
+
+	buf[count] = '\0';
+
+	uint64_t val = 0;
+	kstrtoll(buf, 0, &val);
+
+	if(val % 1000 == 0)
+		monitor_time = val;
+	else
+		return -EINVAL;
+
+	return count;
+}
+
+static const struct proc_ops monitor_time_proc_ops = {
+	.proc_write = fds_monitor_time_write,
+};
+
+
+
 //inline enum fds_lock_mechanisms get_optimal_rwsem_decision_tree_regression(struct lock_stat *tmp) 
 //{
 //	int max_value, max_index, j;
@@ -881,7 +985,7 @@ static const struct proc_ops oracle_proc_ops = {
 //	feature_vector[0] = 2;
 //	feature_vector[1] = (tmp->counter * 100) / (tmp->read_counter + tmp->counter);
 //	feature_vector[2] = cpumask_weight(&tmp->contending_cpus);
-//	feature_vector[3] = (tmp->counter + tmp->read_counter) / (MONITOR_TIME / 1000);
+//	feature_vector[3] = (tmp->counter + tmp->read_counter) / (monitor_time / 1000);
 //	max_value = 0;
 //	max_index = 0;
 //	j = 0;
@@ -918,7 +1022,7 @@ inline enum fds_lock_mechanisms get_optimal_spinlock_random_forest_classifier(st
 {
 	int feature_vector[2];
 	feature_vector[0] = cpumask_weight(&tmp->contending_cpus);
-	feature_vector[1] = (tmp->counter) / (MONITOR_TIME / 1000);
+	feature_vector[1] = (tmp->counter) / (monitor_time / 1000) / (feature_vector[0]);
 	int optimal_index = predict_srv1_spinlock_random_forest(feature_vector) ;
 	enum fds_lock_mechanisms next_lock_type = FDS_QSPINLOCK;
 	switch(optimal_index) {
@@ -928,8 +1032,9 @@ inline enum fds_lock_mechanisms get_optimal_spinlock_random_forest_classifier(st
 		case 3: next_lock_type = FDS_TCLOCK; break; //TDLOCK
 	}
 
-	printk(KERN_ALERT "SPINLOCK CPUCNT:%ld RPS:%ld next_lock: %s\n",
-			feature_vector[0], feature_vector[1],
+	printk(KERN_ALERT "SPINLOCK CPUCNT:%ld RPS:%ld Max RPS: %ld Min RPS: %ld next_lock: %s\n",
+			feature_vector[0], feature_vector[1], (tmp->max_counter) / (monitor_time / 1000),
+			(tmp->min_counter) / (monitor_time / 1000),
 			get_str_lockm(next_lock_type));
 	return next_lock_type;
 }
@@ -940,7 +1045,7 @@ inline enum fds_lock_mechanisms get_optimal_rwsem_random_forest_classifier(struc
 	int feature_vector[3];
 	feature_vector[0] = (tmp->counter * 100) / (tmp->read_counter + tmp->counter);
 	feature_vector[1] = cpumask_weight(&tmp->contending_cpus);
-	feature_vector[2] = (tmp->counter + tmp->read_counter) / (MONITOR_TIME / 1000);
+	feature_vector[2] = (tmp->counter + tmp->read_counter) / (monitor_time / 1000) / (feature_vector[1]);
 	int optimal_index = predict_srv1_rwsem_random_forest(feature_vector) ;
 	enum fds_lock_mechanisms next_lock_type = FDS_QSPINLOCK;
 	switch(optimal_index) {
@@ -950,8 +1055,9 @@ inline enum fds_lock_mechanisms get_optimal_rwsem_random_forest_classifier(struc
 		case 3: next_lock_type = FDS_TCLOCK; break; //TDLOCK
 	}
 
-	printk(KERN_ALERT "RWSEM RWRATIO: %ld CPUCNT:%ld RPS:%ld next_lock: %s\n",
-			feature_vector[0], feature_vector[1], feature_vector[2],
+	printk(KERN_ALERT "RWSEM RWRATIO: %ld CPUCNT:%ld RPS:%ld Max RPS: %ld Min RPS: %ld next_lock: %s\n",
+			feature_vector[0], feature_vector[1], feature_vector[2], (tmp->max_counter) / (monitor_time / 1000),
+			(tmp->min_counter) / (monitor_time / 1000),
 			get_str_lockm(next_lock_type));
 	return next_lock_type;
 }
@@ -978,7 +1084,7 @@ inline void __monitor_fds_stats(struct lock_stat *tmp, const char *type,
 
 //			feature_vector[0] = 4;
 //			feature_vector[1] = cpumask_weight(&tmp->contending_cpus);
-//			feature_vector[2] = tmp->counter / (MONITOR_TIME / 1000);
+//			feature_vector[2] = tmp->counter / (monitor_time / 1000);
 //			max_value = 0;
 //			max_index = 0;
 //			j = 0;
@@ -1080,7 +1186,7 @@ int fds_monitor(void *args)
 {
 	printk(KERN_ALERT "Starting fds monitor\n");
 	while (!kthread_should_stop()) {
-		msleep(MONITOR_TIME);
+		msleep(monitor_time);
 		
 		//ssleep(30);
 
@@ -1112,11 +1218,12 @@ static int __init feedback_sync_init(void)
 	proc_create("fds/reset", 0222, NULL, &reset_fds_proc_ops);
 	proc_create("fds/getstat", 0444, NULL, &get_fds_proc_ops);
 	proc_create("fds/oracle", 0222, NULL, &oracle_proc_ops);
+	proc_create("fds/monitor_time", 0222, NULL, &monitor_time_proc_ops);
 
 	komb_rwsem_init();
 
 	fdsthreads = kthread_create(fds_monitor, NULL, "fds_monitor");
-	kthread_bind(fdsthreads, 223);
+	kthread_bind(fdsthreads, 0);
 	if (fdsthreads) {
 		wake_up_process(fdsthreads);
 		return 0;
