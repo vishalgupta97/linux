@@ -29,6 +29,10 @@ DEFINE_PER_CPU_ALIGNED(uint64_t, rwsem_percpu_reads);
 DEFINE_PER_CPU_ALIGNED(uint64_t, rwsem_downgrade);
 #endif
 
+#if FDS_MEASURE_TIME
+DEFINE_PER_CPU_ALIGNED(uint64_t, rwsem_cs_time);
+#endif
+
 static unsigned long __percpu **global_percpu_table = NULL;
 static struct rw_semaphore **global_lock_table = NULL; 
 static unsigned long *percpu_table_freelist;
@@ -568,13 +572,13 @@ unlock:
 	current->komb_local_queue_head = NULL;
 	current->komb_local_queue_tail = NULL;
 
-	j = 7;
-	for (j = 7; j >= 0; j--)
+	j = 6;
+	for (j = 6; j >= 0; j--)
 		if (current->komb_lock_addr[j])
 			break;
 	j += 1;
 
-	KOMB_BUG_ON(j >= 8 || j < 0);
+	KOMB_BUG_ON(j >= 7 || j < 0);
 	current->komb_lock_addr[j] = lock;
 
 	run_combiner(lock, next);
@@ -748,7 +752,7 @@ void __down_write_tclock(struct rw_semaphore *lock)
 }
 #pragma GCC pop_options
 
-void __down_write(struct rw_semaphore *lock, enum fds_lock_mechanisms lockm)
+void __down_write(struct rw_semaphore *lock, enum fds_lock_mechanisms lockm, struct fds_lock_key *key)
 {
 	if (lockm == FDS_QSPINLOCK || lockm == FDS_PERCPU) {
 		struct mutex_node *prev, *next;
@@ -766,8 +770,9 @@ void __down_write(struct rw_semaphore *lock, enum fds_lock_mechanisms lockm)
 		prev = xchg(&lock->writer_tail, curr_node);
 		next = NULL;
 
+		key = lock->key;
 		write_stat_lock_acquire(curr_node->key);
-
+		
 		if (prev) {
 			WRITE_ONCE(prev->next, curr_node);
 			smp_cond_load_relaxed_sleep(
@@ -807,7 +812,7 @@ irq_unlock:
 		wait_for_visible_readers(lock, curr_node->key);
 
 		if (cmpxchg(&lock->writer_tail, curr_node, NULL) == curr_node)
-			return;
+			goto irq_return;
 
 		while (!next) {
 			next = READ_ONCE(curr_node->next);
@@ -818,6 +823,9 @@ irq_unlock:
 		}
 		wake_up_waiter(next);
 		WRITE_ONCE(next->locked, 0);
+irq_return:
+		LOCK_START_TIMING_PER_CPU(rwsem_cs_time);
+		current->komb_lock_addr[7] = key;
 		return;
 	}
 
@@ -841,11 +849,11 @@ void down_write(struct rw_semaphore *lock)
 	curr_node->key = key;
 
 	if(key == NULL)
-		__down_write(lock, FDS_QSPINLOCK);
+		__down_write(lock, FDS_QSPINLOCK, key);
 	else if(key->lockm == FDS_TDLOCK)
 		komb_rwsemd_down_write(lock);
 	else
-		__down_write(lock, key->lockm);
+		__down_write(lock, key->lockm, key);
 	preempt_enable();
 
 write_exit:
@@ -864,7 +872,7 @@ void up_read(struct rw_semaphore *lock)
 	max_idx = -1;
 	my_idx = -1;
 
-	for (j = 0; j < 8; j++) {
+	for (j = 0; j < 7; j++) {
 		temp_lock_addr = current->komb_lock_addr[j];
 		if (temp_lock_addr)
 			max_idx = j;
@@ -935,7 +943,7 @@ __attribute__((noipa)) noinline notrace void up_write(struct rw_semaphore *lock)
 	max_idx = -1;
 	my_idx = -1;
 
-	for (j = 0; j < 8; j++) {
+	for (j = 0; j < 7; j++) {
 		temp_lock_addr = current->komb_lock_addr[j];
 		if (temp_lock_addr)
 			max_idx = j;
@@ -953,6 +961,14 @@ __attribute__((noipa)) noinline notrace void up_write(struct rw_semaphore *lock)
 			check_and_set_rbias(lock, _KOMB_RWSEM_R_BIAS, lock->key);
 			//print_debug("Writer releasing on fastpath\n");			
 			WRITE_ONCE(lock->wlocked, 0);
+			struct fds_lock_key *key = lock->key;
+			if(key != NULL && key == current->komb_lock_addr[7]) {
+				LOCK_END_TIMING_PER_CPU(rwsem_cs_time);
+				write_stat_lock_time(key, LOCK_GET_TIMING_DIFF(rwsem_cs_time));
+				current->komb_lock_addr[7] = NULL;
+			} else if(key != NULL) {
+				//BUG_ON(true);
+			}
 		} else if (lock->wlocked == _KOMB_RWSEM_W_COMBINER) {
 #ifdef KOMB_STATS
 			// this_cpu_inc(rwsem_ooo_unlocks);
@@ -1115,7 +1131,7 @@ void downgrade_write(struct rw_semaphore *lock)
 	max_idx = -1;
 	my_idx = -1;
 
-	for (j = 0; j < 8; j++) {
+	for (j = 0; j < 7; j++) {
 		temp_lock_addr = current->komb_lock_addr[j];
 		if (temp_lock_addr)
 			max_idx = j;
@@ -1131,6 +1147,14 @@ void downgrade_write(struct rw_semaphore *lock)
 			atomic_long_add_return_acquire(_KOMB_RWSEM_R_BIAS,
 						       &lock->cnts);
 			WRITE_ONCE(lock->wlocked, 0);
+			struct fds_lock_key *key = lock->key;
+			if(key != NULL && key == current->komb_lock_addr[7]) {
+				LOCK_END_TIMING_PER_CPU(rwsem_cs_time);
+				write_stat_lock_time(key, LOCK_GET_TIMING_DIFF(rwsem_cs_time));
+				current->komb_lock_addr[7] = NULL;
+			} else if(key != NULL) {
+				//BUG_ON(true);
+			}
                         goto downgrade_exit;
 		}
 		BUG_ON(true);
@@ -1150,3 +1174,4 @@ downgrade_exit:
         return;
 }
 EXPORT_SYMBOL(downgrade_write);
+

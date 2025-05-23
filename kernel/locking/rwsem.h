@@ -10,6 +10,8 @@
 #include <linux/kernel.h>
 #include <linux/syscalls.h>
 
+#include <fds/timing_stats.h>
+
 #if DSM_DEBUG
 #define print_debug(fmt, ...)                                              \
 	({                                                                 \
