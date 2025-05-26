@@ -45,9 +45,11 @@ struct lock_stat {
 			uint64_t max_counter;
 			uint64_t total_cs_time;
 			uint64_t total_cs_count;
+			uint64_t min_avg_cs_time;
+			uint64_t max_avg_cs_time;
 			cpumask_t contending_cpus;
 		};
-		char alignment[128];
+		char alignment[256];
 	};
 } __cacheline_aligned_in_smp;
 
@@ -230,12 +232,28 @@ inline void set_min_max_counter(struct lock_stat *stat, struct lock_stat *tmp)
 		tmp->min_counter = stat->counter;
 }
 
+inline void set_min_max_cs_time(struct lock_stat *stat, struct lock_stat *tmp)
+{
+	if(stat->total_cs_count == 0)
+		return;
+	uint64_t avg_cs_time = (stat->total_cs_time / stat->total_cs_count);
+	if(tmp->max_avg_cs_time == 0) {
+		tmp->max_avg_cs_time = avg_cs_time;
+		tmp->min_avg_cs_time = avg_cs_time;
+	}
+	if(avg_cs_time > tmp->max_avg_cs_time)
+		tmp->max_avg_cs_time = avg_cs_time;
+	if(avg_cs_time < tmp->min_avg_cs_time)
+		tmp->min_avg_cs_time = avg_cs_time;
+}
+
 inline bool __collect_fds_stats(struct lock_stat *stat, struct lock_stat *tmp, int cpu)
 {
 	if (stat == tmp) {
 		if(stat->counter > 0) {
 			cpumask_set_cpu(cpu, &tmp->contending_cpus);
 			set_min_max_counter(stat, tmp);
+			set_min_max_cs_time(stat, tmp);
 		}
 		return true;
 	}
@@ -248,6 +266,7 @@ inline bool __collect_fds_stats(struct lock_stat *stat, struct lock_stat *tmp, i
 				tmp->total_cs_count += stat->total_cs_count;
 				cpumask_set_cpu(cpu, &tmp->contending_cpus);
 				set_min_max_counter(stat, tmp);
+				set_min_max_cs_time(stat, tmp);
 			}
 			stat->counter = 0;
 			stat->read_counter = 0; 
@@ -255,6 +274,8 @@ inline bool __collect_fds_stats(struct lock_stat *stat, struct lock_stat *tmp, i
 			stat->total_cs_count = 0;
 			stat->min_counter = 0;
 			stat->max_counter = 0;
+			stat->min_avg_cs_time = 0;
+			stat->max_avg_cs_time = 0;
 			return true;
 		}
 	}
@@ -335,6 +356,7 @@ void collect_fds_stats(void)
 				if (!found) {
 					cpumask_set_cpu(i, &stat->contending_cpus);
 					set_min_max_counter(stat, stat);
+					set_min_max_cs_time(stat, stat);
 					hash_add(write_stats_ht, &stat->hnode,
 						 stat->key);
 				}
@@ -351,6 +373,7 @@ void collect_fds_stats(void)
 				if (!found) {
 					cpumask_set_cpu(i, &stat->contending_cpus);
 					set_min_max_counter(stat, stat);
+					set_min_max_cs_time(stat, stat);
 					hash_add(spin_stats_ht, &stat->hnode,
 						 stat->key);
 				}
@@ -367,6 +390,7 @@ void collect_fds_stats(void)
 				if (!found) {
 					cpumask_set_cpu(i, &stat->contending_cpus);
 					set_min_max_counter(stat, stat);
+					set_min_max_cs_time(stat, stat);
 					hash_add(mutex_stats_ht, &stat->hnode,
 						 stat->key);
 				}
@@ -394,6 +418,8 @@ void __reset_fds_stats(struct lock_stat *tmp) {
 	tmp->max_counter = 0;
 	tmp->total_cs_count = 0;
 	tmp->total_cs_time = 0;
+	tmp->min_avg_cs_time = 0;
+	tmp->max_avg_cs_time = 0;
 }
 
 void reset_fds_stats(void)
@@ -430,9 +456,14 @@ inline void __print_fds_stats(struct lock_stat *tmp, const char *type,
 			      uint64_t *count)
 {
 	if (tmp->counter) {
-		if (tmp->counter > PRINT_COUNT_LIMIT || tmp->read_counter > PRINT_COUNT_LIMIT)
-			printk(KERN_ALERT "%s Name: %s, Counter: %ld Max Counter: %ld Min Counter: %ld Read Counter: %ld Contending_CPUs: %d total_cs_time: %ld total_cs_count: %ld\n", type,
-			       tmp->name, tmp->counter, tmp->max_counter, tmp->min_counter, tmp->read_counter, cpumask_weight(&tmp->contending_cpus), tmp->total_cs_time, tmp->total_cs_count);
+		if (tmp->counter > PRINT_COUNT_LIMIT || tmp->read_counter > PRINT_COUNT_LIMIT) {
+			printk(KERN_ALERT "%s Name: %s, Counter: %ld Max Counter: %ld Min Counter: %ld Read Counter: %ld Contending_CPUs: %d\n", type,
+			       tmp->name, tmp->counter, tmp->max_counter, tmp->min_counter, tmp->read_counter, 
+			       cpumask_weight(&tmp->contending_cpus));
+			printk(KERN_ALERT "%s Name: %s, total_cs_time: %ld total_cs_count: %ld Average CS: %ld Max CS: %ld Min CS: %ld\n", type,
+			       tmp->name, tmp->total_cs_time, tmp->total_cs_count, 
+			       tmp->total_cs_count > 0 ? (tmp->total_cs_time / tmp->total_cs_count):0, tmp->max_avg_cs_time, tmp->min_avg_cs_time);
+		}
 		*count = *count + 1;
 	}
 }
