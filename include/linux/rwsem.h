@@ -14,7 +14,7 @@
 #include <linux/atomic.h>
 #include <linux/err.h>
 #include <linux/mutex.h>
-#include <linux/feedbacksync.h>
+#include <linux/fds.h>
 
 /*
  * Writer states & reader shift and bias.

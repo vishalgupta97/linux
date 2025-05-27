@@ -2,7 +2,7 @@
 // Copyright (c) 2022 Vishal Gupta, Kumar Kartikeya Dwivedi
 
 #include <linux/combiner.h>
-#include <linux/feedbacksync.h>
+#include <linux/fds.h>
 long komb_batch_size = 262144;
 
 #include <linux/syscalls.h>

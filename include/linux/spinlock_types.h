@@ -10,7 +10,7 @@
  */
 
 #include <linux/spinlock_types_raw.h>
-#include <linux/feedbacksync.h>
+#include <linux/fds.h>
 
 #ifndef CONFIG_PREEMPT_RT
 

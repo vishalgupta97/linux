@@ -64,7 +64,7 @@
 #include <linux/cleanup.h>
 #include <asm/barrier.h>
 #include <asm/mmiowb.h>
-#include <linux/feedbacksync.h>
+#include <linux/fds.h>
 
 /*
  * Must define these before including other files, inline functions need them

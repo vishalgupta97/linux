@@ -8,7 +8,7 @@ output_index[2] - FDS_TCLOCK
 output_index[3] - FDS_TDLOCK
 */
 // Tree 0
-int predict_srv9_spinlock_tree_0(int features[]) {
+static int predict_srv9_spinlock_tree_0(int features[]) {
   if (features[0] <= 6) {
     if (features[0] <= 3) {
       return 1; // FDS_QSPINLOCK
@@ -93,7 +93,7 @@ int predict_srv9_spinlock_tree_0(int features[]) {
 }
 
 // Tree 1
-int predict_srv9_spinlock_tree_1(int features[]) {
+static int predict_srv9_spinlock_tree_1(int features[]) {
   if (features[1] <= 25000) {
     if (features[1] <= 15000) {
       if (features[1] <= 7500) {
@@ -214,7 +214,7 @@ int predict_srv9_spinlock_tree_1(int features[]) {
 }
 
 // Tree 2
-int predict_srv9_spinlock_tree_2(int features[]) {
+static int predict_srv9_spinlock_tree_2(int features[]) {
   if (features[0] <= 28) {
     if (features[1] <= 75000) {
       if (features[1] <= 45000) {
@@ -283,7 +283,7 @@ int predict_srv9_spinlock_tree_2(int features[]) {
 }
 
 // Tree 3
-int predict_srv9_spinlock_tree_3(int features[]) {
+static int predict_srv9_spinlock_tree_3(int features[]) {
   if (features[0] <= 12) {
     if (features[0] <= 3) {
       return 1; // FDS_QSPINLOCK
@@ -368,7 +368,7 @@ int predict_srv9_spinlock_tree_3(int features[]) {
 }
 
 // Tree 4
-int predict_srv9_spinlock_tree_4(int features[]) {
+static int predict_srv9_spinlock_tree_4(int features[]) {
   if (features[0] <= 40) {
     if (features[1] <= 125000) {
       if (features[1] <= 15000) {
@@ -469,7 +469,7 @@ int predict_srv9_spinlock_tree_4(int features[]) {
 }
 
 // Tree 5
-int predict_srv9_spinlock_tree_5(int features[]) {
+static int predict_srv9_spinlock_tree_5(int features[]) {
   if (features[1] <= 35000) {
     if (features[0] <= 28) {
       return 1; // FDS_QSPINLOCK
@@ -566,7 +566,7 @@ int predict_srv9_spinlock_tree_5(int features[]) {
 }
 
 // Tree 6
-int predict_srv9_spinlock_tree_6(int features[]) {
+static int predict_srv9_spinlock_tree_6(int features[]) {
   if (features[1] <= 35000) {
     if (features[1] <= 25000) {
       if (features[1] <= 7500) {
@@ -635,7 +635,7 @@ int predict_srv9_spinlock_tree_6(int features[]) {
 }
 
 // Tree 7
-int predict_srv9_spinlock_tree_7(int features[]) {
+static int predict_srv9_spinlock_tree_7(int features[]) {
   if (features[0] <= 28) {
     if (features[1] <= 45000) {
       return 1; // FDS_QSPINLOCK
@@ -712,7 +712,7 @@ int predict_srv9_spinlock_tree_7(int features[]) {
 }
 
 // Tree 8
-int predict_srv9_spinlock_tree_8(int features[]) {
+static int predict_srv9_spinlock_tree_8(int features[]) {
   if (features[0] <= 28) {
     if (features[0] <= 12) {
       if (features[0] <= 3) {
@@ -817,7 +817,7 @@ int predict_srv9_spinlock_tree_8(int features[]) {
 }
 
 // Tree 9
-int predict_srv9_spinlock_tree_9(int features[]) {
+static int predict_srv9_spinlock_tree_9(int features[]) {
   if (features[0] <= 28) {
     if (features[0] <= 6) {
       return 1; // FDS_QSPINLOCK
@@ -906,7 +906,7 @@ int predict_srv9_spinlock_tree_9(int features[]) {
 }
 
 // Tree 10
-int predict_srv9_spinlock_tree_10(int features[]) {
+static int predict_srv9_spinlock_tree_10(int features[]) {
   if (features[1] <= 55000) {
     if (features[1] <= 15000) {
       if (features[1] <= 7500) {
@@ -1003,7 +1003,7 @@ int predict_srv9_spinlock_tree_10(int features[]) {
 }
 
 // Tree 11
-int predict_srv9_spinlock_tree_11(int features[]) {
+static int predict_srv9_spinlock_tree_11(int features[]) {
   if (features[1] <= 35000) {
     if (features[1] <= 7500) {
       return 1; // FDS_QSPINLOCK
@@ -1076,7 +1076,7 @@ int predict_srv9_spinlock_tree_11(int features[]) {
 }
 
 // Tree 12
-int predict_srv9_spinlock_tree_12(int features[]) {
+static int predict_srv9_spinlock_tree_12(int features[]) {
   if (features[1] <= 25000) {
     if (features[0] <= 28) {
       return 1; // FDS_QSPINLOCK
@@ -1161,7 +1161,7 @@ int predict_srv9_spinlock_tree_12(int features[]) {
 }
 
 // Tree 13
-int predict_srv9_spinlock_tree_13(int features[]) {
+static int predict_srv9_spinlock_tree_13(int features[]) {
   if (features[1] <= 35000) {
     if (features[1] <= 7500) {
       return 1; // FDS_QSPINLOCK
@@ -1246,7 +1246,7 @@ int predict_srv9_spinlock_tree_13(int features[]) {
 }
 
 // Tree 14
-int predict_srv9_spinlock_tree_14(int features[]) {
+static int predict_srv9_spinlock_tree_14(int features[]) {
   if (features[0] <= 19) {
     if (features[1] <= 55000) {
       return 1; // FDS_QSPINLOCK
@@ -1319,7 +1319,7 @@ int predict_srv9_spinlock_tree_14(int features[]) {
 }
 
 // Tree 15
-int predict_srv9_spinlock_tree_15(int features[]) {
+static int predict_srv9_spinlock_tree_15(int features[]) {
   if (features[1] <= 35000) {
     if (features[1] <= 7500) {
       if (features[0] <= 80) {
@@ -1420,7 +1420,7 @@ int predict_srv9_spinlock_tree_15(int features[]) {
 }
 
 // Tree 16
-int predict_srv9_spinlock_tree_16(int features[]) {
+static int predict_srv9_spinlock_tree_16(int features[]) {
   if (features[0] <= 28) {
     if (features[0] <= 6) {
       if (features[1] <= 175000) {
@@ -1497,7 +1497,7 @@ int predict_srv9_spinlock_tree_16(int features[]) {
 }
 
 // Tree 17
-int predict_srv9_spinlock_tree_17(int features[]) {
+static int predict_srv9_spinlock_tree_17(int features[]) {
   if (features[1] <= 25000) {
     if (features[0] <= 63) {
       return 1; // FDS_QSPINLOCK
@@ -1590,7 +1590,7 @@ int predict_srv9_spinlock_tree_17(int features[]) {
 }
 
 // Tree 18
-int predict_srv9_spinlock_tree_18(int features[]) {
+static int predict_srv9_spinlock_tree_18(int features[]) {
   if (features[0] <= 12) {
     if (features[0] <= 6) {
       if (features[1] <= 175000) {
@@ -1675,7 +1675,7 @@ int predict_srv9_spinlock_tree_18(int features[]) {
 }
 
 // Tree 19
-int predict_srv9_spinlock_tree_19(int features[]) {
+static int predict_srv9_spinlock_tree_19(int features[]) {
   if (features[1] <= 35000) {
     if (features[0] <= 28) {
       return 1; // FDS_QSPINLOCK
@@ -1780,7 +1780,7 @@ int predict_srv9_spinlock_tree_19(int features[]) {
 }
 
 // Tree 20
-int predict_srv9_spinlock_tree_20(int features[]) {
+static int predict_srv9_spinlock_tree_20(int features[]) {
   if (features[0] <= 28) {
     if (features[1] <= 45000) {
       return 1; // FDS_QSPINLOCK
@@ -1841,7 +1841,7 @@ int predict_srv9_spinlock_tree_20(int features[]) {
 }
 
 // Tree 21
-int predict_srv9_spinlock_tree_21(int features[]) {
+static int predict_srv9_spinlock_tree_21(int features[]) {
   if (features[0] <= 28) {
     if (features[1] <= 45000) {
       return 1; // FDS_QSPINLOCK
@@ -1918,7 +1918,7 @@ int predict_srv9_spinlock_tree_21(int features[]) {
 }
 
 // Tree 22
-int predict_srv9_spinlock_tree_22(int features[]) {
+static int predict_srv9_spinlock_tree_22(int features[]) {
   if (features[1] <= 25000) {
     if (features[1] <= 15000) {
       if (features[0] <= 51) {
@@ -2023,7 +2023,7 @@ int predict_srv9_spinlock_tree_22(int features[]) {
 }
 
 // Tree 23
-int predict_srv9_spinlock_tree_23(int features[]) {
+static int predict_srv9_spinlock_tree_23(int features[]) {
   if (features[1] <= 25000) {
     if (features[1] <= 15000) {
       if (features[0] <= 80) {
@@ -2104,7 +2104,7 @@ int predict_srv9_spinlock_tree_23(int features[]) {
 }
 
 // Tree 24
-int predict_srv9_spinlock_tree_24(int features[]) {
+static int predict_srv9_spinlock_tree_24(int features[]) {
   if (features[1] <= 25000) {
     if (features[1] <= 15000) {
       if (features[1] <= 7500) {
@@ -2201,7 +2201,7 @@ int predict_srv9_spinlock_tree_24(int features[]) {
 }
 
 // Tree 25
-int predict_srv9_spinlock_tree_25(int features[]) {
+static int predict_srv9_spinlock_tree_25(int features[]) {
   if (features[1] <= 25000) {
     if (features[0] <= 28) {
       return 1; // FDS_QSPINLOCK
@@ -2286,7 +2286,7 @@ int predict_srv9_spinlock_tree_25(int features[]) {
 }
 
 // Tree 26
-int predict_srv9_spinlock_tree_26(int features[]) {
+static int predict_srv9_spinlock_tree_26(int features[]) {
   if (features[1] <= 45000) {
     if (features[0] <= 28) {
       return 1; // FDS_QSPINLOCK
@@ -2363,7 +2363,7 @@ int predict_srv9_spinlock_tree_26(int features[]) {
 }
 
 // Tree 27
-int predict_srv9_spinlock_tree_27(int features[]) {
+static int predict_srv9_spinlock_tree_27(int features[]) {
   if (features[1] <= 25000) {
     if (features[0] <= 40) {
       if (features[1] <= 15000) {
@@ -2468,7 +2468,7 @@ int predict_srv9_spinlock_tree_27(int features[]) {
 }
 
 // Tree 28
-int predict_srv9_spinlock_tree_28(int features[]) {
+static int predict_srv9_spinlock_tree_28(int features[]) {
   if (features[0] <= 6) {
     if (features[1] <= 175000) {
       return 1; // FDS_QSPINLOCK
@@ -2565,7 +2565,7 @@ int predict_srv9_spinlock_tree_28(int features[]) {
 }
 
 // Tree 29
-int predict_srv9_spinlock_tree_29(int features[]) {
+static int predict_srv9_spinlock_tree_29(int features[]) {
   if (features[0] <= 19) {
     if (features[1] <= 85000) {
       if (features[1] <= 65000) {
@@ -2682,7 +2682,7 @@ int predict_srv9_spinlock_tree_29(int features[]) {
 }
 
 // Tree 30
-int predict_srv9_spinlock_tree_30(int features[]) {
+static int predict_srv9_spinlock_tree_30(int features[]) {
   if (features[1] <= 25000) {
     if (features[1] <= 15000) {
       if (features[0] <= 51) {
@@ -2775,7 +2775,7 @@ int predict_srv9_spinlock_tree_30(int features[]) {
 }
 
 // Tree 31
-int predict_srv9_spinlock_tree_31(int features[]) {
+static int predict_srv9_spinlock_tree_31(int features[]) {
   if (features[0] <= 28) {
     if (features[1] <= 45000) {
       return 1; // FDS_QSPINLOCK
@@ -2868,7 +2868,7 @@ int predict_srv9_spinlock_tree_31(int features[]) {
 }
 
 // Tree 32
-int predict_srv9_spinlock_tree_32(int features[]) {
+static int predict_srv9_spinlock_tree_32(int features[]) {
   if (features[1] <= 25000) {
     if (features[1] <= 7500) {
       if (features[0] <= 48) {
@@ -2957,7 +2957,7 @@ int predict_srv9_spinlock_tree_32(int features[]) {
 }
 
 // Tree 33
-int predict_srv9_spinlock_tree_33(int features[]) {
+static int predict_srv9_spinlock_tree_33(int features[]) {
   if (features[1] <= 35000) {
     if (features[0] <= 63) {
       if (features[0] <= 28) {
@@ -3046,7 +3046,7 @@ int predict_srv9_spinlock_tree_33(int features[]) {
 }
 
 // Tree 34
-int predict_srv9_spinlock_tree_34(int features[]) {
+static int predict_srv9_spinlock_tree_34(int features[]) {
   if (features[0] <= 28) {
     if (features[1] <= 75000) {
       if (features[1] <= 55000) {
@@ -3127,7 +3127,7 @@ int predict_srv9_spinlock_tree_34(int features[]) {
 }
 
 // Tree 35
-int predict_srv9_spinlock_tree_35(int features[]) {
+static int predict_srv9_spinlock_tree_35(int features[]) {
   if (features[0] <= 12) {
     if (features[1] <= 125000) {
       return 1; // FDS_QSPINLOCK
@@ -3220,7 +3220,7 @@ int predict_srv9_spinlock_tree_35(int features[]) {
 }
 
 // Tree 36
-int predict_srv9_spinlock_tree_36(int features[]) {
+static int predict_srv9_spinlock_tree_36(int features[]) {
   if (features[1] <= 45000) {
     if (features[1] <= 15000) {
       if (features[1] <= 7500) {
@@ -3313,7 +3313,7 @@ int predict_srv9_spinlock_tree_36(int features[]) {
 }
 
 // Tree 37
-int predict_srv9_spinlock_tree_37(int features[]) {
+static int predict_srv9_spinlock_tree_37(int features[]) {
   if (features[0] <= 28) {
     if (features[0] <= 6) {
       if (features[0] <= 3) {
@@ -3406,7 +3406,7 @@ int predict_srv9_spinlock_tree_37(int features[]) {
 }
 
 // Tree 38
-int predict_srv9_spinlock_tree_38(int features[]) {
+static int predict_srv9_spinlock_tree_38(int features[]) {
   if (features[1] <= 35000) {
     if (features[1] <= 25000) {
       if (features[0] <= 51) {
@@ -3503,7 +3503,7 @@ int predict_srv9_spinlock_tree_38(int features[]) {
 }
 
 // Tree 39
-int predict_srv9_spinlock_tree_39(int features[]) {
+static int predict_srv9_spinlock_tree_39(int features[]) {
   if (features[0] <= 6) {
     if (features[1] <= 175000) {
       return 1; // FDS_QSPINLOCK
@@ -3612,7 +3612,7 @@ int predict_srv9_spinlock_tree_39(int features[]) {
 }
 
 // Tree 40
-int predict_srv9_spinlock_tree_40(int features[]) {
+static int predict_srv9_spinlock_tree_40(int features[]) {
   if (features[1] <= 35000) {
     if (features[1] <= 7500) {
       if (features[0] <= 80) {
@@ -3673,7 +3673,7 @@ int predict_srv9_spinlock_tree_40(int features[]) {
 }
 
 // Tree 41
-int predict_srv9_spinlock_tree_41(int features[]) {
+static int predict_srv9_spinlock_tree_41(int features[]) {
   if (features[1] <= 55000) {
     if (features[0] <= 28) {
       return 1; // FDS_QSPINLOCK
@@ -3758,7 +3758,7 @@ int predict_srv9_spinlock_tree_41(int features[]) {
 }
 
 // Tree 42
-int predict_srv9_spinlock_tree_42(int features[]) {
+static int predict_srv9_spinlock_tree_42(int features[]) {
   if (features[1] <= 55000) {
     if (features[1] <= 35000) {
       if (features[1] <= 15000) {
@@ -3851,7 +3851,7 @@ int predict_srv9_spinlock_tree_42(int features[]) {
 }
 
 // Tree 43
-int predict_srv9_spinlock_tree_43(int features[]) {
+static int predict_srv9_spinlock_tree_43(int features[]) {
   if (features[0] <= 12) {
     if (features[1] <= 175000) {
       if (features[1] <= 85000) {
@@ -3928,7 +3928,7 @@ int predict_srv9_spinlock_tree_43(int features[]) {
 }
 
 // Tree 44
-int predict_srv9_spinlock_tree_44(int features[]) {
+static int predict_srv9_spinlock_tree_44(int features[]) {
   if (features[0] <= 12) {
     if (features[0] <= 6) {
       return 1; // FDS_QSPINLOCK
@@ -3993,7 +3993,7 @@ int predict_srv9_spinlock_tree_44(int features[]) {
 }
 
 // Tree 45
-int predict_srv9_spinlock_tree_45(int features[]) {
+static int predict_srv9_spinlock_tree_45(int features[]) {
   if (features[1] <= 55000) {
     if (features[1] <= 35000) {
       if (features[0] <= 51) {
@@ -4106,7 +4106,7 @@ int predict_srv9_spinlock_tree_45(int features[]) {
 }
 
 // Tree 46
-int predict_srv9_spinlock_tree_46(int features[]) {
+static int predict_srv9_spinlock_tree_46(int features[]) {
   if (features[0] <= 28) {
     if (features[1] <= 85000) {
       if (features[1] <= 45000) {
@@ -4219,7 +4219,7 @@ int predict_srv9_spinlock_tree_46(int features[]) {
 }
 
 // Tree 47
-int predict_srv9_spinlock_tree_47(int features[]) {
+static int predict_srv9_spinlock_tree_47(int features[]) {
   if (features[1] <= 45000) {
     if (features[1] <= 25000) {
       if (features[1] <= 7500) {
@@ -4316,7 +4316,7 @@ int predict_srv9_spinlock_tree_47(int features[]) {
 }
 
 // Tree 48
-int predict_srv9_spinlock_tree_48(int features[]) {
+static int predict_srv9_spinlock_tree_48(int features[]) {
   if (features[1] <= 25000) {
     if (features[0] <= 21) {
       return 1; // FDS_QSPINLOCK
@@ -4405,7 +4405,7 @@ int predict_srv9_spinlock_tree_48(int features[]) {
 }
 
 // Tree 49
-int predict_srv9_spinlock_tree_49(int features[]) {
+static int predict_srv9_spinlock_tree_49(int features[]) {
   if (features[1] <= 35000) {
     if (features[1] <= 25000) {
       if (features[0] <= 51) {
@@ -4486,7 +4486,7 @@ int predict_srv9_spinlock_tree_49(int features[]) {
 }
 
 // Tree 50
-int predict_srv9_spinlock_tree_50(int features[]) {
+static int predict_srv9_spinlock_tree_50(int features[]) {
   if (features[1] <= 15000) {
     if (features[1] <= 7500) {
       if (features[0] <= 74) {
@@ -4563,7 +4563,7 @@ int predict_srv9_spinlock_tree_50(int features[]) {
 }
 
 // Tree 51
-int predict_srv9_spinlock_tree_51(int features[]) {
+static int predict_srv9_spinlock_tree_51(int features[]) {
   if (features[0] <= 28) {
     if (features[0] <= 6) {
       return 1; // FDS_QSPINLOCK
@@ -4660,7 +4660,7 @@ int predict_srv9_spinlock_tree_51(int features[]) {
 }
 
 // Tree 52
-int predict_srv9_spinlock_tree_52(int features[]) {
+static int predict_srv9_spinlock_tree_52(int features[]) {
   if (features[1] <= 35000) {
     if (features[0] <= 63) {
       if (features[1] <= 15000) {
@@ -4733,7 +4733,7 @@ int predict_srv9_spinlock_tree_52(int features[]) {
 }
 
 // Tree 53
-int predict_srv9_spinlock_tree_53(int features[]) {
+static int predict_srv9_spinlock_tree_53(int features[]) {
   if (features[0] <= 28) {
     if (features[0] <= 6) {
       if (features[1] <= 175000) {
@@ -4822,7 +4822,7 @@ int predict_srv9_spinlock_tree_53(int features[]) {
 }
 
 // Tree 54
-int predict_srv9_spinlock_tree_54(int features[]) {
+static int predict_srv9_spinlock_tree_54(int features[]) {
   if (features[1] <= 55000) {
     if (features[1] <= 25000) {
       if (features[0] <= 63) {
@@ -4951,7 +4951,7 @@ int predict_srv9_spinlock_tree_54(int features[]) {
 }
 
 // Tree 55
-int predict_srv9_spinlock_tree_55(int features[]) {
+static int predict_srv9_spinlock_tree_55(int features[]) {
   if (features[1] <= 55000) {
     if (features[1] <= 25000) {
       if (features[0] <= 63) {
@@ -5060,7 +5060,7 @@ int predict_srv9_spinlock_tree_55(int features[]) {
 }
 
 // Tree 56
-int predict_srv9_spinlock_tree_56(int features[]) {
+static int predict_srv9_spinlock_tree_56(int features[]) {
   if (features[1] <= 25000) {
     if (features[1] <= 7500) {
       return 1; // FDS_QSPINLOCK
@@ -5145,7 +5145,7 @@ int predict_srv9_spinlock_tree_56(int features[]) {
 }
 
 // Tree 57
-int predict_srv9_spinlock_tree_57(int features[]) {
+static int predict_srv9_spinlock_tree_57(int features[]) {
   if (features[1] <= 55000) {
     if (features[0] <= 28) {
       if (features[0] <= 12) {
@@ -5238,7 +5238,7 @@ int predict_srv9_spinlock_tree_57(int features[]) {
 }
 
 // Tree 58
-int predict_srv9_spinlock_tree_58(int features[]) {
+static int predict_srv9_spinlock_tree_58(int features[]) {
   if (features[1] <= 55000) {
     if (features[1] <= 35000) {
       if (features[0] <= 28) {
@@ -5363,7 +5363,7 @@ int predict_srv9_spinlock_tree_58(int features[]) {
 }
 
 // Tree 59
-int predict_srv9_spinlock_tree_59(int features[]) {
+static int predict_srv9_spinlock_tree_59(int features[]) {
   if (features[1] <= 55000) {
     if (features[0] <= 51) {
       if (features[0] <= 12) {
@@ -5468,7 +5468,7 @@ int predict_srv9_spinlock_tree_59(int features[]) {
 }
 
 // Tree 60
-int predict_srv9_spinlock_tree_60(int features[]) {
+static int predict_srv9_spinlock_tree_60(int features[]) {
   if (features[0] <= 12) {
     if (features[1] <= 95000) {
       if (features[1] <= 75000) {
@@ -5573,7 +5573,7 @@ int predict_srv9_spinlock_tree_60(int features[]) {
 }
 
 // Tree 61
-int predict_srv9_spinlock_tree_61(int features[]) {
+static int predict_srv9_spinlock_tree_61(int features[]) {
   if (features[1] <= 35000) {
     if (features[1] <= 7500) {
       if (features[0] <= 68) {
@@ -5690,7 +5690,7 @@ int predict_srv9_spinlock_tree_61(int features[]) {
 }
 
 // Tree 62
-int predict_srv9_spinlock_tree_62(int features[]) {
+static int predict_srv9_spinlock_tree_62(int features[]) {
   if (features[1] <= 25000) {
     if (features[0] <= 25) {
       return 1; // FDS_QSPINLOCK
@@ -5799,7 +5799,7 @@ int predict_srv9_spinlock_tree_62(int features[]) {
 }
 
 // Tree 63
-int predict_srv9_spinlock_tree_63(int features[]) {
+static int predict_srv9_spinlock_tree_63(int features[]) {
   if (features[1] <= 35000) {
     if (features[1] <= 25000) {
       if (features[1] <= 15000) {
@@ -5896,7 +5896,7 @@ int predict_srv9_spinlock_tree_63(int features[]) {
 }
 
 // Tree 64
-int predict_srv9_spinlock_tree_64(int features[]) {
+static int predict_srv9_spinlock_tree_64(int features[]) {
   if (features[1] <= 35000) {
     if (features[0] <= 28) {
       return 1; // FDS_QSPINLOCK
@@ -5961,7 +5961,7 @@ int predict_srv9_spinlock_tree_64(int features[]) {
 }
 
 // Tree 65
-int predict_srv9_spinlock_tree_65(int features[]) {
+static int predict_srv9_spinlock_tree_65(int features[]) {
   if (features[0] <= 12) {
     if (features[1] <= 175000) {
       if (features[1] <= 125000) {
@@ -6046,7 +6046,7 @@ int predict_srv9_spinlock_tree_65(int features[]) {
 }
 
 // Tree 66
-int predict_srv9_spinlock_tree_66(int features[]) {
+static int predict_srv9_spinlock_tree_66(int features[]) {
   if (features[1] <= 25000) {
     if (features[1] <= 7500) {
       if (features[0] <= 74) {
@@ -6135,7 +6135,7 @@ int predict_srv9_spinlock_tree_66(int features[]) {
 }
 
 // Tree 67
-int predict_srv9_spinlock_tree_67(int features[]) {
+static int predict_srv9_spinlock_tree_67(int features[]) {
   if (features[0] <= 12) {
     if (features[1] <= 175000) {
       if (features[0] <= 6) {
@@ -6220,7 +6220,7 @@ int predict_srv9_spinlock_tree_67(int features[]) {
 }
 
 // Tree 68
-int predict_srv9_spinlock_tree_68(int features[]) {
+static int predict_srv9_spinlock_tree_68(int features[]) {
   if (features[0] <= 28) {
     if (features[1] <= 45000) {
       return 1; // FDS_QSPINLOCK
@@ -6309,7 +6309,7 @@ int predict_srv9_spinlock_tree_68(int features[]) {
 }
 
 // Tree 69
-int predict_srv9_spinlock_tree_69(int features[]) {
+static int predict_srv9_spinlock_tree_69(int features[]) {
   if (features[1] <= 35000) {
     if (features[0] <= 63) {
       if (features[0] <= 28) {
@@ -6398,7 +6398,7 @@ int predict_srv9_spinlock_tree_69(int features[]) {
 }
 
 // Tree 70
-int predict_srv9_spinlock_tree_70(int features[]) {
+static int predict_srv9_spinlock_tree_70(int features[]) {
   if (features[1] <= 25000) {
     if (features[0] <= 40) {
       if (features[1] <= 15000) {
@@ -6507,7 +6507,7 @@ int predict_srv9_spinlock_tree_70(int features[]) {
 }
 
 // Tree 71
-int predict_srv9_spinlock_tree_71(int features[]) {
+static int predict_srv9_spinlock_tree_71(int features[]) {
   if (features[0] <= 12) {
     if (features[1] <= 125000) {
       if (features[0] <= 6) {
@@ -6592,7 +6592,7 @@ int predict_srv9_spinlock_tree_71(int features[]) {
 }
 
 // Tree 72
-int predict_srv9_spinlock_tree_72(int features[]) {
+static int predict_srv9_spinlock_tree_72(int features[]) {
   if (features[1] <= 15000) {
     if (features[1] <= 7500) {
       if (features[0] <= 74) {
@@ -6677,7 +6677,7 @@ int predict_srv9_spinlock_tree_72(int features[]) {
 }
 
 // Tree 73
-int predict_srv9_spinlock_tree_73(int features[]) {
+static int predict_srv9_spinlock_tree_73(int features[]) {
   if (features[0] <= 28) {
     if (features[0] <= 6) {
       if (features[1] <= 175000) {
@@ -6762,7 +6762,7 @@ int predict_srv9_spinlock_tree_73(int features[]) {
 }
 
 // Tree 74
-int predict_srv9_spinlock_tree_74(int features[]) {
+static int predict_srv9_spinlock_tree_74(int features[]) {
   if (features[1] <= 55000) {
     if (features[0] <= 28) {
       if (features[0] <= 12) {
@@ -6879,7 +6879,7 @@ int predict_srv9_spinlock_tree_74(int features[]) {
 }
 
 // Tree 75
-int predict_srv9_spinlock_tree_75(int features[]) {
+static int predict_srv9_spinlock_tree_75(int features[]) {
   if (features[1] <= 25000) {
     if (features[0] <= 51) {
       if (features[1] <= 15000) {
@@ -6980,7 +6980,7 @@ int predict_srv9_spinlock_tree_75(int features[]) {
 }
 
 // Tree 76
-int predict_srv9_spinlock_tree_76(int features[]) {
+static int predict_srv9_spinlock_tree_76(int features[]) {
   if (features[1] <= 35000) {
     if (features[0] <= 51) {
       if (features[1] <= 25000) {
@@ -7097,7 +7097,7 @@ int predict_srv9_spinlock_tree_76(int features[]) {
 }
 
 // Tree 77
-int predict_srv9_spinlock_tree_77(int features[]) {
+static int predict_srv9_spinlock_tree_77(int features[]) {
   if (features[1] <= 45000) {
     if (features[1] <= 7500) {
       if (features[0] <= 74) {
@@ -7174,7 +7174,7 @@ int predict_srv9_spinlock_tree_77(int features[]) {
 }
 
 // Tree 78
-int predict_srv9_spinlock_tree_78(int features[]) {
+static int predict_srv9_spinlock_tree_78(int features[]) {
   if (features[0] <= 28) {
     if (features[1] <= 55000) {
       return 1; // FDS_QSPINLOCK
@@ -7247,7 +7247,7 @@ int predict_srv9_spinlock_tree_78(int features[]) {
 }
 
 // Tree 79
-int predict_srv9_spinlock_tree_79(int features[]) {
+static int predict_srv9_spinlock_tree_79(int features[]) {
   if (features[0] <= 40) {
     if (features[1] <= 175000) {
       if (features[0] <= 6) {
@@ -7320,7 +7320,7 @@ int predict_srv9_spinlock_tree_79(int features[]) {
 }
 
 // Tree 80
-int predict_srv9_spinlock_tree_80(int features[]) {
+static int predict_srv9_spinlock_tree_80(int features[]) {
   if (features[0] <= 28) {
     if (features[1] <= 45000) {
       return 1; // FDS_QSPINLOCK
@@ -7413,7 +7413,7 @@ int predict_srv9_spinlock_tree_80(int features[]) {
 }
 
 // Tree 81
-int predict_srv9_spinlock_tree_81(int features[]) {
+static int predict_srv9_spinlock_tree_81(int features[]) {
   if (features[0] <= 19) {
     if (features[1] <= 45000) {
       return 1; // FDS_QSPINLOCK
@@ -7526,7 +7526,7 @@ int predict_srv9_spinlock_tree_81(int features[]) {
 }
 
 // Tree 82
-int predict_srv9_spinlock_tree_82(int features[]) {
+static int predict_srv9_spinlock_tree_82(int features[]) {
   if (features[0] <= 28) {
     if (features[1] <= 45000) {
       return 1; // FDS_QSPINLOCK
@@ -7611,7 +7611,7 @@ int predict_srv9_spinlock_tree_82(int features[]) {
 }
 
 // Tree 83
-int predict_srv9_spinlock_tree_83(int features[]) {
+static int predict_srv9_spinlock_tree_83(int features[]) {
   if (features[0] <= 28) {
     if (features[0] <= 12) {
       if (features[1] <= 175000) {
@@ -7676,7 +7676,7 @@ int predict_srv9_spinlock_tree_83(int features[]) {
 }
 
 // Tree 84
-int predict_srv9_spinlock_tree_84(int features[]) {
+static int predict_srv9_spinlock_tree_84(int features[]) {
   if (features[0] <= 28) {
     if (features[0] <= 6) {
       if (features[0] <= 3) {
@@ -7777,7 +7777,7 @@ int predict_srv9_spinlock_tree_84(int features[]) {
 }
 
 // Tree 85
-int predict_srv9_spinlock_tree_85(int features[]) {
+static int predict_srv9_spinlock_tree_85(int features[]) {
   if (features[0] <= 12) {
     if (features[0] <= 6) {
       return 1; // FDS_QSPINLOCK
@@ -7870,7 +7870,7 @@ int predict_srv9_spinlock_tree_85(int features[]) {
 }
 
 // Tree 86
-int predict_srv9_spinlock_tree_86(int features[]) {
+static int predict_srv9_spinlock_tree_86(int features[]) {
   if (features[0] <= 12) {
     if (features[0] <= 6) {
       return 1; // FDS_QSPINLOCK
@@ -7959,7 +7959,7 @@ int predict_srv9_spinlock_tree_86(int features[]) {
 }
 
 // Tree 87
-int predict_srv9_spinlock_tree_87(int features[]) {
+static int predict_srv9_spinlock_tree_87(int features[]) {
   if (features[1] <= 45000) {
     if (features[0] <= 51) {
       if (features[0] <= 28) {
@@ -8032,7 +8032,7 @@ int predict_srv9_spinlock_tree_87(int features[]) {
 }
 
 // Tree 88
-int predict_srv9_spinlock_tree_88(int features[]) {
+static int predict_srv9_spinlock_tree_88(int features[]) {
   if (features[0] <= 28) {
     if (features[0] <= 12) {
       if (features[0] <= 3) {
@@ -8125,7 +8125,7 @@ int predict_srv9_spinlock_tree_88(int features[]) {
 }
 
 // Tree 89
-int predict_srv9_spinlock_tree_89(int features[]) {
+static int predict_srv9_spinlock_tree_89(int features[]) {
   if (features[0] <= 28) {
     if (features[1] <= 175000) {
       if (features[0] <= 12) {
@@ -8218,7 +8218,7 @@ int predict_srv9_spinlock_tree_89(int features[]) {
 }
 
 // Tree 90
-int predict_srv9_spinlock_tree_90(int features[]) {
+static int predict_srv9_spinlock_tree_90(int features[]) {
   if (features[1] <= 25000) {
     if (features[1] <= 7500) {
       if (features[0] <= 74) {
@@ -8327,7 +8327,7 @@ int predict_srv9_spinlock_tree_90(int features[]) {
 }
 
 // Tree 91
-int predict_srv9_spinlock_tree_91(int features[]) {
+static int predict_srv9_spinlock_tree_91(int features[]) {
   if (features[0] <= 28) {
     if (features[0] <= 12) {
       if (features[0] <= 6) {
@@ -8412,7 +8412,7 @@ int predict_srv9_spinlock_tree_91(int features[]) {
 }
 
 // Tree 92
-int predict_srv9_spinlock_tree_92(int features[]) {
+static int predict_srv9_spinlock_tree_92(int features[]) {
   if (features[1] <= 25000) {
     if (features[0] <= 40) {
       if (features[0] <= 28) {
@@ -8509,7 +8509,7 @@ int predict_srv9_spinlock_tree_92(int features[]) {
 }
 
 // Tree 93
-int predict_srv9_spinlock_tree_93(int features[]) {
+static int predict_srv9_spinlock_tree_93(int features[]) {
   if (features[0] <= 28) {
     if (features[0] <= 6) {
       if (features[1] <= 175000) {
@@ -8574,7 +8574,7 @@ int predict_srv9_spinlock_tree_93(int features[]) {
 }
 
 // Tree 94
-int predict_srv9_spinlock_tree_94(int features[]) {
+static int predict_srv9_spinlock_tree_94(int features[]) {
   if (features[0] <= 28) {
     if (features[1] <= 65000) {
       if (features[1] <= 45000) {
@@ -8675,7 +8675,7 @@ int predict_srv9_spinlock_tree_94(int features[]) {
 }
 
 // Tree 95
-int predict_srv9_spinlock_tree_95(int features[]) {
+static int predict_srv9_spinlock_tree_95(int features[]) {
   if (features[1] <= 55000) {
     if (features[0] <= 28) {
       if (features[0] <= 12) {
@@ -8752,7 +8752,7 @@ int predict_srv9_spinlock_tree_95(int features[]) {
 }
 
 // Tree 96
-int predict_srv9_spinlock_tree_96(int features[]) {
+static int predict_srv9_spinlock_tree_96(int features[]) {
   if (features[0] <= 12) {
     if (features[0] <= 6) {
       if (features[0] <= 3) {
@@ -8833,7 +8833,7 @@ int predict_srv9_spinlock_tree_96(int features[]) {
 }
 
 // Tree 97
-int predict_srv9_spinlock_tree_97(int features[]) {
+static int predict_srv9_spinlock_tree_97(int features[]) {
   if (features[1] <= 25000) {
     if (features[1] <= 15000) {
       if (features[1] <= 7500) {
@@ -8922,7 +8922,7 @@ int predict_srv9_spinlock_tree_97(int features[]) {
 }
 
 // Tree 98
-int predict_srv9_spinlock_tree_98(int features[]) {
+static int predict_srv9_spinlock_tree_98(int features[]) {
   if (features[0] <= 12) {
     if (features[0] <= 6) {
       if (features[0] <= 3) {
@@ -9007,7 +9007,7 @@ int predict_srv9_spinlock_tree_98(int features[]) {
 }
 
 // Tree 99
-int predict_srv9_spinlock_tree_99(int features[]) {
+static int predict_srv9_spinlock_tree_99(int features[]) {
   if (features[1] <= 35000) {
     if (features[1] <= 25000) {
       if (features[1] <= 15000) {
@@ -9135,7 +9135,7 @@ int predict_srv9_spinlock_tree_99(int features[]) {
   }
 }
 
-int predict_srv9_spinlock_random_forest(int features[]) {
+static int predict_srv9_spinlock_random_forest(int features[]) {
   int predictions[100] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
   predictions[0] = predict_srv9_spinlock_tree_0(features);
   predictions[1] = predict_srv9_spinlock_tree_1(features);

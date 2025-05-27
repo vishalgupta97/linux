@@ -7,7 +7,7 @@
 #include <linux/osq_lock.h>
 #include <linux/spinlock_types.h>
 #include <linux/types.h>
-#include <linux/feedbacksync.h>
+#include <linux/fds.h>
 
 #ifndef CONFIG_PREEMPT_RT
 

@@ -3,7 +3,7 @@
 
 #include <asm/msr.h>
 #include <linux/cpu.h>
-#include <linux/feedbacksync.h>
+#include <linux/fds.h>
 
 static inline unsigned long locktime_timing_start(void)
 {

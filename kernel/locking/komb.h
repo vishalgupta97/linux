@@ -9,7 +9,7 @@
 #include <linux/percpu-defs.h>
 #include <linux/kernel.h>
 #include <linux/syscalls.h>
-#include <linux/feedbacksync.h>
+#include <linux/fds.h>
 #include <asm-generic/qspinlock.h>
 
 #include <fds/timing_stats.h>

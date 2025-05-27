@@ -23,7 +23,7 @@
 #include <linux/cred.h>
 #include <linux/magic.h>
 #include <linux/slab.h>
-#include <linux/feedbacksync.h>
+#include <linux/fds.h>
 
 #include "internal.h"
 
