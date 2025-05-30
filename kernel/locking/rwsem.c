@@ -766,6 +766,7 @@ void __down_write(struct rw_semaphore *lock, enum fds_lock_mechanisms lockm, str
 		curr_node->task_struct_ptr = current;
 		curr_node->lock = lock;
 		curr_node->lockm = FDS_QSPINLOCK;
+		curr_node->key = key;
 
 		prev = xchg(&lock->writer_tail, curr_node);
 		next = NULL;
