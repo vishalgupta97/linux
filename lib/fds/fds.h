@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0
 // Copyright (c) 2024 Vishal Gupta
 
+#ifndef __FDS_H__
+#define __FDS_H__
+
 #include <linux/kernel.h>
 #include <linux/proc_fs.h>
 #include <linux/fds.h>
@@ -52,11 +55,44 @@ enum fds_lock_type {
 	FDS_WRITE_SEM,
 };
 
+enum HASHTABLE_TYPE {
+	READ_HASHTABLE,
+	WRITE_HASHTABLE,
+	SPIN_HASHTABLE,
+	MUTEX_HASHTABLE,
+};
+
+struct contending_locks {
+	enum fds_lock_type ltype;
+	struct lock_stat *lock;
+};
+
 extern long fds_monitor_time;
 extern bool fds_oracle_running;
+extern bool fds_running;
+
+extern struct contending_locks observed_locks[MAX_CONTENDING_LOCKS];
+extern long num_contending_locks;
+
+DECLARE_PER_CPU_ALIGNED(struct lock_stat, write_lock_stats[NUM_BUCKETS]);
+DECLARE_PER_CPU_ALIGNED(struct lock_stat, spin_lock_stats[NUM_BUCKETS]);
+DECLARE_PER_CPU_ALIGNED(struct lock_stat, mutex_lock_stats[NUM_BUCKETS]);
+
+extern DECLARE_HASHTABLE(write_stats_ht, HASHTABLE_BITS);
+extern DECLARE_HASHTABLE(spin_stats_ht, HASHTABLE_BITS);
+extern DECLARE_HASHTABLE(mutex_stats_ht, HASHTABLE_BITS);
+
+extern spinlock_t stat_ht_lock;
 
 const char *get_str_lockm(enum fds_lock_mechanisms lockm);
+const char *get_str_ltype(enum fds_lock_type ltype);
 enum fds_lock_mechanisms
 get_optimal_spinlock_random_forest_classifier(struct lock_stat *tmp);
 enum fds_lock_mechanisms
 get_optimal_rwsem_random_forest_classifier(struct lock_stat *tmp);
+extern void reset_fds(void);
+extern void collect_fds_stats(void);
+extern void __reset_fds_stats(struct lock_stat *tmp);
+extern void reset_fds_stats(void);
+
+#endif //__FDS_H__

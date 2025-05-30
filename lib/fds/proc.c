@@ -1,6 +1,40 @@
 // SPDX-License-Identifier: GPL-2.0
 // Copyright (c) 2024 Vishal Gupta
 
+#include "fds.h"
+
+uint64_t value = 0;
+uint64_t direction = 0;
+
+static inline ssize_t fds_write(const char __user *buffer, size_t count,
+				int type)
+{
+	char buf[64];
+	int err;
+
+	if (count > 64)
+		return -EINVAL;
+
+	if (copy_from_user(buf, buffer, count))
+		return -EFAULT;
+
+	buf[count] = '\0';
+
+	if (type == IS_VALUE)
+		err = kstrtoll(buf, 0, &value);
+	else if (type == IS_DIRECTION)
+		err = kstrtoll(buf, 0, &direction);
+	else
+		return -EOPNOTSUPP;
+
+	if (err)
+		return -EFAULT;
+
+	printk(KERN_ALERT "value: %lld, direction: %lld\n", value, direction);
+
+	return count;
+}
+
 static ssize_t fds_value_write(struct file *file, const char __user *buffer,
 			       size_t count, loff_t *pos)
 {
@@ -11,6 +45,33 @@ static ssize_t fds_direction_write(struct file *file, const char __user *buffer,
 				   size_t count, loff_t *pos)
 {
 	return fds_write(buffer, count, IS_DIRECTION);
+}
+
+inline void reset_fds(void)
+{
+	int bkt;
+	struct lock_stat *tmp;
+
+	printk(KERN_ALERT "Resetting FDS\n");
+
+	collect_fds_stats(); // To reset all the per-CPU counters.
+
+	spin_lock(&stat_ht_lock);
+
+	hash_for_each(write_stats_ht, bkt, tmp, hnode) {
+		tmp->key->lockm = DEFAULT_FDS_LOCK;
+		__reset_fds_stats(tmp);
+	}
+	hash_for_each(spin_stats_ht, bkt, tmp, hnode) {
+		tmp->key->lockm = DEFAULT_FDS_LOCK;
+		__reset_fds_stats(tmp);
+	}
+	hash_for_each(mutex_stats_ht, bkt, tmp, hnode) {
+		tmp->key->lockm = DEFAULT_FDS_LOCK;
+		__reset_fds_stats(tmp);
+	}
+
+	spin_unlock(&stat_ht_lock);
 }
 
 static ssize_t reset_fds_write(struct file *file, const char __user *buffer,
@@ -48,7 +109,7 @@ static void seq_stats(struct seq_file *m, long *v)
 	BUG_ON(i < 0);
 	if (i > MAX_CONTENDING_LOCKS || observed_locks[i].lock == NULL)
 		return;
-	seq_printf(m, "%40s: %14ld %14s %14s\n", observed_locks[i].lock->name,
+	seq_printf(m, "%40s: %14lld %14s %14s\n", observed_locks[i].lock->name,
 		   observed_locks[i].lock->counter,
 		   get_str_ltype(observed_locks[i].ltype),
 		   get_str_lockm(observed_locks[i].lock->key->lockm));
@@ -84,6 +145,13 @@ static int fds_stat_show(struct seq_file *m, void *v)
 	return 0;
 }
 
+const struct seq_operations fds_getstat_ops = {
+	.start = fds_stat_start,
+	.next = fds_stat_next,
+	.stop = fds_stat_stop,
+	.show = fds_stat_show,
+};
+
 static int get_fds_open(struct inode *inode, struct file *file)
 {
 	int res;
@@ -103,6 +171,7 @@ static ssize_t fds_monitor_time_write(struct file *file,
 				      loff_t *pos)
 {
 	char buf[64];
+	int err;
 
 	if (count > 64)
 		return -EINVAL;
@@ -113,7 +182,10 @@ static ssize_t fds_monitor_time_write(struct file *file,
 	buf[count] = '\0';
 
 	uint64_t val = 0;
-	kstrtoll(buf, 0, &val);
+	err = kstrtoll(buf, 0, &val);
+
+	if (err)
+		return -EFAULT;
 
 	if (val % 1000 == 0)
 		fds_monitor_time = val;
@@ -123,29 +195,21 @@ static ssize_t fds_monitor_time_write(struct file *file,
 	return count;
 }
 
-static const struct seq_operations fds_getstat_ops = {
-	.start = fds_stat_start,
-	.next = fds_stat_next,
-	.stop = fds_stat_stop,
-	.show = fds_stat_show,
-};
-
-static const struct proc_ops get_fds_proc_ops = {
+const struct proc_ops get_fds_proc_ops = {
 	.proc_open = get_fds_open,
 	.proc_read = seq_read,
 	.proc_lseek = seq_lseek,
 	.proc_release = get_fds_release,
 };
 
-static const struct proc_ops reset_fds_proc_ops = { .proc_write =
-							    reset_fds_write };
+const struct proc_ops reset_fds_proc_ops = { .proc_write = reset_fds_write };
 
-static const struct proc_ops value_proc_ops = { .proc_write = fds_value_write };
+const struct proc_ops value_proc_ops = { .proc_write = fds_value_write };
 
-static const struct proc_ops direction_proc_ops = {
+const struct proc_ops direction_proc_ops = {
 	.proc_write = fds_direction_write,
 };
 
-static const struct proc_ops fds_monitor_time_proc_ops = {
+const struct proc_ops fds_monitor_time_proc_ops = {
 	.proc_write = fds_monitor_time_write,
 };

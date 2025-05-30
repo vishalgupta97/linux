@@ -3,27 +3,14 @@
 
 #include "fds.h"
 
-static bool fds_running = false;
-
+bool fds_running = false;
 long fds_monitor_time = 5000; // In milli seconds
 
-/*
-	------------------------- Lock Stat Collector -------------------
-*/
+DEFINE_SPINLOCK(stat_ht_lock);
 
-DEFINE_PER_CPU_ALIGNED(struct lock_stat, read_lock_stats[NUM_BUCKETS]);
-DEFINE_PER_CPU_ALIGNED(struct lock_stat, write_lock_stats[NUM_BUCKETS]);
-DEFINE_PER_CPU_ALIGNED(struct lock_stat, spin_lock_stats[NUM_BUCKETS]);
-DEFINE_PER_CPU_ALIGNED(struct lock_stat, mutex_lock_stats[NUM_BUCKETS]);
-DEFINE_PER_CPU_ALIGNED(bool, bucket_usage[NUM_BUCKETS]);
-DEFINE_PER_CPU_ALIGNED(uint64_t, collisions);
-
-enum HASHTABLE_TYPE {
-	READ_HASHTABLE,
-	WRITE_HASHTABLE,
-	SPIN_HASHTABLE,
-	MUTEX_HASHTABLE,
-};
+DEFINE_HASHTABLE(write_stats_ht, HASHTABLE_BITS);
+DEFINE_HASHTABLE(spin_stats_ht, HASHTABLE_BITS);
+DEFINE_HASHTABLE(mutex_stats_ht, HASHTABLE_BITS);
 
 __always_inline void init_fds_lock_key(struct fds_lock_key *key,
 				       const char *_name,
@@ -37,147 +24,6 @@ __always_inline void init_fds_lock_key(struct fds_lock_key *key,
 			key->bucket[i] = 0;
 	}
 }
-
-__always_inline struct lock_stat *get_stat_ptr(uint64_t bucket,
-					       enum HASHTABLE_TYPE ht_type)
-{
-	switch (ht_type) {
-	case READ_HASHTABLE:
-		//return this_cpu_ptr(&read_lock_stats[bucket]);
-	case WRITE_HASHTABLE:
-		return this_cpu_ptr(&write_lock_stats[bucket]);
-	case SPIN_HASHTABLE:
-		return this_cpu_ptr(&spin_lock_stats[bucket]);
-	case MUTEX_HASHTABLE:
-		return this_cpu_ptr(&mutex_lock_stats[bucket]);
-	}
-	return NULL;
-}
-
-void __stat_lock_time(struct fds_lock_key *key, enum HASHTABLE_TYPE ht_type,
-		      uint64_t time)
-{
-	if (!fds_running || key == NULL ||
-	    time <= 0) // || key->lockm == FDS_DISABLE)
-		return;
-
-	struct lock_stat *stat_ptr = NULL;
-	uint64_t bucket = key->bucket[smp_processor_id() * 8];
-
-	if (bucket) {
-		stat_ptr = get_stat_ptr(bucket, ht_type);
-		if (stat_ptr->key == key) {
-			stat_ptr->total_cs_time += time;
-			stat_ptr->total_cs_count++;
-			return;
-		}
-		printk(KERN_ALERT
-		       "CHECK cpuid: %d bucket: %ld addr1: %px addr2: %px name: %s\n",
-		       smp_processor_id(), bucket, stat_ptr->key, key,
-		       key->name);
-	}
-	BUG_ON(true);
-}
-
-void read_stat_lock_time(struct fds_lock_key *key, uint64_t time)
-{
-	__stat_lock_time(key, READ_HASHTABLE, time);
-}
-
-void write_stat_lock_time(struct fds_lock_key *key, uint64_t time)
-{
-	__stat_lock_time(key, WRITE_HASHTABLE, time);
-}
-
-void mutex_stat_lock_time(struct fds_lock_key *key, uint64_t time)
-{
-	__stat_lock_time(key, MUTEX_HASHTABLE, time);
-}
-
-void spin_stat_lock_time(struct fds_lock_key *key, uint64_t time)
-{
-	__stat_lock_time(key, SPIN_HASHTABLE, time);
-}
-
-void __stat_lock_acquire(struct fds_lock_key *key, enum HASHTABLE_TYPE ht_type)
-{
-	if (!fds_running || key == NULL) // || key->lockm == FDS_DISABLE)
-		return;
-
-	struct lock_stat *stat_ptr = NULL;
-	uint64_t bucket = key->bucket[smp_processor_id() * 8];
-
-	if (bucket) {
-		stat_ptr = get_stat_ptr(bucket, ht_type);
-		if (stat_ptr->key == key) {
-			if (ht_type == READ_HASHTABLE)
-				stat_ptr->read_counter++;
-			else
-				stat_ptr->counter++;
-			goto out;
-		}
-		printk(KERN_ALERT
-		       "CHECK cpuid: %d bucket: %ld addr1: %px addr2: %px name: %s\n",
-		       smp_processor_id(), bucket, stat_ptr->key, key,
-		       key->name);
-		BUG_ON(true);
-	}
-
-	bucket = (((uint64_t)key) & (0x1fff));
-	while (bucket < NUM_BUCKETS) {
-		stat_ptr = get_stat_ptr(bucket, ht_type);
-		if (stat_ptr->key == NULL) {
-			if (stat_ptr->counter > 0)
-				this_cpu_inc(collisions);
-			stat_ptr->key = key;
-			stat_ptr->counter = 1;
-			if (ht_type == READ_HASHTABLE)
-				stat_ptr->read_counter = 1;
-			stat_ptr->name = kstrdup(key->name, GFP_KERNEL);
-			key->bucket[smp_processor_id() * 8] = bucket;
-			//printk(KERN_ALERT "ALLOCATED cpuid: %d bucket: %ld addr1: %px addr2: %px name: %s\n",
-			//   smp_processor_id(), bucket, stat_ptr->key, key, key->name);
-			goto out;
-		} else if (stat_ptr->key == key) {
-			if (ht_type == READ_HASHTABLE)
-				stat_ptr->read_counter++;
-			else
-				stat_ptr->counter++;
-			goto out;
-		}
-		bucket++;
-	}
-
-out:
-	//*this_cpu_ptr(&bucket_usage[bucket]) = true;
-	return;
-}
-
-void read_stat_lock_acquire(struct fds_lock_key *key)
-{
-	__stat_lock_acquire(key, READ_HASHTABLE);
-}
-
-void write_stat_lock_acquire(struct fds_lock_key *key)
-{
-	__stat_lock_acquire(key, WRITE_HASHTABLE);
-}
-
-void mutex_stat_lock_acquire(struct fds_lock_key *key)
-{
-	__stat_lock_acquire(key, MUTEX_HASHTABLE);
-}
-
-void spin_stat_lock_acquire(struct fds_lock_key *key)
-{
-	__stat_lock_acquire(key, SPIN_HASHTABLE);
-}
-
-static DEFINE_SPINLOCK(stat_ht_lock);
-
-DEFINE_HASHTABLE(write_stats_ht, HASHTABLE_BITS);
-DEFINE_HASHTABLE(spin_stats_ht, HASHTABLE_BITS);
-DEFINE_HASHTABLE(mutex_stats_ht, HASHTABLE_BITS);
 
 inline void set_min_max_counter(struct lock_stat *stat, struct lock_stat *tmp)
 {
@@ -207,8 +53,23 @@ inline void set_min_max_cs_time(struct lock_stat *stat, struct lock_stat *tmp)
 		tmp->min_avg_cs_time = avg_cs_time;
 }
 
-inline bool __collect_fds_stats(struct lock_stat *stat, struct lock_stat *tmp,
-				int cpu)
+__always_inline struct lock_stat *
+get_cpu_stat_ptr(enum HASHTABLE_TYPE ht_type, uint64_t cpu, uint64_t bucket)
+{
+	switch (ht_type) {
+	case READ_HASHTABLE:
+	case WRITE_HASHTABLE:
+		return per_cpu_ptr(&write_lock_stats[bucket], cpu);
+	case SPIN_HASHTABLE:
+		return per_cpu_ptr(&spin_lock_stats[bucket], cpu);
+	case MUTEX_HASHTABLE:
+		return per_cpu_ptr(&mutex_lock_stats[bucket], cpu);
+	}
+	return NULL;
+}
+
+inline bool ___collect_fds_stats(struct lock_stat *stat, struct lock_stat *tmp,
+				 int cpu)
 {
 	if (stat == tmp) {
 		if (stat->counter > 0) {
@@ -243,121 +104,88 @@ inline bool __collect_fds_stats(struct lock_stat *stat, struct lock_stat *tmp,
 	return false;
 }
 
-// void __collect_fds_stats(struct hlist_head (*p)[32], struct lock_stat *stat) {
-// 	int bkt;
-// 	struct lock_stat *tmp;
+__always_inline bool __collect_fds_stats(enum HASHTABLE_TYPE ht_type,
+					 struct lock_stat *stat, int cpu)
+{
+	struct lock_stat *tmp;
+	int bkt;
+	bool found = false;
+	switch (ht_type) {
+	case READ_HASHTABLE:
+	case WRITE_HASHTABLE:
+		hash_for_each(write_stats_ht, bkt, tmp, hnode) {
+			found = ___collect_fds_stats(stat, tmp, cpu);
+			if (found)
+				return found;
+		}
+		break;
+	case SPIN_HASHTABLE:
+		hash_for_each(spin_stats_ht, bkt, tmp, hnode) {
+			found = ___collect_fds_stats(stat, tmp, cpu);
+			if (found)
+				return found;
+		}
+		break;
+	case MUTEX_HASHTABLE:
+		hash_for_each(mutex_stats_ht, bkt, tmp, hnode) {
+			found = ___collect_fds_stats(stat, tmp, cpu);
+			if (found)
+				return found;
+		}
+		break;
+	}
+	return found;
+}
 
-// 	if (stat->counter > 0) {
-// 		hash_for_each(*p, bkt, tmp, hnode) {
-// 			if (stat == tmp)
-// 				return;
+__always_inline void add_to_ht(enum HASHTABLE_TYPE ht_type,
+			       struct lock_stat *stat)
+{
+	switch (ht_type) {
+	case READ_HASHTABLE:
+	case WRITE_HASHTABLE:
+		hash_add(write_stats_ht, &stat->hnode, (uint64_t)stat->key);
+		break;
+	case SPIN_HASHTABLE:
+		hash_add(spin_stats_ht, &stat->hnode, (uint64_t)stat->key);
+		break;
+	case MUTEX_HASHTABLE:
+		hash_add(mutex_stats_ht, &stat->hnode, (uint64_t)stat->key);
+		break;
+	}
+}
 
-// 			if (stat->key != NULL && tmp->key != NULL) {
-// 				if (stat->key == tmp->key) {
-// 					tmp->counter += stat->counter;
-// 					stat->counter = 0;
-// 					return;
-// 				}
-// 			}
-// 		}
-// 		hash_add(*p, &stat->hnode, stat->key);
-// 	}
-// }
+__always_inline void ht_collect_fds_stats(enum HASHTABLE_TYPE ht_type,
+					  uint64_t cpu, uint64_t bucket)
+{
+	struct lock_stat *stat;
+	stat = get_cpu_stat_ptr(ht_type, cpu, bucket);
+	if (stat->counter > 0) {
+		bool found = __collect_fds_stats(ht_type, stat, cpu);
+		if (!found) {
+			cpumask_set_cpu(cpu, &stat->contending_cpus);
+			set_min_max_counter(stat, stat);
+			set_min_max_cs_time(stat, stat);
+			add_to_ht(ht_type, stat);
+		}
+	}
+}
 
 void collect_fds_stats(void)
 {
-	int i, j, bkt;
-	struct lock_stat *stat, *tmp;
-
-	// for (j = 0; j < NUM_BUCKETS; j++) {
-	// 	for_each_online_cpu(i) {
-	// 		stat = per_cpu_ptr(&write_lock_stats[j], i);
-	// 		__collect_fds_stats(&write_stats_ht, stat);
-	// 		stat = per_cpu_ptr(&spin_lock_stats[j], i);
-	// 		__collect_fds_stats(&spin_stats_ht, stat);
-	// 		stat = per_cpu_ptr(&mutex_lock_stats[j], i);
-	// 		__collect_fds_stats(&mutex_stats_ht, stat);
-	// 	}
-	// }
-
-	// __collect_fds_stats(&write_stats_ht, &write_lock_stats);
-	// __collect_fds_stats(&spin_stats_ht, &spin_lock_stats);
-	// __collect_fds_stats(&mutex_stats_ht, &mutex_lock_stats);
+	int i, j;
 
 	spin_lock(&stat_ht_lock);
 
 	for (j = 0; j < NUM_BUCKETS; j++) {
 		for_each_online_cpu(i) {
-			stat = per_cpu_ptr(&write_lock_stats[j], i);
-			if (stat->counter > 0) {
-				bool found = false;
-				hash_for_each(write_stats_ht, bkt, tmp, hnode) {
-					found = __collect_fds_stats(stat, tmp,
-								    i);
-					if (found)
-						break;
-				}
-				if (!found) {
-					cpumask_set_cpu(i,
-							&stat->contending_cpus);
-					set_min_max_counter(stat, stat);
-					set_min_max_cs_time(stat, stat);
-					hash_add(write_stats_ht, &stat->hnode,
-						 stat->key);
-				}
-			}
-
-			stat = per_cpu_ptr(&spin_lock_stats[j], i);
-			if (stat->counter > 0) {
-				bool found = false;
-				hash_for_each(spin_stats_ht, bkt, tmp, hnode) {
-					found = __collect_fds_stats(stat, tmp,
-								    i);
-					if (found)
-						break;
-				}
-				if (!found) {
-					cpumask_set_cpu(i,
-							&stat->contending_cpus);
-					set_min_max_counter(stat, stat);
-					set_min_max_cs_time(stat, stat);
-					hash_add(spin_stats_ht, &stat->hnode,
-						 stat->key);
-				}
-			}
-
-			stat = per_cpu_ptr(&mutex_lock_stats[j], i);
-			if (stat->counter > 0) {
-				bool found = false;
-				hash_for_each(mutex_stats_ht, bkt, tmp, hnode) {
-					found = __collect_fds_stats(stat, tmp,
-								    i);
-					if (found)
-						break;
-				}
-				if (!found) {
-					cpumask_set_cpu(i,
-							&stat->contending_cpus);
-					set_min_max_counter(stat, stat);
-					set_min_max_cs_time(stat, stat);
-					hash_add(mutex_stats_ht, &stat->hnode,
-						 stat->key);
-				}
-			}
+			ht_collect_fds_stats(WRITE_HASHTABLE, i, j);
+			ht_collect_fds_stats(SPIN_HASHTABLE, i, j);
+			ht_collect_fds_stats(MUTEX_HASHTABLE, i, j);
 		}
 	}
 
 	spin_unlock(&stat_ht_lock);
 }
-
-// void __reset_fds_stats(struct hlist_head (*p)[32]) {
-// 	int bkt;
-// 	struct lock_stat *tmp;
-
-// 	hash_for_each(*p, bkt, tmp, hnode) {
-// 		tmp->counter = 0;
-// 	}
-// }
 
 void __reset_fds_stats(struct lock_stat *tmp)
 {
@@ -374,10 +202,6 @@ void __reset_fds_stats(struct lock_stat *tmp)
 
 void reset_fds_stats(void)
 {
-	// __reset_fds_stats(&write_stats_ht);
-	// __reset_fds_stats(&spin_stats_ht);
-	// __reset_fds_stats(&mutex_stats_ht);
-
 	int bkt;
 	struct lock_stat *tmp;
 
@@ -403,12 +227,12 @@ inline void __print_fds_stats(struct lock_stat *tmp, const char *type,
 		if (tmp->counter > PRINT_COUNT_LIMIT ||
 		    tmp->read_counter > PRINT_COUNT_LIMIT) {
 			printk(KERN_ALERT
-			       "%s Name: %s, Counter: %ld Max Counter: %ld Min Counter: %ld Read Counter: %ld Contending_CPUs: %d\n",
+			       "%s Name: %s, Counter: %lld Max Counter: %lld Min Counter: %lld Read Counter: %lld Contending_CPUs: %d\n",
 			       type, tmp->name, tmp->counter, tmp->max_counter,
 			       tmp->min_counter, tmp->read_counter,
 			       cpumask_weight(&tmp->contending_cpus));
 			printk(KERN_ALERT
-			       "%s Name: %s, total_cs_time: %ld total_cs_count: %ld Average CS: %ld Max CS: %ld Min CS: %ld\n",
+			       "%s Name: %s, total_cs_time: %lld total_cs_count: %lld Average CS: %lld Max CS: %lld Min CS: %lld\n",
 			       type, tmp->name, tmp->total_cs_time,
 			       tmp->total_cs_count,
 			       tmp->total_cs_count > 0 ? (tmp->total_cs_time /
@@ -448,7 +272,7 @@ void print_fds_stats(void)
 	spin_unlock(&stat_ht_lock);
 
 	printk(KERN_ALERT
-	       "Read locks: %ld Write locks: %ld Spin locks: %ld Mutex locks: %ld\n",
+	       "Read locks: %lld Write locks: %lld Spin locks: %lld Mutex locks: %lld\n",
 	       rcount, wcount, scount, mcount);
 }
 
@@ -456,81 +280,9 @@ void print_fds_stats(void)
 	------------------------- Lock Switcher -------------------
 */
 
-uint64_t value = 0;
-uint64_t direction = 0;
-
-static struct task_struct *fdsthreads;
-
-static ssize_t fds_write(const char __user *buffer, size_t count, int type)
-{
-	char buf[64];
-
-	if (count > 64)
-		return -EINVAL;
-
-	if (copy_from_user(buf, buffer, count))
-		return -EFAULT;
-
-	buf[count] = '\0';
-
-	if (type == IS_VALUE)
-		kstrtoll(buf, 0, &value);
-	else if (type == IS_DIRECTION)
-		kstrtoll(buf, 0, &direction);
-	else
-		return -EOPNOTSUPP;
-
-	printk(KERN_ALERT "value: %lld, direction: %lld\n", value, direction);
-
-	if (IS_VALUE) {
-	}
-
-	return count;
-}
-
-static void reset_fds(void)
-{
-	int bkt;
-	struct lock_stat *tmp;
-
-	printk(KERN_ALERT "Resetting FDS\n");
-
-	collect_fds_stats(); // To reset all the per-CPU counters.
-
-	spin_lock(&stat_ht_lock);
-
-	hash_for_each(write_stats_ht, bkt, tmp, hnode) {
-		tmp->key->lockm = DEFAULT_FDS_LOCK;
-		__reset_fds_stats(tmp);
-	}
-	hash_for_each(spin_stats_ht, bkt, tmp, hnode) {
-		tmp->key->lockm = DEFAULT_FDS_LOCK;
-		__reset_fds_stats(tmp);
-	}
-	hash_for_each(mutex_stats_ht, bkt, tmp, hnode) {
-		tmp->key->lockm = DEFAULT_FDS_LOCK;
-		__reset_fds_stats(tmp);
-	}
-
-	spin_unlock(&stat_ht_lock);
-}
-
-struct contending_locks {
-	enum fds_lock_type ltype;
-	struct lock_stat *lock;
-};
-
-static long iterations = -1;
-static long num_contending_locks = 0;
-
-static struct contending_locks observed_locks[MAX_CONTENDING_LOCKS];
-
 inline void __monitor_fds_stats(struct lock_stat *tmp, const char *type,
 				enum fds_lock_type ltype)
 {
-	int i, j;
-	long feature_vector[8];
-	int max_value, max_index;
 	enum fds_lock_mechanisms before = tmp->key->lockm;
 	if (tmp->counter > QSPINLOCK_LIMIT ||
 	    tmp->read_counter > QSPINLOCK_LIMIT || before != FDS_QSPINLOCK) {
@@ -552,9 +304,11 @@ inline void __monitor_fds_stats(struct lock_stat *tmp, const char *type,
 				get_optimal_spinlock_random_forest_classifier(
 					tmp);
 			break;
+		default:
+			break;
 		}
 		printk(KERN_ALERT
-		       "Flipping %s write Name: %s, Counter: %ld before: %s new: %s\n",
+		       "Flipping %s write Name: %s, Counter: %lld before: %s new: %s\n",
 		       type, tmp->name, tmp->counter, get_str_lockm(before),
 		       get_str_lockm(tmp->key->lockm));
 	} else {
@@ -562,7 +316,7 @@ inline void __monitor_fds_stats(struct lock_stat *tmp, const char *type,
 	}
 }
 
-void monitor_fds_stats(void)
+static void monitor_fds_stats(void)
 {
 	int bkt;
 	struct lock_stat *tmp;
@@ -584,7 +338,7 @@ void monitor_fds_stats(void)
 	spin_unlock(&stat_ht_lock);
 }
 
-int fds_monitor(void *args)
+static int fds_monitor(void *args)
 {
 	printk(KERN_ALERT "Starting fds monitor\n");
 	while (!kthread_should_stop()) {
@@ -607,6 +361,15 @@ monitor_end:
 
 	return 0;
 }
+
+static struct task_struct *fdsthreads;
+
+extern struct proc_ops value_proc_ops;
+extern struct proc_ops direction_proc_ops;
+extern struct proc_ops reset_fds_proc_ops;
+extern struct proc_ops get_fds_proc_ops;
+extern struct proc_ops oracle_proc_ops;
+extern struct proc_ops fds_monitor_time_proc_ops;
 
 static int __init feedback_sync_init(void)
 {

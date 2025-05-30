@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0
 // Copyright (c) 2024 Vishal Gupta
 
+#include "fds.h"
+
 inline const char *get_str_ltype(enum fds_lock_type ltype)
 {
 	switch (ltype) {

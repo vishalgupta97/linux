@@ -4,22 +4,30 @@
 #include "fds.h"
 
 #if FDS_HOSTNAME == FDS_SRV1
+
 #include <fds/srv1_spinlock_random_forest.h>
 #include <fds/srv1_rwsem_random_forest.h>
 #define SPINLOCK_MODEL predict_srv1_spinlock_random_forest
 #define RWSEM_MODEL predict_srv1_rwsem_random_forest
+
 #elif FDS_HOSTNAME == FDS_SRV8
+
 #include <fds/srv8_spinlock_random_forest.h>
 #include <fds/srv8_rwsem_random_forest.h>
 #define SPINLOCK_MODEL predict_srv8_spinlock_random_forest
 #define RWSEM_MODEL predict_srv8_rwsem_random_forest
+
 #elif FDS_HOSTNAME == FDS_SRV9
+
 #include <fds/srv9_spinlock_random_forest.h>
 #include <fds/srv9_rwsem_random_forest.h>
 #define SPINLOCK_MODEL predict_srv9_spinlock_random_forest
 #define RWSEM_MODEL predict_srv9_rwsem_random_forest
+
 #else
+
 #error "Model for current host not found"
+
 #endif
 
 inline enum fds_lock_mechanisms

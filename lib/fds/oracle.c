@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: GPL-2.0
 // Copyright (c) 2024 Vishal Gupta
 
-static bool fds_oracle_running = false;
+#include "fds.h"
+
+bool fds_oracle_running = false;
+static long iterations = -1;
+long num_contending_locks = 0;
 
 static enum fds_lock_mechanisms fds_spinlock_implementations[] = {
 	FDS_QSPINLOCK, FDS_CNA, FDS_TCLOCK
@@ -21,7 +25,9 @@ static long num_states = 0;
 
 static uint64_t oracle_start_time = 0;
 
-void recurse(long depth, long curr_state)
+struct contending_locks observed_locks[MAX_CONTENDING_LOCKS];
+
+static void recurse(long depth, long curr_state)
 {
 	if (depth == num_contending_locks) {
 		oracle_states[num_states] = curr_state;
@@ -55,7 +61,7 @@ void recurse(long depth, long curr_state)
 	}
 }
 
-void find_all_states(void)
+static void find_all_states(void)
 {
 	recurse(0, 0);
 	for (int i = 0; i < num_states; i++)
@@ -70,12 +76,13 @@ static void fds_oracle_restart(void)
 	fds_oracle_running = true;
 	reset_fds();
 	oracle_start_time = local_clock();
-	printk(KERN_ALERT "Oracle starting at: %ld\n", oracle_start_time);
+	printk(KERN_ALERT "Oracle starting at: %lld\n", oracle_start_time);
 }
 
-inline void __find_contending_locks(struct lock_stat *tmp, const char *type,
-				    enum fds_lock_type ltype,
-				    uint64_t elapsed_time)
+static inline void __find_contending_locks(struct lock_stat *tmp,
+					   const char *type,
+					   enum fds_lock_type ltype,
+					   uint64_t elapsed_time)
 {
 	bool is_lock_contending = false;
 
@@ -97,7 +104,7 @@ inline void __find_contending_locks(struct lock_stat *tmp, const char *type,
 
 	if (is_lock_contending) {
 		printk(KERN_ALERT
-		       "Contending lock type: %s Name: %s, Counter: %ld lock_type: %s\n",
+		       "Contending lock type: %s Name: %s, Counter: %lld lock_type: %s\n",
 		       type, tmp->name, tmp->counter,
 		       get_str_lockm(tmp->key->lockm));
 		observed_locks[num_contending_locks].ltype = ltype;
@@ -108,7 +115,7 @@ inline void __find_contending_locks(struct lock_stat *tmp, const char *type,
 	}
 }
 
-void find_contending_locks(void)
+static void find_contending_locks(void)
 {
 	int bkt;
 	struct lock_stat *tmp;
@@ -116,7 +123,7 @@ void find_contending_locks(void)
 	uint64_t time_now = local_clock();
 	uint64_t elapsed_time = (time_now - oracle_start_time) / 1000000000;
 
-	printk(KERN_ALERT "Oracle elapsed time: %ld\n", elapsed_time);
+	printk(KERN_ALERT "Oracle elapsed time: %lld\n", elapsed_time);
 
 	spin_lock(&stat_ht_lock);
 
@@ -178,7 +185,7 @@ static ssize_t fds_oracle_set_next_state(size_t count)
 		}
 		observed_locks[i].lock->key->lockm = new_lockm;
 		printk(KERN_ALERT
-		       "Switching lock type: %s Name: %s, Counter: %ld Implementation: %s\n",
+		       "Switching lock type: %s Name: %s, Counter: %lld Implementation: %s\n",
 		       get_str_ltype(observed_locks[i].ltype),
 		       observed_locks[i].lock->name,
 		       observed_locks[i].lock->counter,
@@ -194,6 +201,7 @@ static ssize_t fds_oracle_write(struct file *file, const char __user *buffer,
 				size_t count, loff_t *pos)
 {
 	char buf[64];
+	int err;
 
 	if (count > 64)
 		return -EINVAL;
@@ -204,7 +212,10 @@ static ssize_t fds_oracle_write(struct file *file, const char __user *buffer,
 	buf[count] = '\0';
 
 	uint64_t val = 0xdeadbeef;
-	kstrtoll(buf, 0, &val);
+	err = kstrtoll(buf, 0, &val);
+
+	if (err)
+		return -EFAULT;
 
 	switch (val) {
 	case 0:
@@ -216,7 +227,7 @@ static ssize_t fds_oracle_write(struct file *file, const char __user *buffer,
 	case 2:
 		reset_fds_stats();
 		oracle_start_time = local_clock();
-		printk(KERN_ALERT "Find contending locks starting at: %ld\n",
+		printk(KERN_ALERT "Find contending locks starting at: %lld\n",
 		       oracle_start_time);
 		break;
 	case 3:
@@ -228,6 +239,6 @@ static ssize_t fds_oracle_write(struct file *file, const char __user *buffer,
 	return count;
 }
 
-static const struct proc_ops oracle_proc_ops = {
+const struct proc_ops oracle_proc_ops = {
 	.proc_write = fds_oracle_write,
 };
