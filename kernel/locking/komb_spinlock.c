@@ -300,10 +300,10 @@ __komb_spin_lock_longjmp(struct qspinlock *lock, int tail,
 		struct shadow_stack *ptr = this_cpu_ptr(&local_shadow_stack);
 
 		if (curr_node->completed) {
-			if (curr_node->irqs_disabled) {
+			/*if (curr_node->irqs_disabled) {
 				ptr->irqs_disabled = curr_node->irqs_disabled;
 				curr_node->irqs_disabled = 0;
-			}
+			}*/
 
 			for (j = 7; j >= 0; j--)
 				if (ptr->lock_addr[j] != NULL)
@@ -349,7 +349,7 @@ __komb_spin_lock_longjmp(struct qspinlock *lock, int tail,
 
 	prev_cs_cpu = ptr->curr_cs_cpu;
 	ptr->curr_cs_cpu = -1;
-	ptr->irqs_disabled = false;
+	//ptr->irqs_disabled = false;
 	KOMB_BUG_ON(ptr->prev_cs_cpu != -1);
 
 	prev_locked_val = lock->locked;
@@ -430,7 +430,7 @@ __komb_spin_lock_slowpath(struct qspinlock *lock)
 	curr_node->tail = tail;
 	curr_node->socket_id = numa_node_id();
 	curr_node->cpuid = smp_processor_id();
-	curr_node->irqs_disabled = false;
+	//curr_node->irqs_disabled = false;
 	curr_node->lock = lock;
 	curr_node->task_struct_ptr = current;
 	curr_node->diff_preempt_count = 0;
@@ -601,8 +601,9 @@ queue:
 	curr_node = this_cpu_ptr(&komb_nodes[0]);
 	KOMB_BUG_ON(curr_node == NULL);
 
-	if (curr_node->count > 0 || !in_task() || irqs_disabled() ||
-	    current->migration_disabled) {
+	if (curr_node->count > 0) {
+		//|| !in_task() || irqs_disabled() ||
+	    //current->migration_disabled) {
 		struct komb_node *prev_node, *next_node;
 		u32 tail, idx;
 
@@ -625,7 +626,7 @@ queue:
 		curr_node->tail = tail;
 		curr_node->socket_id = IRQ_NUMA_NODE;
 		curr_node->cpuid = smp_processor_id();
-		curr_node->irqs_disabled = false;
+		//curr_node->irqs_disabled = false;
 		curr_node->lock = lock;
 		curr_node->task_struct_ptr = current;
 		curr_node->diff_preempt_count = 0;
@@ -816,11 +817,11 @@ komb_spin_unlock(struct qspinlock *lock)
 	//curr_node->irqs_disabled = irqs_disabled();
 	KOMB_BUG_ON(irqs_disabled());
 	komb_context_switch(incoming_rsp_ptr, outgoing_rsp_ptr);
-	ptr = this_cpu_ptr(&local_shadow_stack);
+	/*ptr = this_cpu_ptr(&local_shadow_stack);
 	if (ptr->irqs_disabled) {
 		ptr->irqs_disabled = false;
 		local_irq_disable();
-	}
+	}*/
 	return;
 }
 EXPORT_SYMBOL_GPL(komb_spin_unlock);
