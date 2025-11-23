@@ -24,6 +24,37 @@
 #include <linux/bpf_lsm.h>
 #include <linux/btf_ids.h>
 #include <linux/poison.h>
+
+struct bpf_spin_lock_usage {
+	struct list_head registry_list;
+	struct list_head aux_list;
+	u32 map_id;
+	u32 reg_off;
+	bool is_nmi_ctx;
+};
+
+struct bpf_verifier_lock_usage {
+	struct list_head list;
+	u32 map_id;
+	u32 reg_off;
+};
+
+static DEFINE_MUTEX(bpf_spin_lock_mutex);
+static LIST_HEAD(bpf_spin_lock_registry);
+
+void bpf_free_used_spin_locks(struct bpf_prog_aux *aux)
+{
+	struct bpf_spin_lock_usage *usage, *tmp;
+
+	mutex_lock(&bpf_spin_lock_mutex);
+	list_for_each_entry_safe(usage, tmp, &aux->used_spin_locks, aux_list) {
+		list_del(&usage->registry_list);
+		list_del(&usage->aux_list);
+		kfree(usage);
+	}
+	mutex_unlock(&bpf_spin_lock_mutex);
+}
+#include <linux/poison.h>
 #include <linux/module.h>
 #include <linux/cpumask.h>
 #include <linux/bpf_mem_alloc.h>
@@ -8392,6 +8423,26 @@ static int process_spin_lock(struct bpf_verifier_env *env, int regno, int flags)
 		if (err < 0) {
 			verbose(env, "Failed to acquire lock state\n");
 			return err;
+		}
+
+		if (map) {
+			struct bpf_verifier_lock_usage *v_usage;
+			bool found = false;
+
+			list_for_each_entry(v_usage, &env->used_spin_locks, list) {
+				if (v_usage->map_id == map->id && v_usage->reg_off == spin_lock_off) {
+					found = true;
+					break;
+				}
+			}
+			if (!found) {
+				v_usage = kmalloc(sizeof(*v_usage), GFP_KERNEL);
+				if (!v_usage)
+					return -ENOMEM;
+				v_usage->map_id = map->id;
+				v_usage->reg_off = spin_lock_off;
+				list_add(&v_usage->list, &env->used_spin_locks);
+			}
 		}
 	} else {
 		void *ptr;
@@ -20370,8 +20421,10 @@ static int check_map_prog_compatibility(struct bpf_verifier_env *env,
 		}
 
 		if (is_tracing_prog_type(prog_type)) {
-			verbose(env, "tracing progs cannot use bpf_spin_lock yet\n");
-			return -EINVAL;
+			if (prog_type != BPF_PROG_TYPE_PERF_EVENT) {
+				verbose(env, "tracing progs cannot use bpf_spin_lock yet\n");
+				return -EINVAL;
+			}
 		}
 	}
 
@@ -24525,6 +24578,7 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr, __u3
 		return -ENOMEM;
 
 	env->bt.env = env;
+	INIT_LIST_HEAD(&env->used_spin_locks);
 
 	len = (*prog)->len;
 	env->insn_aux_data =
@@ -24754,6 +24808,45 @@ skip_full_check:
 		convert_pseudo_ld_imm64(env);
 	}
 
+	/* AA deadlock detection */
+	if (!list_empty(&env->used_spin_locks)) {
+		struct bpf_verifier_lock_usage *v_usage;
+		struct bpf_spin_lock_usage *usage;
+		bool is_nmi = is_tracing_prog_type(env->prog->type);
+
+		mutex_lock(&bpf_spin_lock_mutex);
+		list_for_each_entry(v_usage, &env->used_spin_locks, list) {
+			list_for_each_entry(usage, &bpf_spin_lock_registry, registry_list) {
+				if (usage->map_id == v_usage->map_id &&
+				    usage->reg_off == v_usage->reg_off) {
+					if (usage->is_nmi_ctx != is_nmi) {
+						verbose(env, "AA deadlock detected: lock used in %s and %s contexts\n",
+							usage->is_nmi_ctx ? "NMI" : "Task",
+							is_nmi ? "NMI" : "Task");
+						mutex_unlock(&bpf_spin_lock_mutex);
+						ret = -EINVAL;
+						goto err_release_maps;
+					}
+				}
+			}
+		}
+
+		list_for_each_entry(v_usage, &env->used_spin_locks, list) {
+			usage = kmalloc(sizeof(*usage), GFP_KERNEL);
+			if (!usage) {
+				mutex_unlock(&bpf_spin_lock_mutex);
+				ret = -ENOMEM;
+				goto err_release_maps;
+			}
+			usage->map_id = v_usage->map_id;
+			usage->reg_off = v_usage->reg_off;
+			usage->is_nmi_ctx = is_nmi;
+			list_add(&usage->registry_list, &bpf_spin_lock_registry);
+			list_add(&usage->aux_list, &env->prog->aux->used_spin_locks);
+		}
+		mutex_unlock(&bpf_spin_lock_mutex);
+	}
+
 	adjust_btf_func(env);
 
 err_release_maps:
@@ -24779,6 +24872,14 @@ err_unlock:
 		mutex_unlock(&bpf_verifier_lock);
 	vfree(env->insn_aux_data);
 err_free_env:
+	{
+		struct bpf_verifier_lock_usage *v_usage, *tmp;
+
+		list_for_each_entry_safe(v_usage, tmp, &env->used_spin_locks, list) {
+			list_del(&v_usage->list);
+			kfree(v_usage);
+		}
+	}
 	bpf_stack_liveness_free(env);
 	kvfree(env->cfg.insn_postorder);
 	kvfree(env->scc_info);
