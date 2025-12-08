@@ -1,6 +1,7 @@
-#include <linux/bpf.h>
+//#include <linux/bpf.h>
 #include <bpf/bpf.h>
-#include <bpf/libbpf.h>
+//#include <bpf/libbpf.h>
+#include <bpf/bpf_helpers.h>
 #include <assert.h>
 #include <stdio.h>
 #include <unistd.h>

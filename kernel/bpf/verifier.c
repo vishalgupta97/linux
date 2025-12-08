@@ -24,37 +24,6 @@
 #include <linux/bpf_lsm.h>
 #include <linux/btf_ids.h>
 #include <linux/poison.h>
-
-struct bpf_spin_lock_usage {
-	struct list_head registry_list;
-	struct list_head aux_list;
-	u32 map_id;
-	u32 reg_off;
-	bool is_nmi_ctx;
-};
-
-struct bpf_verifier_lock_usage {
-	struct list_head list;
-	u32 map_id;
-	u32 reg_off;
-};
-
-static DEFINE_MUTEX(bpf_spin_lock_mutex);
-static LIST_HEAD(bpf_spin_lock_registry);
-
-void bpf_free_used_spin_locks(struct bpf_prog_aux *aux)
-{
-	struct bpf_spin_lock_usage *usage, *tmp;
-
-	mutex_lock(&bpf_spin_lock_mutex);
-	list_for_each_entry_safe(usage, tmp, &aux->used_spin_locks, aux_list) {
-		list_del(&usage->registry_list);
-		list_del(&usage->aux_list);
-		kfree(usage);
-	}
-	mutex_unlock(&bpf_spin_lock_mutex);
-}
-#include <linux/poison.h>
 #include <linux/module.h>
 #include <linux/cpumask.h>
 #include <linux/bpf_mem_alloc.h>
@@ -232,6 +201,36 @@ struct bpf_verifier_stack_elem {
 #define BPF_GLOBAL_PERCPU_MA_MAX_SIZE  512
 
 #define BPF_PRIV_STACK_MIN_SIZE		64
+
+struct bpf_spin_lock_usage {
+	struct list_head registry_list;
+	struct list_head aux_list;
+	u32 map_id;
+	u32 reg_off;
+	bool is_nmi_ctx;
+};
+
+struct bpf_verifier_lock_usage {
+	struct list_head list;
+	u32 map_id;
+	u32 reg_off;
+};
+
+static DEFINE_MUTEX(bpf_spin_lock_mutex);
+static LIST_HEAD(bpf_spin_lock_registry);
+
+void bpf_free_used_spin_locks(struct bpf_prog_aux *aux)
+{
+	struct bpf_spin_lock_usage *usage, *tmp;
+
+	mutex_lock(&bpf_spin_lock_mutex);
+	list_for_each_entry_safe(usage, tmp, &aux->used_spin_locks, aux_list) {
+		list_del(&usage->registry_list);
+		list_del(&usage->aux_list);
+		kfree(usage);
+	}
+	mutex_unlock(&bpf_spin_lock_mutex);
+}
 
 static int acquire_reference(struct bpf_verifier_env *env, int insn_idx);
 static int release_reference_nomark(struct bpf_verifier_state *state, int ref_obj_id);
