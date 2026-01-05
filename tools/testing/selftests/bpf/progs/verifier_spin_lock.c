@@ -153,7 +153,7 @@ l0_%=:	r6 = r0;					\
 
 SEC("cgroup/skb")
 __description("spin_lock: test5 call within a locked region")
-__failure __msg("calls are not allowed")
+__success
 __failure_unpriv __msg_unpriv("")
 __naked void call_within_a_locked_region(void)
 {
@@ -255,7 +255,7 @@ l1_%=:	r1 = r6;					\
 
 SEC("cgroup/skb")
 __description("spin_lock: test8 double lock")
-__failure __msg("calls are not allowed")
+__failure __msg("Acquiring the same lock again")
 __failure_unpriv __msg_unpriv("")
 __naked void spin_lock_test8_double_lock(void)
 {

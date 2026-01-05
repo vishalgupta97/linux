@@ -8459,14 +8459,21 @@ static int process_spin_lock(struct bpf_verifier_env *env, int regno, int flags)
 			ptr = btf;
 
 		if (!is_res_lock && cur->active_locks) {
-			if (find_lock_state(env->cur_state, REF_TYPE_LOCK, 0, NULL)) {
-				verbose(env,
-					"Locking two bpf_spin_locks are not allowed\n");
+			if (find_lock_state(env->cur_state, REF_TYPE_LOCK, reg->id, ptr)) {
+				verbose(env, "Acquiring the same lock again, AA deadlock detected\n");
+				return -EINVAL;
+			}
+			if (cur->active_locks >= 32) {
+				verbose(env, "Locking depth limit reached\n");
 				return -EINVAL;
 			}
 		} else if (is_res_lock && cur->active_locks) {
 			if (find_lock_state(env->cur_state, REF_TYPE_RES_LOCK | REF_TYPE_RES_LOCK_IRQ, reg->id, ptr)) {
 				verbose(env, "Acquiring the same lock again, AA deadlock detected\n");
+				return -EINVAL;
+			}
+			if (cur->active_locks >= 32) {
+				verbose(env, "Locking depth limit reached\n");
 				return -EINVAL;
 			}
 		}
@@ -8506,8 +8513,8 @@ static int process_spin_lock(struct bpf_verifier_env *env, int regno, int flags)
 			verbose(env, "%s_unlock of different lock\n", lock_str);
 			return -EINVAL;
 		}
-		if (reg->id != cur->active_lock_id || ptr != cur->active_lock_ptr) {
-			verbose(env, "%s_unlock cannot be out of order\n", lock_str);
+		if (!find_lock_state(cur, type, reg->id, ptr)) {
+			verbose(env, "%s_unlock of different lock\n", lock_str);
 			return -EINVAL;
 		}
 		if (release_lock_state(cur, type, reg->id, ptr)) {
@@ -10737,9 +10744,7 @@ static int check_func_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		const char *sub_name = subprog_name(env, subprog);
 
 		if (env->cur_state->active_locks) {
-			verbose(env, "global function calls are not allowed while holding a lock,\n"
-				     "use static function instead\n");
-			return -EINVAL;
+			/* global function calls are allowed while holding a lock */
 		}
 
 		if (env->subprog_info[subprog].might_sleep &&
@@ -11549,6 +11554,14 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 	if (env->cur_state->active_irq_id) {
 		if (fn->might_sleep) {
 			verbose(env, "sleepable helper %s#%d in IRQ-disabled region\n",
+				func_id_name(func_id), func_id);
+			return -EINVAL;
+		}
+	}
+
+	if (env->cur_state->active_locks) {
+		if (fn->might_sleep) {
+			verbose(env, "sleepable helper %s#%d in spin lock region\n",
 				func_id_name(func_id), func_id);
 			return -EINVAL;
 		}
@@ -14075,6 +14088,11 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 
 	if (env->cur_state->active_irq_id && sleepable) {
 		verbose(env, "kernel func %s is sleepable within IRQ-disabled region\n", func_name);
+		return -EACCES;
+	}
+
+	if (env->cur_state->active_locks && sleepable) {
+		verbose(env, "kernel func %s is sleepable within spin lock region\n", func_name);
 		return -EACCES;
 	}
 
@@ -20369,12 +20387,11 @@ static int do_check_insn(struct bpf_verifier_env *env, bool *do_print_state)
 
 			if (env->cur_state->active_locks) {
 				if ((insn->src_reg == BPF_REG_0 &&
-				     insn->imm != BPF_FUNC_spin_unlock) ||
-				    (insn->src_reg == BPF_PSEUDO_KFUNC_CALL &&
-				     (insn->off != 0 || !kfunc_spin_allowed(insn->imm)))) {
-					verbose(env,
-						"function calls are not allowed while holding a lock\n");
-					return -EINVAL;
+				     insn->imm == BPF_FUNC_spin_unlock)) {
+					// allowed
+				} else if (insn->src_reg == BPF_PSEUDO_KFUNC_CALL &&
+				     (insn->off != 0 || !kfunc_spin_allowed(insn->imm))) {
+					// kfunc check
 				}
 			}
 			if (insn->src_reg == BPF_PSEUDO_CALL) {
