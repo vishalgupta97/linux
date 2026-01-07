@@ -1,0 +1,6 @@
+- [x] Create detailed implementation plan <!-- id: 1 -->
+- [x] Implement sysctl knob for timeout <!-- id: 2 -->
+- [x] Implement runtime lock tracking (lock table) <!-- id: 3 -->
+- [x] Implement timer mechanism for deadlock detection (start/stop/timeout handler) <!-- id: 4 -->
+- [x] Implement cancellation/cleanup logic <!-- id: 5 -->
+- [x] Add selftests for nested locking, OOO unlocking, and deadlock timeout with various combinations <!-- id: 6 -->

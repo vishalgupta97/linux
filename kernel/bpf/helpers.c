@@ -29,6 +29,7 @@
 #include <linux/task_work.h>
 #include <linux/irq_work.h>
 #include <linux/buildid.h>
+#include <linux/hrtimer.h>
 
 #include "../../lib/kstrtox.h"
 
@@ -281,6 +282,47 @@ const struct bpf_func_proto bpf_get_current_comm_proto = {
 	.arg2_type	= ARG_CONST_SIZE,
 };
 
+struct bpf_lock_entry {
+	struct bpf_spin_lock *lock;
+};
+
+#define MAX_HELD_LOCKS 32
+static DEFINE_PER_CPU(struct bpf_lock_entry[MAX_HELD_LOCKS], held_locks);
+static DEFINE_PER_CPU(int, held_locks_cnt);
+static DEFINE_PER_CPU(struct hrtimer, lock_watchdog_timer);
+
+static enum hrtimer_restart bpf_spin_lock_timeout_handler(struct hrtimer *timer)
+{
+	struct bpf_lock_entry *locks;
+	int cnt, i;
+
+	/* Access per-CPU held locks */
+	locks = this_cpu_ptr(held_locks);
+	cnt = this_cpu_read(held_locks_cnt);
+
+	/* Release all held locks in reverse order */
+	for (i = cnt - 1; i >= 0; i--) {
+		if (locks[i].lock) {
+#if defined(CONFIG_QUEUED_SPINLOCKS) || defined(CONFIG_BPF_ARCH_SPINLOCK)
+			arch_spinlock_t *l = (void *)locks[i].lock;
+			arch_spin_unlock(l);
+#else
+			atomic_t *l = (void *)locks[i].lock;
+			atomic_set_release(l, 0);
+#endif
+		}
+	}
+
+	/* Reset lock count */
+	this_cpu_write(held_locks_cnt, 0);
+
+	/* TODO: Call bpf_throw(0) or trigger program cancellation */
+	/* For now, just warn. Actual cancellation needs careful integration */
+	WARN_ONCE(1, "BPF spin lock timeout: releasing %d locks\n", cnt);
+
+	return HRTIMER_NORESTART;
+}
+
 #if defined(CONFIG_QUEUED_SPINLOCKS) || defined(CONFIG_BPF_ARCH_SPINLOCK)
 
 static inline void __bpf_spin_lock(struct bpf_spin_lock *lock)
@@ -340,7 +382,34 @@ static inline void __bpf_spin_lock_irqsave(struct bpf_spin_lock *lock)
 
 NOTRACE_BPF_CALL_1(bpf_spin_lock, struct bpf_spin_lock *, lock)
 {
+	struct bpf_lock_entry *locks;
+	int cnt;
+
 	__bpf_spin_lock_irqsave(lock);
+
+	/* Track the acquired lock */
+	locks = this_cpu_ptr(held_locks);
+	cnt = this_cpu_read(held_locks_cnt);
+
+	if (cnt < MAX_HELD_LOCKS) {
+		locks[cnt].lock = lock;
+		this_cpu_inc(held_locks_cnt);
+		cnt++;
+
+		/* Start watchdog timer for outermost lock */
+		if (cnt == 1 && READ_ONCE(sysctl_bpf_spin_lock_timeout) > 0) {
+			struct hrtimer *timer = this_cpu_ptr(&lock_watchdog_timer);
+			ktime_t timeout_ms = ms_to_ktime(READ_ONCE(sysctl_bpf_spin_lock_timeout));
+
+			hrtimer_init(timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+			timer->function = bpf_spin_lock_timeout_handler;
+			hrtimer_start(timer, timeout_ms, HRTIMER_MODE_REL);
+		}
+	} else {
+		/* Should not happen if verifier does its job */
+		WARN_ONCE(1, "BPF held lock count exceeded MAX_HELD_LOCKS\n");
+	}
+
 	return 0;
 }
 
@@ -363,7 +432,38 @@ static inline void __bpf_spin_unlock_irqrestore(struct bpf_spin_lock *lock)
 
 NOTRACE_BPF_CALL_1(bpf_spin_unlock, struct bpf_spin_lock *, lock)
 {
+	struct bpf_lock_entry *locks;
+	int cnt, i;
+	bool found = false;
+
 	__bpf_spin_unlock_irqrestore(lock);
+
+	/* Remove lock from tracking (handle OOO unlocking) */
+	locks = this_cpu_ptr(held_locks);
+	cnt = this_cpu_read(held_locks_cnt);
+
+	/* Find and remove the lock from held_locks */
+	for (i = cnt - 1; i >= 0; i--) {
+		if (locks[i].lock == lock) {
+			/* Shift remaining locks down */
+			for (; i < cnt - 1; i++) {
+				locks[i] = locks[i + 1];
+			}
+			locks[cnt - 1].lock = NULL;
+			this_cpu_dec(held_locks_cnt);
+			found = true;
+			break;
+		}
+	}
+
+	/* Cancel watchdog timer if this was the last lock */
+	if (found && this_cpu_read(held_locks_cnt) == 0) {
+		if (READ_ONCE(sysctl_bpf_spin_lock_timeout) > 0) {
+			struct hrtimer *timer = this_cpu_ptr(&lock_watchdog_timer);
+			hrtimer_cancel(timer);
+		}
+	}
+
 	return 0;
 }
 
