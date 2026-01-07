@@ -471,6 +471,7 @@ static struct ctl_table net_core_table[] = {
 		.extra2		= SYSCTL_ONE,
 	},
 # endif
+	},
 	{
 		.procname	= "bpf_jit_limit",
 		.data		= &bpf_jit_limit,
@@ -481,6 +482,13 @@ static struct ctl_table net_core_table[] = {
 		.extra2		= &bpf_jit_limit_max,
 	},
 #endif
+	{
+		.procname	= "bpf_spin_lock_timeout",
+		.data		= &sysctl_bpf_spin_lock_timeout,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec,
+	},
 	{
 		.procname	= "netdev_tstamp_prequeue",
 		.data		= &net_hotdata.tstamp_prequeue,
