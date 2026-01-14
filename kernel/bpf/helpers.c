@@ -291,6 +291,8 @@ static DEFINE_PER_CPU(struct bpf_lock_entry[MAX_HELD_LOCKS], held_locks);
 static DEFINE_PER_CPU(int, held_locks_cnt);
 static DEFINE_PER_CPU(struct hrtimer, lock_watchdog_timer);
 
+void bpf_throw(u64 cookie);
+
 static enum hrtimer_restart bpf_spin_lock_timeout_handler(struct hrtimer *timer)
 {
 	struct bpf_lock_entry *locks;
@@ -319,6 +321,7 @@ static enum hrtimer_restart bpf_spin_lock_timeout_handler(struct hrtimer *timer)
 	/* TODO: Call bpf_throw(0) or trigger program cancellation */
 	/* For now, just warn. Actual cancellation needs careful integration */
 	WARN_ONCE(1, "BPF spin lock timeout: releasing %d locks\n", cnt);
+	//bpf_throw(0);
 
 	return HRTIMER_NORESTART;
 }
@@ -401,8 +404,7 @@ NOTRACE_BPF_CALL_1(bpf_spin_lock, struct bpf_spin_lock *, lock)
 			struct hrtimer *timer = this_cpu_ptr(&lock_watchdog_timer);
 			ktime_t timeout_ms = ms_to_ktime(READ_ONCE(sysctl_bpf_spin_lock_timeout));
 
-			hrtimer_init(timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
-			timer->function = bpf_spin_lock_timeout_handler;
+			hrtimer_setup(timer, bpf_spin_lock_timeout_handler, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
 			hrtimer_start(timer, timeout_ms, HRTIMER_MODE_REL);
 		}
 	} else {
