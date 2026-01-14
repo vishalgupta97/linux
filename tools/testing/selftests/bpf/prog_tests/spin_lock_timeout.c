@@ -9,7 +9,7 @@
 
 #define SYSCTL_PATH "/proc/sys/net/core/bpf_spin_lock_timeout"
 
-static int read_sysctl(void)
+static int __read_sysctl(void)
 {
 	int fd, val = 0;
 	char buf[32];
@@ -25,7 +25,7 @@ static int read_sysctl(void)
 	return val;
 }
 
-static int write_sysctl(int val)
+static int __write_sysctl(int val)
 {
 	int fd;
 	char buf[32];
@@ -96,13 +96,13 @@ static void test_timeout_trigger(void)
 	int prog_fd, err, old_timeout;
 
 	/* Save current timeout and set a short timeout */
-	old_timeout = read_sysctl();
+	old_timeout = __read_sysctl();
 	if (old_timeout < 0) {
 		test__skip();
 		return;
 	}
 
-	if (write_sysctl(100) < 0) {  /* 100ms timeout */
+	if (__write_sysctl(100) < 0) {  /* 100ms timeout */
 		test__skip();
 		return;
 	}
@@ -120,7 +120,7 @@ static void test_timeout_trigger(void)
 	test_spin_lock_timeout__destroy(skel);
 
 cleanup:
-	write_sysctl(old_timeout);
+	__write_sysctl(old_timeout);
 }
 
 static void *deadlock_thread1(void *arg)
@@ -154,13 +154,13 @@ static void test_deadlock_abba(void)
 	int prog_fd1, prog_fd2, old_timeout;
 
 	/* Save current timeout and set a short timeout */
-	old_timeout = read_sysctl();
+	old_timeout = __read_sysctl();
 	if (old_timeout < 0) {
 		test__skip();
 		return;
 	}
 
-	if (write_sysctl(500) < 0) {  /* 500ms timeout */
+	if (__write_sysctl(500) < 0) {  /* 500ms timeout */
 		test__skip();
 		return;
 	}
@@ -184,7 +184,7 @@ static void test_deadlock_abba(void)
 	test_spin_lock_timeout__destroy(skel);
 
 cleanup:
-	write_sysctl(old_timeout);
+	__write_sysctl(old_timeout);
 }
 
 void test_spin_lock_timeout(void)

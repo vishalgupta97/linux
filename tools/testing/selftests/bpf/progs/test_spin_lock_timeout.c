@@ -6,14 +6,13 @@
 
 /* Shared locks for AB-BA deadlock testing */
 struct lock_pair {
-	struct bpf_spin_lock lock_a;
-	struct bpf_spin_lock lock_b;
+	struct bpf_spin_lock lock;
 	int value;
 };
 
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
-	__uint(max_entries, 1);
+	__uint(max_entries, 2);
 	__type(key, int);
 	__type(value, struct lock_pair);
 } shared_locks SEC(".maps");
@@ -23,18 +22,24 @@ SEC("tc")
 int test_nested_locking(struct __sk_buff *ctx)
 {
 	int key = 0;
-	struct lock_pair *locks;
+	struct lock_pair *a, *b;
 
-	locks = bpf_map_lookup_elem(&shared_locks, &key);
-	if (!locks)
+	a = bpf_map_lookup_elem(&shared_locks, &key);
+	if (!a)
 		return 0;
 
-	bpf_spin_lock(&locks->lock_a);
-	bpf_spin_lock(&locks->lock_b);
-	locks->value++;
-	bpf_spin_unlock(&locks->lock_b);
-	bpf_spin_unlock(&locks->lock_a);
+	key = 1;
+	b = bpf_map_lookup_elem(&shared_locks, &key);
+	if (!b)
+		return 0;
 
+	/* Lock A, then B */
+	bpf_spin_lock(&a->lock);
+	bpf_spin_lock(&b->lock);
+	a->value++;
+	b->value++;
+	bpf_spin_unlock(&b->lock);
+	bpf_spin_unlock(&a->lock);
 	return 0;
 }
 
@@ -43,20 +48,26 @@ SEC("tc")
 int test_ooo_unlocking(struct __sk_buff *ctx)
 {
 	int key = 0;
-	struct lock_pair *locks;
+	struct lock_pair *a, *b;
 
-	locks = bpf_map_lookup_elem(&shared_locks, &key);
-	if (!locks)
+	a = bpf_map_lookup_elem(&shared_locks, &key);
+	if (!a)
+		return 0;
+
+	key = 1;
+	b = bpf_map_lookup_elem(&shared_locks, &key);
+	if (!b)
 		return 0;
 
 	/* Lock A, then B */
-	bpf_spin_lock(&locks->lock_a);
-	bpf_spin_lock(&locks->lock_b);
-	
-	/* Unlock A first (out of order), then B */
-	bpf_spin_unlock(&locks->lock_a);
-	bpf_spin_unlock(&locks->lock_b);
+	bpf_spin_lock(&a->lock);
+	bpf_spin_lock(&b->lock);
+	a->value++;
+	b->value++;
 
+	/* Unlock A first (out of order), then B */
+	bpf_spin_unlock(&a->lock);
+	bpf_spin_unlock(&b->lock);
 	return 0;
 }
 
@@ -65,21 +76,21 @@ SEC("tc")
 int test_timeout_trigger(struct __sk_buff *ctx)
 {
 	int key = 0;
-	struct lock_pair *locks;
+	struct lock_pair *a;
 	unsigned long i;
 
-	locks = bpf_map_lookup_elem(&shared_locks, &key);
-	if (!locks)
+	a = bpf_map_lookup_elem(&shared_locks, &key);
+	if (!a)
 		return 0;
 
-	bpf_spin_lock(&locks->lock_a);
+	bpf_spin_lock(&a->lock);
 	
 	/* Busy loop to trigger timeout */
 	for (i = 0; i < 0xFFFFFFF; i++) {
-		locks->value++;
+		a->value++;
 	}
 	
-	bpf_spin_unlock(&locks->lock_a);
+	bpf_spin_unlock(&a->lock);
 
 	return 0;
 }
@@ -88,24 +99,30 @@ int test_timeout_trigger(struct __sk_buff *ctx)
 SEC("tc")
 int test_deadlock_prog1(struct __sk_buff *ctx)
 {
-	int key = 0;
-	struct lock_pair *locks;
-	unsigned long i;
+	int key = 0, i = 0;
+	struct lock_pair *a, *b;
 
-	locks = bpf_map_lookup_elem(&shared_locks, &key);
-	if (!locks)
+	a = bpf_map_lookup_elem(&shared_locks, &key);
+	if (!a)
 		return 0;
 
-	bpf_spin_lock(&locks->lock_a);
-	
+	key = 1;
+	b = bpf_map_lookup_elem(&shared_locks, &key);
+	if (!b)
+		return 0;
+
+	/* Lock A, then B */
+	bpf_spin_lock(&a->lock);
 	/* Small delay */
 	for (i = 0; i < 1000; i++)
 		barrier();
-	
-	bpf_spin_lock(&locks->lock_b);
-	locks->value++;
-	bpf_spin_unlock(&locks->lock_b);
-	bpf_spin_unlock(&locks->lock_a);
+	bpf_spin_lock(&b->lock);
+
+	a->value++;
+	b->value++;
+
+	bpf_spin_unlock(&b->lock);
+	bpf_spin_unlock(&a->lock);
 
 	return 0;
 }
@@ -114,24 +131,30 @@ int test_deadlock_prog1(struct __sk_buff *ctx)
 SEC("tc")
 int test_deadlock_prog2(struct __sk_buff *ctx)
 {
-	int key = 0;
-	struct lock_pair *locks;
-	unsigned long i;
+	int key = 0, i = 0;
+	struct lock_pair *a, *b;
 
-	locks = bpf_map_lookup_elem(&shared_locks, &key);
-	if (!locks)
+	a = bpf_map_lookup_elem(&shared_locks, &key);
+	if (!a)
 		return 0;
 
-	bpf_spin_lock(&locks->lock_b);
-	
+	key = 1;
+	b = bpf_map_lookup_elem(&shared_locks, &key);
+	if (!b)
+		return 0;
+
+	/* Lock B, then A */
+	bpf_spin_lock(&b->lock);
 	/* Small delay */
 	for (i = 0; i < 1000; i++)
 		barrier();
-	
-	bpf_spin_lock(&locks->lock_a);
-	locks->value++;
-	bpf_spin_unlock(&locks->lock_a);
-	bpf_spin_unlock(&locks->lock_b);
+	bpf_spin_lock(&a->lock);
+
+	a->value++;
+	b->value++;
+
+	bpf_spin_unlock(&a->lock);
+	bpf_spin_unlock(&b->lock);
 
 	return 0;
 }
