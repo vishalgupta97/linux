@@ -321,6 +321,7 @@ static enum hrtimer_restart bpf_spin_lock_timeout_handler(struct hrtimer *timer)
 	/* TODO: Call bpf_throw(0) or trigger program cancellation */
 	/* For now, just warn. Actual cancellation needs careful integration */
 	WARN_ONCE(1, "BPF spin lock timeout: releasing %d locks\n", cnt);
+	BUG_ON(true);
 	//bpf_throw(0);
 
 	return HRTIMER_NORESTART;
