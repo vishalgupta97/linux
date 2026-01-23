@@ -139,6 +139,7 @@ struct bpf_prog *bpf_prog_alloc_no_stats(unsigned int size, gfp_t gfp_extra_flag
 	fp->term_states = term_states;
 	fp->term_states->patch_call_sites = patch_call_sites;
 	fp->term_states->patch_call_sites->call_sites_cnt = 0;
+	fp->term_states->patch_call_sites->call_states = NULL;
 	fp->term_states->prog = fp;
 #ifdef CONFIG_CGROUP_BPF
 	aux->cgroup_atype = CGROUP_BPF_ATTACH_TYPE_INVALID;
@@ -319,7 +320,10 @@ void __bpf_prog_free(struct bpf_prog *fp)
 	}
 	if (fp->term_states) {
 		if (fp->term_states->patch_call_sites)
+		{
+			vfree(fp->term_states->patch_call_sites->call_states);
 			kfree(fp->term_states->patch_call_sites);
+		}
 		kfree(fp->term_states);
 	}
 	free_percpu(fp->stats);
