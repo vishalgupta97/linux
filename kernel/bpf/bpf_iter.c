@@ -6,6 +6,11 @@
 #include <linux/filter.h>
 #include <linux/bpf.h>
 #include <linux/rcupdate_trace.h>
+#include <linux/errno.h>
+
+/* Per-CPU spinlock timeout flag and handler from helpers.c */
+DECLARE_PER_CPU(int, ebpf_spinlock_timeout);
+extern void bpf_spin_lock_timeout_handler(void);
 
 struct bpf_iter_target_info {
 	struct list_head list;
@@ -737,10 +742,17 @@ BPF_CALL_4(bpf_loop, u32, nr_loops, void *, callback_fn, void *, callback_ctx,
 	 */
 	if (flags)
 		return -EINVAL;
-	if (nr_loops > BPF_MAX_LOOPS)
-		return -E2BIG;
+
+	/* nr_loops limit removed to allow extended loops; timeout guards against runaway */
 
 	for (i = 0; i < nr_loops; i++) {
+		/* Check if spinlock timeout has been triggered */
+		if (this_cpu_read(ebpf_spinlock_timeout)) {
+			bpf_spin_lock_timeout_handler();
+			/* bpf_spin_lock_timeout_handler calls bpf_die which terminates program */
+			return -ETIMEDOUT;
+		}
+
 		ret = callback((u64)i, (u64)(long)callback_ctx, 0, 0, 0);
 		/* return value: 0 - continue, 1 - stop and return */
 		if (ret)
@@ -801,6 +813,13 @@ __bpf_kfunc int bpf_iter_num_new(struct bpf_iter_num *it, int start, int end)
 __bpf_kfunc int *bpf_iter_num_next(struct bpf_iter_num* it)
 {
 	struct bpf_iter_num_kern *s = (void *)it;
+
+	/* Check if spinlock timeout has been triggered */
+	if (this_cpu_read(ebpf_spinlock_timeout)) {
+		bpf_spin_lock_timeout_handler();
+		/* bpf_spin_lock_timeout_handler calls bpf_die which terminates program */
+		return NULL;
+	}
 
 	/* check failed initialization or if we are done (same behavior);
 	 * need to be careful about overflow, so convert to s64 for checks,
