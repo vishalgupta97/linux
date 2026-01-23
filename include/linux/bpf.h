@@ -1647,6 +1647,25 @@ struct bpf_stream_stage {
 	int len;
 };
 
+struct call_aux_states {
+	int call_bpf_insn_idx;
+	int jit_call_idx;
+	u8 is_helper_kfunc;
+	u8 is_bpf_loop;
+	u8 is_bpf_loop_cb_inline;
+};
+
+struct bpf_term_patch_call_sites {
+	u32 call_sites_cnt;
+	struct call_aux_states *call_states;
+};
+
+struct bpf_term_aux_states {
+	struct bpf_prog *prog;
+	struct work_struct work;
+	struct bpf_term_patch_call_sites *patch_call_sites;
+};
+
 struct bpf_prog_aux {
 	atomic64_t refcnt;
 	u32 used_map_cnt;
@@ -1682,6 +1701,7 @@ struct bpf_prog_aux {
 	bool tail_call_reachable;
 	bool xdp_has_frags;
 	bool exception_cb;
+	bool is_bpf_loop_cb_non_inline;
 	bool exception_boundary;
 	bool is_extended; /* true if extended by freplace program */
 	bool jits_use_priv_stack;
@@ -1796,6 +1816,7 @@ struct bpf_prog {
 					    const struct bpf_insn *insn);
 	struct bpf_prog_aux	*aux;		/* Auxiliary fields */
 	struct sock_fprog_kern	*orig_prog;	/* Original BPF program */
+	struct bpf_term_aux_states *term_states;
 	/* Instructions for interpreter */
 	union {
 		DECLARE_FLEX_ARRAY(struct sock_filter, insns);
