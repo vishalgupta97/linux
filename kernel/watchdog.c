@@ -26,6 +26,7 @@
 #include <linux/sysctl.h>
 #include <linux/tick.h>
 #include <linux/sys_info.h>
+#include <linux/filter.h>
 
 #include <linux/sched/clock.h>
 #include <linux/sched/debug.h>
@@ -740,6 +741,13 @@ static int is_softlockup(unsigned long touch_ts,
 		 */
 		if (time_after_eq(now, period_ts + get_softlockup_thresh() * 3 / 4))
 			scx_softlockup(now - touch_ts);
+
+		/*
+		 * Long running BPF programs can cause CPU's to stall.
+		 * So trigger fast path termination to terminate such BPF programs.
+		 */
+		if (time_after_eq(now, period_ts + get_softlockup_thresh() * 3 / 4))
+			bpf_softlockup(now - touch_ts);
 
 		/* Warn about unreasonable delays. */
 		if (time_after(now, period_ts + get_softlockup_thresh()))

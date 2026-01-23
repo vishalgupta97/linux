@@ -1663,6 +1663,7 @@ struct bpf_term_patch_call_sites {
 struct bpf_term_aux_states {
 	struct bpf_prog *prog;
 	struct work_struct work;
+	atomic_t bpf_die_in_progress;
 	struct bpf_term_patch_call_sites *patch_call_sites;
 };
 
