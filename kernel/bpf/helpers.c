@@ -336,6 +336,8 @@ void bpf_spin_lock_timeout_handler(void)
 	this_cpu_write(held_locks_cnt, 0);
 	this_cpu_write(ebpf_spinlock_timeout, 0);
 
+	printk(KERN_ALERT "bpf_spin_lock_timeout_handler: BPF program is terminated\n");
+
 	/* Terminate the BPF program */
 	bpf_die(NULL);
 }
