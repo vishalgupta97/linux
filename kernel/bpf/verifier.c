@@ -23715,7 +23715,7 @@ static int optimize_bpf_loop(struct bpf_verifier_env *env)
 		struct bpf_loop_inline_state *inline_state =
 			&env->insn_aux_data[i + delta].loop_inline_state;
 
-		if (is_bpf_loop_call(insn) && inline_state->fit_for_inline) {
+		if (is_bpf_loop_call(insn) && inline_state->fit_for_inline && 0) {
 			struct bpf_prog *new_prog;
 
 			stack_depth_extra = BPF_REG_SIZE * 3 + stack_depth_roundup;
