@@ -318,6 +318,8 @@ void bpf_spin_lock_timeout_handler(void)
 	locks = this_cpu_ptr(held_locks);
 	cnt = this_cpu_read(held_locks_cnt);
 
+	printk(KERN_ALERT "Timeout handler is called\n");
+
 	/* Release all held locks in reverse order */
 	for (i = cnt - 1; i >= 0; i--) {
 		if (locks[i].lock) {
