@@ -291,7 +291,6 @@ static DEFINE_PER_CPU(struct bpf_lock_entry[MAX_HELD_LOCKS], held_locks);
 static DEFINE_PER_CPU(int, held_locks_cnt);
 static DEFINE_PER_CPU(struct hrtimer, lock_watchdog_timer);
 static int ebpf_spinlock_timeout;
-EXPORT_PER_CPU_SYMBOL_GPL(ebpf_spinlock_timeout);
 
 void bpf_throw(u64 cookie);
 
