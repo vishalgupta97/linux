@@ -68,6 +68,8 @@ int test_spinlock_loop_timeout(struct __sk_buff *ctx)
 	if (!data)
 		return 0;
 
+	bpf_printk("Acquiring lock\n");
+
 	/* Acquire the spinlock - this starts the timeout watchdog */
 	bpf_spin_lock(&data->lock);
 

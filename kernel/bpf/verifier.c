@@ -25386,8 +25386,9 @@ skip_full_check:
 		ret = check_max_stack_depth(env);
 
 	/* instruction rewrites happen after this point */
-	if (ret == 0)
-		ret = optimize_bpf_loop(env);
+	// Disable bpf_loop inlining
+	//if (ret == 0)
+	//	ret = optimize_bpf_loop(env);
 
 	if (is_priv) {
 		if (ret == 0)
