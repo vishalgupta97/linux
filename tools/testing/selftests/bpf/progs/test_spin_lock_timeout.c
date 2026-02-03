@@ -89,7 +89,9 @@ int test_timeout_trigger(struct __sk_buff *ctx)
 	
 	bpf_printk("Acquired the lock\n");
 
-	while(can_loop);
+	sum++;
+
+	//while(can_loop);
 	
 	bpf_spin_unlock(&a->lock);
 

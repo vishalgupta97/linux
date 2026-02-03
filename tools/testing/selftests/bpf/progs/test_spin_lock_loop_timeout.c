@@ -13,6 +13,8 @@
 #include <bpf/bpf_helpers.h>
 //#include "bpf_misc.h"
 
+#define IS_BPF_LOOP_ENABLED 1
+
 struct lock_data {
 	struct bpf_spin_lock lock;
 	int counter;
@@ -27,6 +29,7 @@ struct {
 
 int pid;
 
+#if IS_BPF_LOOP_ENABLED 
 #define LOOPS_CNT 1 << 10
 
 static int callback_fn4(void *ctx) {
@@ -47,6 +50,7 @@ static int callback_fn(void *ctx) {
 	bpf_loop(LOOPS_CNT, callback_fn2, NULL, 0);
 	return 0;
 }
+#endif
 
 /*
  * Test: Acquire spinlock and run a very long bpf_loop.
@@ -76,7 +80,9 @@ int test_spinlock_loop_timeout(struct __sk_buff *ctx)
 	bpf_printk("Lock acquired, starting long loop\n");
 
 	counter++;
+#if IS_BPF_LOOP_ENABLED
 	bpf_loop(LOOPS_CNT, callback_fn, NULL, 0);
+#endif
 	counter++;
 
 	bpf_printk("This should not be reached: %d\n", counter);
