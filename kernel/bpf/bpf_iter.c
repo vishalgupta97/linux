@@ -749,7 +749,7 @@ BPF_CALL_4(bpf_loop, u32, nr_loops, void *, callback_fn, void *, callback_ctx,
 
 	for (i = 0; i < nr_loops; i++) {
 		/* Check if spinlock timeout has been triggered */
-		if (this_cpu_read(ebpf_spinlock_timeout)) {
+		if (READ_ONCE(ebpf_spinlock_timeout)) {
 			bpf_spin_lock_timeout_handler();
 			/* bpf_spin_lock_timeout_handler calls bpf_die which terminates program */
 			return -ETIMEDOUT;
@@ -817,7 +817,7 @@ __bpf_kfunc int *bpf_iter_num_next(struct bpf_iter_num* it)
 	struct bpf_iter_num_kern *s = (void *)it;
 
 	/* Check if spinlock timeout has been triggered */
-	if (this_cpu_read(ebpf_spinlock_timeout)) {
+	if (READ_ONCE(ebpf_spinlock_timeout)) {
 		bpf_spin_lock_timeout_handler();
 		/* bpf_spin_lock_timeout_handler calls bpf_die which terminates program */
 		return NULL;
