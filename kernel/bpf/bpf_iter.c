@@ -9,7 +9,7 @@
 #include <linux/errno.h>
 
 /* Per-CPU spinlock timeout flag and handler from helpers.c */
-DECLARE_PER_CPU(int, ebpf_spinlock_timeout);
+extern int ebpf_spinlock_timeout; // Make it global for now
 extern void bpf_spin_lock_timeout_handler(void);
 
 struct bpf_iter_target_info {
@@ -745,9 +745,12 @@ BPF_CALL_4(bpf_loop, u32, nr_loops, void *, callback_fn, void *, callback_ctx,
 
 	/* nr_loops limit removed to allow extended loops; timeout guards against runaway */
 
+	//printk("BPF loop called\n");
+
 	for (i = 0; i < nr_loops; i++) {
 		/* Check if spinlock timeout has been triggered */
-		if (this_cpu_read(ebpf_spinlock_timeout)) {
+		if (READ_ONCE(ebpf_spinlock_timeout)) {
+			printk(KERN_ALERT "bpf_timeout handler called\n");
 			bpf_spin_lock_timeout_handler();
 			/* bpf_spin_lock_timeout_handler calls bpf_die which terminates program */
 			return -ETIMEDOUT;
@@ -815,7 +818,7 @@ __bpf_kfunc int *bpf_iter_num_next(struct bpf_iter_num* it)
 	struct bpf_iter_num_kern *s = (void *)it;
 
 	/* Check if spinlock timeout has been triggered */
-	if (this_cpu_read(ebpf_spinlock_timeout)) {
+	if (READ_ONCE(ebpf_spinlock_timeout)) {
 		bpf_spin_lock_timeout_handler();
 		/* bpf_spin_lock_timeout_handler calls bpf_die which terminates program */
 		return NULL;
