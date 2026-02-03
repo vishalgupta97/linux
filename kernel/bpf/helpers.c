@@ -290,7 +290,7 @@ struct bpf_lock_entry {
 static DEFINE_PER_CPU(struct bpf_lock_entry[MAX_HELD_LOCKS], held_locks);
 static DEFINE_PER_CPU(int, held_locks_cnt);
 static DEFINE_PER_CPU(struct hrtimer, lock_watchdog_timer);
-DEFINE_PER_CPU(int, ebpf_spinlock_timeout);
+static int ebpf_spinlock_timeout;
 EXPORT_PER_CPU_SYMBOL_GPL(ebpf_spinlock_timeout);
 
 void bpf_throw(u64 cookie);
@@ -301,7 +301,7 @@ void bpf_throw(u64 cookie);
  */
 static enum hrtimer_restart bpf_spin_lock_timer_cb(struct hrtimer *timer)
 {
-	this_cpu_write(ebpf_spinlock_timeout, 1);
+	WRITE_ONCE(ebpf_spinlock_timeout, 1);
 	return HRTIMER_NORESTART;
 }
 
@@ -336,7 +336,7 @@ void bpf_spin_lock_timeout_handler(void)
 
 	/* Reset lock count and timeout flag */
 	this_cpu_write(held_locks_cnt, 0);
-	this_cpu_write(ebpf_spinlock_timeout, 0);
+	WRITE_ONCE(ebpf_spinlock_timeout, 0);
 
 	printk(KERN_ALERT "bpf_spin_lock_timeout_handler: BPF program is terminated\n");
 
@@ -424,7 +424,7 @@ NOTRACE_BPF_CALL_1(bpf_spin_lock, struct bpf_spin_lock *, lock)
 			ktime_t timeout_ms = ms_to_ktime(READ_ONCE(sysctl_bpf_spin_lock_timeout));
 
 			/* Reset timeout flag */
-			this_cpu_write(ebpf_spinlock_timeout, 0);
+			WRITE_ONCE(ebpf_spinlock_timeout, 0);
 
 			hrtimer_setup(timer, bpf_spin_lock_timer_cb, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
 			hrtimer_start(timer, timeout_ms, HRTIMER_MODE_REL);
@@ -486,7 +486,7 @@ NOTRACE_BPF_CALL_1(bpf_spin_unlock, struct bpf_spin_lock *, lock)
 			struct hrtimer *timer = this_cpu_ptr(&lock_watchdog_timer);
 			hrtimer_cancel(timer);
 			/* Reset timeout flag */
-			this_cpu_write(ebpf_spinlock_timeout, 0);
+			WRITE_ONCE(ebpf_spinlock_timeout, 0);
 		}
 	}
 
