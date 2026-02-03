@@ -290,7 +290,7 @@ struct bpf_lock_entry {
 static DEFINE_PER_CPU(struct bpf_lock_entry[MAX_HELD_LOCKS], held_locks);
 static DEFINE_PER_CPU(int, held_locks_cnt);
 static DEFINE_PER_CPU(struct hrtimer, lock_watchdog_timer);
-static int ebpf_spinlock_timeout;
+int ebpf_spinlock_timeout;
 
 void bpf_throw(u64 cookie);
 
@@ -408,6 +408,8 @@ NOTRACE_BPF_CALL_1(bpf_spin_lock, struct bpf_spin_lock *, lock)
 
 	__bpf_spin_lock_irqsave(lock);
 
+	printk(KERN_ALERT "Tracking bpf_spin_lock\n");
+
 	/* Track the acquired lock */
 	locks = this_cpu_ptr(held_locks);
 	cnt = this_cpu_read(held_locks_cnt);
@@ -417,16 +419,20 @@ NOTRACE_BPF_CALL_1(bpf_spin_lock, struct bpf_spin_lock *, lock)
 		this_cpu_inc(held_locks_cnt);
 		cnt++;
 
+		printk(KERN_ALERT "Held lock count: %d\n\n", cnt);
+
 		/* Start watchdog timer for outermost lock */
 		if (cnt == 1 && READ_ONCE(sysctl_bpf_spin_lock_timeout) > 0) {
 			struct hrtimer *timer = this_cpu_ptr(&lock_watchdog_timer);
 			ktime_t timeout_ms = ms_to_ktime(READ_ONCE(sysctl_bpf_spin_lock_timeout));
 
+			printk(KERN_ALERT "Setting hrtimer\n");
+
 			/* Reset timeout flag */
 			WRITE_ONCE(ebpf_spinlock_timeout, 0);
 
 			hrtimer_setup(timer, bpf_spin_lock_timer_cb, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
-			hrtimer_start(timer, timeout_ms, HRTIMER_MODE_REL);
+			hrtimer_start(timer, timeout_ms, HRTIMER_MODE_REL | HRTIMER_MODE_PINNED);
 		}
 	} else {
 		/* Should not happen if verifier does its job */
