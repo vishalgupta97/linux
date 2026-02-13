@@ -301,6 +301,7 @@ void bpf_throw(u64 cookie);
 static enum hrtimer_restart bpf_spin_lock_timer_cb(struct hrtimer *timer)
 {
 	WRITE_ONCE(ebpf_spinlock_timeout, 1);
+	printk(KERN_ALERT "hrtimer callback called\n");
 	return HRTIMER_NORESTART;
 }
 
@@ -406,9 +407,11 @@ NOTRACE_BPF_CALL_1(bpf_spin_lock, struct bpf_spin_lock *, lock)
 	struct bpf_lock_entry *locks;
 	int cnt;
 
+	printk(KERN_ALERT "bpf_spin_lock helper called\n");
+
 	__bpf_spin_lock_irqsave(lock);
 
-	printk(KERN_ALERT "Tracking bpf_spin_lock\n");
+	printk(KERN_ALERT "bpf_spin_lock lock acquired\n");
 
 	/* Track the acquired lock */
 	locks = this_cpu_ptr(held_locks);
@@ -419,7 +422,7 @@ NOTRACE_BPF_CALL_1(bpf_spin_lock, struct bpf_spin_lock *, lock)
 		this_cpu_inc(held_locks_cnt);
 		cnt++;
 
-		printk(KERN_ALERT "Held lock count: %d\n\n", cnt);
+		printk(KERN_ALERT "bpf_spin_lock Held lock count: %d\n", cnt);
 
 		/* Start watchdog timer for outermost lock */
 		if (cnt == 1 && READ_ONCE(sysctl_bpf_spin_lock_timeout) > 0) {
@@ -431,13 +434,16 @@ NOTRACE_BPF_CALL_1(bpf_spin_lock, struct bpf_spin_lock *, lock)
 			/* Reset timeout flag */
 			WRITE_ONCE(ebpf_spinlock_timeout, 0);
 
-			hrtimer_setup(timer, bpf_spin_lock_timer_cb, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
-			hrtimer_start(timer, timeout_ms, HRTIMER_MODE_REL | HRTIMER_MODE_PINNED);
+			hrtimer_setup(timer, bpf_spin_lock_timer_cb, CLOCK_MONOTONIC, HRTIMER_MODE_REL | HRTIMER_MODE_HARD);
+			hrtimer_start(timer, timeout_ms, HRTIMER_MODE_REL | HRTIMER_MODE_HARD);
+			printk(KERN_ALERT "hrtimer started\n");
 		}
 	} else {
 		/* Should not happen if verifier does its job */
 		WARN_ONCE(1, "BPF held lock count exceeded MAX_HELD_LOCKS\n");
 	}
+
+	printk(KERN_ALERT "bpf_spin_lock helper exiting\n");
 
 	return 0;
 }
@@ -465,7 +471,11 @@ NOTRACE_BPF_CALL_1(bpf_spin_unlock, struct bpf_spin_lock *, lock)
 	int cnt, i;
 	bool found = false;
 
+	printk(KERN_ALERT "bpf_spin_unlock helper called\n");
+
 	__bpf_spin_unlock_irqrestore(lock);
+
+	printk(KERN_ALERT "bpf_spin_unlock lock released\n");
 
 	/* Remove lock from tracking (handle OOO unlocking) */
 	locks = this_cpu_ptr(held_locks);
@@ -481,9 +491,12 @@ NOTRACE_BPF_CALL_1(bpf_spin_unlock, struct bpf_spin_lock *, lock)
 			locks[cnt - 1].lock = NULL;
 			this_cpu_dec(held_locks_cnt);
 			found = true;
+			printk(KERN_ALERT "bpf_spin_unlock held lock released\n");
 			break;
 		}
 	}
+
+	printk(KERN_ALERT "bpf_spin_unlock found: %d held_lock_count: %d\n", found, this_cpu_read(held_locks_cnt));
 
 	/* Cancel watchdog timer if this was the last lock */
 	if (found && this_cpu_read(held_locks_cnt) == 0) {
@@ -492,9 +505,13 @@ NOTRACE_BPF_CALL_1(bpf_spin_unlock, struct bpf_spin_lock *, lock)
 			hrtimer_cancel(timer);
 			/* Reset timeout flag */
 			WRITE_ONCE(ebpf_spinlock_timeout, 0);
+			printk(KERN_ALERT "bpf_spin_unlock outermost lock cancelling hrtimer\n");
+		} else {
+			printk(KERN_ALERT "bpf_spin_unlock sysctl_spin_lock_timeout not set\n");
 		}
 	}
 
+	printk(KERN_ALERT "bpf_spin_unlock helper exiting\n");
 	return 0;
 }
 

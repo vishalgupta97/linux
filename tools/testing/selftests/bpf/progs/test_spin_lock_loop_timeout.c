@@ -46,10 +46,10 @@ static int callback_fn2(void *ctx) {
 	return 0;
 }
 
-static int callback_fn(void *ctx) {
-	bpf_loop(LOOPS_CNT, callback_fn2, NULL, 0);
-	return 0;
-}
+//static int callback_fn(void *ctx) {
+//	bpf_loop(LOOPS_CNT, callback_fn2, NULL, 0);
+//	return 0;
+//}
 #endif
 
 /*
@@ -81,7 +81,7 @@ int test_spinlock_loop_timeout(struct __sk_buff *ctx)
 
 	counter++;
 #if IS_BPF_LOOP_ENABLED
-	bpf_loop(LOOPS_CNT, callback_fn, NULL, 0);
+	bpf_loop(LOOPS_CNT, callback_fn2, NULL, 0);
 #endif
 	counter++;
 

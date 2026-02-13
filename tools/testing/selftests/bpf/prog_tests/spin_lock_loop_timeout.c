@@ -43,12 +43,11 @@ static int __write_sysctl(int val)
 	return 0;
 }
 
-
-
 static void trigger_spinlock_loop_timeout(void)
 {
 	struct test_spin_lock_loop_timeout *skel;
-	int prog_fd, err, old_timeout;
+	int prog_fd;
+	int err, old_timeout;
 
 	/* Save current timeout and set a short timeout */
 	old_timeout = __read_sysctl();
@@ -57,7 +56,7 @@ static void trigger_spinlock_loop_timeout(void)
 		return;
 	}
 
-	if (__write_sysctl(500) < 0) {  /* 500ms timeout */
+	if (__write_sysctl(50) < 0) {  /* 50ms timeout */
 		test__skip();
 		return;
 	}
@@ -69,7 +68,7 @@ static void trigger_spinlock_loop_timeout(void)
 	err = test_spin_lock_loop_timeout__load(skel);
 	if (!ASSERT_OK(err, "test_spin_lock_loop_timeout__load"))
 	        goto out;
-	
+
 	skel->bss->pid = getpid();
 	err = test_spin_lock_loop_timeout__attach(skel);
 	if (!ASSERT_OK(err, "test_spin_lock_loop_timeout__attach"))
