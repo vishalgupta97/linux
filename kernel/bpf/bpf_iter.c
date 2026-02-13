@@ -745,11 +745,12 @@ BPF_CALL_4(bpf_loop, u32, nr_loops, void *, callback_fn, void *, callback_ctx,
 
 	/* nr_loops limit removed to allow extended loops; timeout guards against runaway */
 
-	printk("BPF loop called\n");
+	//printk("BPF loop called\n");
 
 	for (i = 0; i < nr_loops; i++) {
 		/* Check if spinlock timeout has been triggered */
 		if (READ_ONCE(ebpf_spinlock_timeout)) {
+			printk(KERN_ALERT "bpf_timeout handler called\n");
 			bpf_spin_lock_timeout_handler();
 			/* bpf_spin_lock_timeout_handler calls bpf_die which terminates program */
 			return -ETIMEDOUT;
