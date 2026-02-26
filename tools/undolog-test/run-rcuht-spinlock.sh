@@ -1,7 +1,7 @@
 source defaults.sh
 
 locks=(table_spinlock table_aqs table_cna)
-binaries=(baseline withundolog)
+binaries=(withundolog baseline)
 
 lock_type=spinlock
 
@@ -47,7 +47,7 @@ do
 					buckets=${bucket} \
 					entries=${entries}
 				sleep ${time}
-				sudo rmmod ht
+				sudo rmmod ${binary}.ko
 				sleep 1
 				sudo dmesg > ${out_dir}/core.${c}
 				sleep 5

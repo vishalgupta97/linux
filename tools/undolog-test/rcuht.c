@@ -193,7 +193,7 @@ static int rcuhashbash_write_lock(u32 src_value, u32 dst_value, struct stats *st
 
 		hlist_for_each_entry (entry, &hash_table[src_bucket].head, node) {
 #if USE_UNDO_LOG
-				*(this_cpu_ptr(&undo_log)[i]) = entry->value;
+				(*this_cpu_ptr(&undo_log))[i] = entry->value;
 #endif
 				entry->value = dst_value + i;
 				stats->write_moves++;
