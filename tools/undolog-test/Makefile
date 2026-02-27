@@ -3,7 +3,7 @@ KDIR ?= $(PWD)/../..
 
 ifneq ($(KERNELRELEASE),)
 
-obj-m += baseline.o withundolog.o
+obj-m += baseline.o withundolog.o withundologatomic.o
 baseline-y := rcuht_baseline.o \
                   locks/qspinlock.o \
                   locks/aqs.o \
@@ -19,7 +19,15 @@ withundolog-y := rcuht_withundolog.o \
                   timing_stats.o \
                   lib/combiner.o
 
-baseline.o withundolog.o: private objtool := true
+withundologatomic-y := rcuht_withundologatomic.o \
+                  locks/qspinlock.o \
+                  locks/aqs.o \
+                  locks/cna.o \
+                  locks/komb.o \
+                  timing_stats.o \
+                  lib/combiner.o
+
+baseline.o withundolog.o withundologatomic.o: private objtool := true
 
 ccflags-y := -g -DDEBUG -DKERNEL_SYNCSTRESS -I$(src)/include -I$(src)/spinlock
 

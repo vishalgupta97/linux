@@ -1,0 +1,21 @@
+[   27.215517] withundolog: loading out-of-tree module taints kernel.
+[   27.223506] rcuhashbash starting threads
+[   34.060590] workqueue: vmstat_update hogged CPU for >10000us 4 times, consider switching to WQ_UNBOUND
+[   34.060682] workqueue: vmstat_update hogged CPU for >10000us 5 times, consider switching to WQ_UNBOUND
+[   34.060894] workqueue: vmstat_update hogged CPU for >10000us 7 times, consider switching to WQ_UNBOUND
+[   36.956610] workqueue: vmstat_update hogged CPU for >10000us 11 times, consider switching to WQ_UNBOUND
+[   37.426405] rcuhashbash exiting threads
+[   37.500333] ======== KOMB spinlock stats ========
+[   37.500398] Combiner_count: 0
+[   37.500409] waiter_combined: 0
+[   37.500420] ooo_unlocks: 0
+[   37.500428] ooo_combiner_count: 0
+[   37.500438] ooo_waiter_combined: 0
+[   37.500477] rcuhashbash summary: (up: 9234420 down: 11433659)
+[   37.500496] rcuhashbash summary: ro=0 rw=112 reader_type=table_spinlock writer_type=table_spinlock
+               rcuhashbash summary: writer proportion 100/100
+               rcuhashbash summary: buckets=1024 entries=1024 reader_range=2048 writer_range=2048
+               rcuhashbash summary: writes: 20668079 moves, 0 dests in use, 0 misses (20668079)
+               rcuhashbash summary: reads: 0 hits, 0 misses (0)
+               rcuhashbash summary: total: 20668079 (avg: 10215638653 min: 10198969953 max: 10224993506)
+[   37.500946] rcuhashbash done

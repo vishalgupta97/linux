@@ -1,14 +1,14 @@
 source defaults.sh
 
 locks=(table_spinlock table_aqs table_cna)
-binaries=(withundolog baseline)
+binaries=(withundologatomic) #withundolog baseline)
 
 lock_type=spinlock
 
 rw_writes=(100)
 rw_total=100
 buckets=(1024)
-entries_ratios=(4)
+entries_ratios=(1 2 4 6 8)
 
 time=${runtime}
 
@@ -50,7 +50,7 @@ do
 				sudo rmmod ${binary}.ko
 				sleep 1
 				sudo dmesg > ${out_dir}/core.${c}
-				sleep 5
+				sleep 2
 			done
 		done
 	done

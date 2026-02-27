@@ -1,0 +1,17 @@
+[  330.772621] rcuhashbash starting threads
+[  333.042478] workqueue: page_reporting_process hogged CPU for >10000us 5 times, consider switching to WQ_UNBOUND
+[  340.797591] rcuhashbash exiting threads
+[  340.848058] ======== KOMB spinlock stats ========
+[  340.848467] Combiner_count: 0
+[  340.848690] waiter_combined: 0
+[  340.848895] ooo_unlocks: 0
+[  340.849093] ooo_combiner_count: 0
+[  340.849281] ooo_waiter_combined: 0
+[  340.849458] rcuhashbash summary: (up: 19480302 down: 29590428)
+[  340.849630] rcuhashbash summary: ro=0 rw=56 reader_type=table_spinlock writer_type=table_spinlock
+               rcuhashbash summary: writer proportion 100/100
+               rcuhashbash summary: buckets=1024 entries=6144 reader_range=12288 writer_range=12288
+               rcuhashbash summary: writes: 49070730 moves, 0 dests in use, 0 misses (49070730)
+               rcuhashbash summary: reads: 0 hits, 0 misses (0)
+               rcuhashbash summary: total: 49070730 (avg: 10025515763 min: 10024554552 max: 10026062292)
+[  340.851071] rcuhashbash done
