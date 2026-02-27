@@ -3,31 +3,27 @@ KDIR ?= $(PWD)/../..
 
 ifneq ($(KERNELRELEASE),)
 
-obj-m += baseline.o withundolog.o withundologatomic.o
-baseline-y := rcuht_baseline.o \
-                  locks/qspinlock.o \
-                  locks/aqs.o \
-                  locks/cna.o \
-                  locks/komb.o \
-                  timing_stats.o \
-                  lib/combiner.o
-withundolog-y := rcuht_withundolog.o \
-                  locks/qspinlock.o \
-                  locks/aqs.o \
-                  locks/cna.o \
-                  locks/komb.o \
-                  timing_stats.o \
-                  lib/combiner.o
+obj-m += baseline.o withundolog.o withundologatomic.o withundologprefetch.o
+common_objs := locks/qspinlock.o \
+               locks/aqs.o \
+               locks/cna.o \
+               locks/komb.o \
+               timing_stats.o \
+               lib/combiner.o
 
-withundologatomic-y := rcuht_withundologatomic.o \
-                  locks/qspinlock.o \
-                  locks/aqs.o \
-                  locks/cna.o \
-                  locks/komb.o \
-                  timing_stats.o \
-                  lib/combiner.o
+baseline-y := rcuht_baseline.o
+baseline-y += $(common_objs)
 
-baseline.o withundolog.o withundologatomic.o: private objtool := true
+withundolog-y := rcuht_withundolog.o
+withundolog-y += $(common_objs)
+
+withundologatomic-y := rcuht_withundologatomic.o
+withundologatomic-y += $(common_objs)
+
+withundologprefetch-y := rcuht_withundologprefetch.o
+withundologprefetch-y += $(common_objs)
+
+baseline.o withundolog.o withundologatomic.o withundologprefetch.o: private objtool := true
 
 ccflags-y := -g -DDEBUG -DKERNEL_SYNCSTRESS -I$(src)/include -I$(src)/spinlock
 
