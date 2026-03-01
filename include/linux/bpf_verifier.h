@@ -413,6 +413,11 @@ struct bpf_verifier_state {
 	u32 acquired_refs;
 	u32 active_locks;
 	u32 active_preempt_locks;
+	/* number of write operations seen in the current spinlock critical
+	 * section on this execution path; reset when active_locks transitions
+	 * 0->1 (first lock) or to 0 (last unlock).
+	 */
+	u32 cs_write_count;
 	u32 active_irq_id;
 	u32 active_lock_id;
 	void *active_lock_ptr;
@@ -571,6 +576,11 @@ struct bpf_insn_aux_data {
 	 */
 	u8 fastcall_spills_num:3;
 	u8 arg_prog:4;
+	/* set if this write instruction falls inside a bpf_spin_lock critical
+	 * section on all paths that reach it; used by do_misc_fixups() to
+	 * inject undo-log prefix code before the write.
+	 */
+	bool in_critical_section;
 
 	/* below fields are initialized once */
 	unsigned int orig_idx; /* original instruction index */
@@ -595,6 +605,13 @@ struct bpf_insn_aux_data {
 
 #define MAX_USED_MAPS 64 /* max number of maps accessed by one eBPF program */
 #define MAX_USED_BTFS 64 /* max number of BTFs accessed by one BPF program */
+
+/*
+ * Number of extra stack bytes reserved per-subprogram for the register spill
+ * area injected by do_misc_fixups() around bpf_undo_log_push() calls.
+ * Six 64-bit caller-saved registers (R0-R5) × 8 bytes = 48 bytes.
+ */
+#define BPF_UNDO_LOG_SPILL_SIZE	48
 
 #define BPF_VERIFIER_TMP_LOG_SIZE	1024
 

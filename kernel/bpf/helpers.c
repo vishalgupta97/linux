@@ -294,7 +294,106 @@ static DEFINE_PER_CPU(struct bpf_lock_entry[MAX_HELD_LOCKS], held_locks);
 static DEFINE_PER_CPU(int, held_locks_cnt);
 int ebpf_spinlock_timeout;
 
-void bpf_throw(u64 cookie);
+/*
+ * Per-CPU undo log: records old values of memory locations written inside
+ * a bpf_spin_lock critical section so that bpf_spin_lock_timeout_handler()
+ * can restore them before releasing the locks.
+ *
+ * CONFIG_BPF_UNDO_LOG_MAX_ENTRIES is a compile-time tunable (Kconfig).
+ * Any BPF program whose critical section exceeds this many write operations
+ * on any execution path is rejected by the verifier at load time.
+ */
+struct bpf_undo_log_entry {
+	void	*addr;		/* address of the write destination */
+	u64	old_value;	/* value at addr BEFORE the write */
+	u8	size;		/* operand size in bytes: 1, 2, 4, or 8 */
+};
+
+static DEFINE_PER_CPU(struct bpf_undo_log_entry[CONFIG_BPF_UNDO_LOG_MAX_ENTRIES],
+		      bpf_undo_log);
+static DEFINE_PER_CPU(int, bpf_undo_log_cnt);
+
+/**
+ * bpf_undo_log_push - record old value of a memory location before a write.
+ * @addr: effective address that is about to be written
+ * @size: write size in bytes (1, 2, 4, or 8)
+ *
+ * Called (via injected BPF helper call) immediately before every write
+ * instruction inside a bpf_spin_lock critical section.  Reads the current
+ * value at @addr and appends (@addr, old_value, @size) to the per-CPU undo
+ * log so that bpf_spin_lock_timeout_handler() can restore data on timeout.
+ *
+ * This function is notrace because it runs inside a spinlock with IRQs
+ * disabled.  The verifier guarantees the log never overflows.
+ */
+NOTRACE_BPF_CALL_2(bpf_undo_log_push, unsigned long, addr, u64, size)
+{
+	struct bpf_undo_log_entry *log;
+	u64 old_value = 0;
+	int cnt;
+
+	cnt = this_cpu_read(bpf_undo_log_cnt);
+	if (WARN_ONCE(cnt >= CONFIG_BPF_UNDO_LOG_MAX_ENTRIES,
+		      "BPF undo log overflow (cnt=%d max=%d)\n",
+		      cnt, CONFIG_BPF_UNDO_LOG_MAX_ENTRIES))
+		return -ENOSPC;
+
+	switch (size) {
+	case 1:
+		old_value = READ_ONCE(*(u8 *)addr);
+		break;
+	case 2:
+		old_value = READ_ONCE(*(u16 *)addr);
+		break;
+	case 4:
+		old_value = READ_ONCE(*(u32 *)addr);
+		break;
+	case 8:
+		old_value = READ_ONCE(*(u64 *)addr);
+		break;
+	default:
+		WARN_ONCE(1, "bpf_undo_log_push: invalid size %llu\n", size);
+		return -EINVAL;
+	}
+
+	log = this_cpu_ptr(bpf_undo_log);
+	log[cnt].addr      = (void *)addr;
+	log[cnt].old_value = old_value;
+	log[cnt].size      = (u8)size;
+
+	this_cpu_inc(bpf_undo_log_cnt);
+	return 0;
+}
+EXPORT_SYMBOL_GPL(bpf_undo_log_push);
+
+/*
+ * bpf_undo_log_replay - restore all writes recorded in the per-CPU undo log.
+ * Replays in reverse order so that writes to the same address are undone
+ * correctly (the most recent store is undone first, exposing the original).
+ * Must be called while all critical-section locks are still held.
+ */
+static void bpf_undo_log_replay(void)
+{
+	struct bpf_undo_log_entry *log;
+	int cnt, i;
+
+	log = this_cpu_ptr(bpf_undo_log);
+	cnt = this_cpu_read(bpf_undo_log_cnt);
+
+	for (i = cnt - 1; i >= 0; i--) {
+		void *addr = log[i].addr;
+		u64  val  = log[i].old_value;
+
+		switch (log[i].size) {
+		case 1: WRITE_ONCE(*(u8  *)addr, (u8)val);  break;
+		case 2: WRITE_ONCE(*(u16 *)addr, (u16)val); break;
+		case 4: WRITE_ONCE(*(u32 *)addr, (u32)val); break;
+		case 8: WRITE_ONCE(*(u64 *)addr, (u64)val); break;
+		}
+	}
+
+	this_cpu_write(bpf_undo_log_cnt, 0);
+}
 
 /*
  * hrtimer backend ops for bpf_lock_timer.  Used by both the per-CPU waiter
@@ -347,6 +446,13 @@ void bpf_spin_lock_timeout_handler(void)
 	cnt = this_cpu_read(held_locks_cnt);
 
 	printk(KERN_ALERT "Timeout handler is called\n");
+
+	/*
+	 * Replay the undo log in reverse to restore all writes made inside
+	 * the critical section BEFORE releasing the locks.  This ensures
+	 * other CPUs never observe the partially-written state.
+	 */
+	bpf_undo_log_replay();
 
 	/* Release all held locks in reverse order */
 	for (i = cnt - 1; i >= 0; i--) {
