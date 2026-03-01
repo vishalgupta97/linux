@@ -1,0 +1,58 @@
+# Spinlock Benchmark Configuration
+# Defines test scenarios for comparing eBPF spinlocks vs kernel qspinlock
+
+test_scenarios:
+  - name: lightweight
+    description: "Single-digit thread contention (1-8 threads)"
+    data_structures: ["list", "hashtbl", "tree"]
+    lock_strategies: ["global", "per-element", "per-bucket", "per-node"]
+    threads: [1, 2, 4, 8]
+    time_to_run_sec: 5
+    num_test_keys: 100
+
+  - name: medium
+    description: "Moderate contention (16-64 threads)"
+    data_structures: ["list", "hashtbl", "tree"]
+    lock_strategies: ["global", "per-element", "per-bucket", "per-node"]
+    threads: [16, 32, 64]
+    time_to_run_sec: 10
+    num_test_keys: 500
+
+  - name: heavy
+    description: "High contention (128-256 threads)"
+    data_structures: ["list", "hashtbl", "tree"]
+    lock_strategies: ["global", "per-element", "per-bucket", "per-node"]
+    threads: [128, 256]
+    time_to_run_sec: 20
+    num_test_keys: 1000
+
+# Valid combinations (match operations.h and module implementation)
+# These define which data_structure/lock_strategy pairs are valid:
+# - list: global, per-element
+# - hashtbl: global, per-bucket
+# - tree: global, per-node (for hand-over-hand nested locking)
+
+# Test parameters
+benchmark:
+  # Number of keys pre-inserted before timed operations
+  num_test_keys: 100
+  
+  # Duration of each test in seconds
+  time_to_run_sec: 5
+  
+  # Maximum threads to use (can be overridden per scenario)
+  max_threads: 256
+  
+  # Number of retries per configuration (for averaging results)
+  retries: 1
+
+# Output configuration
+output:
+  # Export to CSV for analysis
+  csv_file: "spinlock_benchmark_results.csv"
+  
+  # Export to JSON for detailed records
+  json_file: "spinlock_benchmark_results.json"
+  
+  # Verbose output
+  verbose: true
