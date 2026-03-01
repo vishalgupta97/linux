@@ -3637,6 +3637,12 @@ extern const struct bpf_func_proto bpf_sk_redirect_hash_proto;
 extern const struct bpf_func_proto bpf_sk_redirect_map_proto;
 extern const struct bpf_func_proto bpf_spin_lock_proto;
 extern const struct bpf_func_proto bpf_spin_unlock_proto;
+/* Internal helper injected by the verifier before writes inside a spinlock
+ * critical section.  Records the old value at @addr (size bytes) into the
+ * per-CPU undo log so bpf_spin_lock_timeout_handler() can roll back.
+ * Not callable from BPF programs directly.
+ */
+u64 bpf_undo_log_push(u64 addr, u64 size, u64 r3, u64 r4, u64 r5);
 extern const struct bpf_func_proto bpf_get_local_storage_proto;
 extern const struct bpf_func_proto bpf_strtol_proto;
 extern const struct bpf_func_proto bpf_strtoul_proto;
