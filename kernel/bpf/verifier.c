@@ -8027,8 +8027,29 @@ static int check_store_reg(struct bpf_verifier_env *env, struct bpf_insn *insn,
 			       BPF_SIZE(insn->code), BPF_WRITE, insn->src_reg,
 			       strict_alignment_once, false);
 	err = err ?: save_aux_ptr_type(env, dst_reg_type, false);
+	if (err)
+		return err;
 
-	return err;
+	/*
+	 * Track writes inside a spinlock critical section for undo-log
+	 * injection.  BPF stack writes (PTR_TO_STACK) are excluded because
+	 * they are private to the current program invocation.
+	 */
+	if (env->cur_state->active_locks > 0 &&
+	    base_type(dst_reg_type) != PTR_TO_STACK) {
+		if (env->cur_state->cs_write_count >=
+		    CONFIG_BPF_UNDO_LOG_MAX_ENTRIES) {
+			verbose(env,
+				"BPF critical section write count (%u) exceeds undo log capacity (max %d)\n",
+				env->cur_state->cs_write_count + 1,
+				CONFIG_BPF_UNDO_LOG_MAX_ENTRIES);
+			return -E2BIG;
+		}
+		env->insn_aux_data[env->insn_idx].in_critical_section = true;
+		env->cur_state->cs_write_count++;
+	}
+
+	return 0;
 }
 
 static int check_atomic_rmw(struct bpf_verifier_env *env,
@@ -8117,6 +8138,26 @@ static int check_atomic_rmw(struct bpf_verifier_env *env,
 			       BPF_SIZE(insn->code), BPF_WRITE, -1, true, false);
 	if (err)
 		return err;
+
+	/*
+	 * Track atomic RMW writes inside a spinlock critical section.
+	 */
+	if (env->cur_state->active_locks > 0) {
+		enum bpf_reg_type dst_type = reg_state(env, insn->dst_reg)->type;
+
+		if (base_type(dst_type) != PTR_TO_STACK) {
+			if (env->cur_state->cs_write_count >=
+			    CONFIG_BPF_UNDO_LOG_MAX_ENTRIES) {
+				verbose(env,
+					"BPF critical section write count (%u) exceeds undo log capacity (max %d)\n",
+					env->cur_state->cs_write_count + 1,
+					CONFIG_BPF_UNDO_LOG_MAX_ENTRIES);
+				return -E2BIG;
+			}
+			env->insn_aux_data[env->insn_idx].in_critical_section = true;
+			env->cur_state->cs_write_count++;
+		}
+	}
 	return 0;
 }
 
@@ -8659,6 +8700,13 @@ static int process_spin_lock(struct bpf_verifier_env *env, int regno, int flags)
 			type = REF_TYPE_RES_LOCK;
 		else
 			type = REF_TYPE_LOCK;
+		/*
+		 * Reset the undo-log write counter on each outermost lock
+		 * acquisition so counting starts fresh for this critical section.
+		 */
+		if (!cur->active_locks)
+			cur->cs_write_count = 0;
+
 		err = acquire_lock_state(env, env->insn_idx, type, reg->id, ptr);
 		if (err < 0) {
 			verbose(env, "Failed to acquire lock state\n");
@@ -8696,6 +8744,10 @@ static int process_spin_lock(struct bpf_verifier_env *env, int regno, int flags)
 			verbose(env, "%s_unlock of different lock\n", lock_str);
 			return -EINVAL;
 		}
+
+		/* Reset the write counter once all locks are released. */
+		if (!cur->active_locks)
+			cur->cs_write_count = 0;
 
 		invalidate_non_owning_refs(env);
 	}
@@ -20274,6 +20326,15 @@ static bool states_equal(struct bpf_verifier_env *env,
 	if (old->in_sleepable != cur->in_sleepable)
 		return false;
 
+	/*
+	 * The cached state must have explored at least as many critical-section
+	 * writes as the current state.  Otherwise pruning would skip counting
+	 * writes on the current path, potentially allowing an overflowing
+	 * program to slip through the limit check.
+	 */
+	if (old->cs_write_count < cur->cs_write_count)
+		return false;
+
 	if (!refsafe(old, cur, &env->idmap_scratch))
 		return false;
 
@@ -21153,6 +21214,24 @@ static int do_check_insn(struct bpf_verifier_env *env, bool *do_print_state)
 		err = save_aux_ptr_type(env, dst_reg_type, false);
 		if (err)
 			return err;
+
+		/*
+		 * Track immediate (BPF_ST) memory writes inside a spinlock
+		 * critical section for undo-log injection.
+		 */
+		if (env->cur_state->active_locks > 0 &&
+		    base_type(dst_reg_type) != PTR_TO_STACK) {
+			if (env->cur_state->cs_write_count >=
+			    CONFIG_BPF_UNDO_LOG_MAX_ENTRIES) {
+				verbose(env,
+					"BPF critical section write count (%u) exceeds undo log capacity (max %d)\n",
+					env->cur_state->cs_write_count + 1,
+					CONFIG_BPF_UNDO_LOG_MAX_ENTRIES);
+				return -E2BIG;
+			}
+			env->insn_aux_data[env->insn_idx].in_critical_section = true;
+			env->cur_state->cs_write_count++;
+		}
 	} else if (class == BPF_JMP || class == BPF_JMP32) {
 		u8 opcode = BPF_OP(insn->code);
 
@@ -23446,7 +23525,111 @@ static int do_misc_fixups(struct bpf_verifier_env *env)
 		mark_subprog_exc_cb(env, env->exception_callback_subprog);
 	}
 
+	/*
+	 * Pre-pass: extend the stack of any subprogram containing
+	 * critical-section writes.  Reserve BPF_UNDO_LOG_SPILL_SIZE bytes
+	 * below the existing BPF stack for R0-R5 spill slots used by the
+	 * undo-log prefix injected in the main loop below.
+	 */
+	{
+		int sp;
+
+		for (sp = 0; sp < env->subprog_cnt; sp++) {
+			const int sp_end = (sp + 1 < env->subprog_cnt)
+					   ? subprogs[sp + 1].start : insn_cnt;
+			int j;
+			bool has_cs_write = false;
+
+			for (j = subprogs[sp].start; j < sp_end; j++) {
+				if (env->insn_aux_data[j].in_critical_section) {
+					has_cs_write = true;
+					break;
+				}
+			}
+			if (!has_cs_write)
+				continue;
+
+			subprogs[sp].stack_depth += BPF_UNDO_LOG_SPILL_SIZE;
+			if (subprogs[sp].stack_depth > MAX_BPF_STACK) {
+				verbose(env,
+					"BPF stack limit exceeded after spinlock undo log reservation (%d > %d)\n",
+					subprogs[sp].stack_depth, MAX_BPF_STACK);
+				return -EINVAL;
+			}
+		}
+		/* Refresh after pre-pass may have increased subprog[0].stack_depth. */
+		stack_depth = subprogs[cur_subprog].stack_depth;
+	}
+
 	for (i = 0; i < insn_cnt;) {
+		/*
+		 * Undo-log injection: for every write instruction inside a BPF
+		 * spinlock critical section, prepend a register-save block, a
+		 * call to bpf_undo_log_push(), and a register-restore block.
+		 * This records the old value so that bpf_spin_lock_timeout_handler()
+		 * can roll back all writes made before a timeout.
+		 *
+		 * Spill slot offsets (stack already extended by BPF_UNDO_LOG_SPILL_SIZE):
+		 *   R_k  →  FP - (stack_depth - 40 + k*8),  k ∈ {0..5}
+		 */
+		if (env->insn_aux_data[i + delta].in_critical_section) {
+			u8 cls  = BPF_CLASS(insn->code);
+			u8 mode = BPF_MODE(insn->code);
+
+			if ((cls == BPF_STX || cls == BPF_ST) &&
+			    (mode == BPF_MEM         || mode == BPF_ATOMIC       ||
+			     mode == BPF_PROBE_MEM32 || mode == BPF_PROBE_ATOMIC)) {
+				int usd = (int)stack_depth; /* includes spill extension */
+				int k;
+
+				cnt = 0;
+				/* --- Save R0–R5 to dedicated spill slots --- */
+				for (k = 0; k <= 5; k++)
+					insn_buf[cnt++] = BPF_STX_MEM(BPF_DW,
+						BPF_REG_FP, k,
+						-(usd - 40 + k * 8));
+				/* --- R1 = effective write address = dst_reg + off --- */
+				if (insn->dst_reg <= BPF_REG_5)
+					/* dst_reg was already spilled; reload from slot */
+					insn_buf[cnt++] = BPF_LDX_MEM(BPF_DW,
+						BPF_REG_1, BPF_REG_FP,
+						-(usd - 40 + insn->dst_reg * 8));
+				else
+					insn_buf[cnt++] = BPF_MOV64_REG(
+						BPF_REG_1, insn->dst_reg);
+				if (insn->off)
+					insn_buf[cnt++] = BPF_ALU64_IMM(
+						BPF_ADD, BPF_REG_1, insn->off);
+				/* --- R2 = write size in bytes (1/2/4/8) --- */
+				insn_buf[cnt++] = BPF_MOV64_IMM(BPF_REG_2,
+					BPF_LDST_BYTES(insn));
+				/* --- Call bpf_undo_log_push(addr, size) --- */
+				insn_buf[cnt++] = BPF_EMIT_CALL(bpf_undo_log_push);
+				/* --- Restore R0–R5 --- */
+				for (k = 0; k <= 5; k++)
+					insn_buf[cnt++] = BPF_LDX_MEM(BPF_DW,
+						k, BPF_REG_FP,
+						-(usd - 40 + k * 8));
+				/* --- Original write instruction --- */
+				insn_buf[cnt++] = *insn;
+
+				if (WARN_ONCE(cnt > INSN_BUF_SIZE,
+					      "BPF undo log: insn_buf overflow cnt=%d\n",
+					      cnt))
+					return -EFAULT;
+
+				new_prog = bpf_patch_insn_data(env, i + delta,
+							       insn_buf, cnt);
+				if (!new_prog)
+					return -ENOMEM;
+
+				delta    += cnt - 1;
+				env->prog = prog = new_prog;
+				insn      = new_prog->insnsi + i + delta;
+				goto next_insn;
+			}
+		}
+
 		if (insn->code == (BPF_ALU64 | BPF_MOV | BPF_X) && insn->imm) {
 			if ((insn->off == BPF_ADDR_SPACE_CAST && insn->imm == 1) ||
 			    (((struct bpf_map *)env->prog->aux->arena)->map_flags & BPF_F_NO_USER_CONV)) {

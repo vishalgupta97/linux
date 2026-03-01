@@ -297,6 +297,107 @@ int ebpf_spinlock_timeout;
 void bpf_throw(u64 cookie);
 
 /*
+ * Per-CPU undo log: records old values of memory locations written inside
+ * a bpf_spin_lock critical section so that bpf_spin_lock_timeout_handler()
+ * can restore them before releasing the locks.
+ *
+ * CONFIG_BPF_UNDO_LOG_MAX_ENTRIES is a compile-time tunable (Kconfig).
+ * Any BPF program whose critical section exceeds this many write operations
+ * on any execution path is rejected by the verifier at load time.
+ */
+struct bpf_undo_log_entry {
+	void	*addr;		/* address of the write destination */
+	u64	old_value;	/* value at addr BEFORE the write */
+	u8	size;		/* operand size in bytes: 1, 2, 4, or 8 */
+};
+
+static DEFINE_PER_CPU(struct bpf_undo_log_entry[CONFIG_BPF_UNDO_LOG_MAX_ENTRIES],
+		      bpf_undo_log);
+static DEFINE_PER_CPU(int, bpf_undo_log_cnt);
+
+/**
+ * bpf_undo_log_push - record old value of a memory location before a write.
+ * @addr: effective address that is about to be written
+ * @size: write size in bytes (1, 2, 4, or 8)
+ *
+ * Called (via injected BPF helper call) immediately before every write
+ * instruction inside a bpf_spin_lock critical section.  Reads the current
+ * value at @addr and appends (@addr, old_value, @size) to the per-CPU undo
+ * log so that bpf_spin_lock_timeout_handler() can restore data on timeout.
+ *
+ * This function is notrace because it runs inside a spinlock with IRQs
+ * disabled.  The verifier guarantees the log never overflows.
+ */
+NOTRACE_BPF_CALL_2(bpf_undo_log_push, unsigned long, addr, u64, size)
+{
+	struct bpf_undo_log_entry *log;
+	u64 old_value = 0;
+	int cnt;
+
+	cnt = this_cpu_read(bpf_undo_log_cnt);
+	if (WARN_ONCE(cnt >= CONFIG_BPF_UNDO_LOG_MAX_ENTRIES,
+		      "BPF undo log overflow (cnt=%d max=%d)\n",
+		      cnt, CONFIG_BPF_UNDO_LOG_MAX_ENTRIES))
+		return -ENOSPC;
+
+	switch (size) {
+	case 1:
+		old_value = READ_ONCE(*(u8 *)addr);
+		break;
+	case 2:
+		old_value = READ_ONCE(*(u16 *)addr);
+		break;
+	case 4:
+		old_value = READ_ONCE(*(u32 *)addr);
+		break;
+	case 8:
+		old_value = READ_ONCE(*(u64 *)addr);
+		break;
+	default:
+		WARN_ONCE(1, "bpf_undo_log_push: invalid size %llu\n", size);
+		return -EINVAL;
+	}
+
+	log = this_cpu_ptr(bpf_undo_log);
+	log[cnt].addr      = (void *)addr;
+	log[cnt].old_value = old_value;
+	log[cnt].size      = (u8)size;
+
+	this_cpu_inc(bpf_undo_log_cnt);
+	return 0;
+}
+EXPORT_SYMBOL_GPL(bpf_undo_log_push);
+
+/*
+ * bpf_undo_log_replay - restore all writes recorded in the per-CPU undo log.
+ * Replays in reverse order so that writes to the same address are undone
+ * correctly (the most recent store is undone first, exposing the original).
+ * Must be called while all critical-section locks are still held.
+ */
+static void bpf_undo_log_replay(void)
+{
+	struct bpf_undo_log_entry *log;
+	int cnt, i;
+
+	log = this_cpu_ptr(bpf_undo_log);
+	cnt = this_cpu_read(bpf_undo_log_cnt);
+
+	for (i = cnt - 1; i >= 0; i--) {
+		void *addr = log[i].addr;
+		u64  val  = log[i].old_value;
+
+		switch (log[i].size) {
+		case 1: WRITE_ONCE(*(u8  *)addr, (u8)val);  break;
+		case 2: WRITE_ONCE(*(u16 *)addr, (u16)val); break;
+		case 4: WRITE_ONCE(*(u32 *)addr, (u32)val); break;
+		case 8: WRITE_ONCE(*(u64 *)addr, (u64)val); break;
+		}
+	}
+
+	this_cpu_write(bpf_undo_log_cnt, 0);
+}
+
+/*
  * hrtimer backend ops for bpf_lock_timer.  Used by both the per-CPU waiter
  * timers (bpf_qspinlock.c) and the global kthread timer (below).
  */
@@ -333,6 +434,9 @@ enum hrtimer_restart bpf_qspinlock_timer_cb(struct hrtimer *timer)
 }
 EXPORT_SYMBOL_GPL(bpf_qspinlock_timer_cb);
 
+extern void bpf_qspinlock_lock(struct qspinlock *lock);
+extern void bpf_qspinlock_unlock(struct qspinlock *lock);
+
 /*
  * bpf_spin_lock_timeout_handler - release all held locks and terminate program.
  * Called from bpf_loop/bpf_for when timeout is detected.
@@ -348,16 +452,20 @@ void bpf_spin_lock_timeout_handler(void)
 
 	printk(KERN_ALERT "Timeout handler is called\n");
 
+	/*
+	 * Replay the undo log in reverse to restore all writes made inside
+	 * the critical section BEFORE releasing the locks.  This ensures
+	 * other CPUs never observe the partially-written state.
+	 */
+	bpf_undo_log_replay();
+
 	/* Release all held locks in reverse order */
 	for (i = cnt - 1; i >= 0; i--) {
 		if (locks[i].lock) {
-#if defined(CONFIG_QUEUED_SPINLOCKS) || defined(CONFIG_BPF_ARCH_SPINLOCK)
-			arch_spinlock_t *l = (void *)locks[i].lock;
-			arch_spin_unlock(l);
-#else
-			atomic_t *l = (void *)locks[i].lock;
-			atomic_set_release(l, 0);
-#endif
+            //struct bpf_spin_lock -> u32 -> struct qspinlock
+			bpf_qspinlock_unlock((struct qspinlock *)locks[i].lock);
+            // For every lock that is acquired enable preemption.
+            preempt_enable(); 
 			locks[i].lock = NULL;
 		}
 	}
@@ -367,12 +475,11 @@ void bpf_spin_lock_timeout_handler(void)
 	WRITE_ONCE(ebpf_spinlock_timeout, 0);
 
 	/* Terminate the BPF program */
-    bpf_throw(100);
+	bpf_throw(100);
 	//bpf_die(NULL);
 }
 EXPORT_SYMBOL_GPL(bpf_spin_lock_timeout_handler);
 
-#ifdef CONFIG_QUEUED_SPINLOCKS
 /*
  * Global kthread timer instance — used for the uncontended (fast-path) case
  * where no waiter is present to start the hrtimer.
@@ -386,7 +493,6 @@ static struct bpf_lock_timer bpf_kthread_timer;
 
 /* Declared in bpf_qspinlock.c / exported via EXPORT_PER_CPU_SYMBOL_GPL */
 DECLARE_PER_CPU(struct bpf_lock_timer *, bpf_active_timer);
-#endif /* CONFIG_QUEUED_SPINLOCKS */
 
 #if defined(CONFIG_QUEUED_SPINLOCKS) || defined(CONFIG_BPF_ARCH_SPINLOCK)
 
@@ -436,26 +542,22 @@ static inline void __bpf_spin_unlock(struct bpf_spin_lock *lock)
 
 static DEFINE_PER_CPU(unsigned long, irqsave_flags);
 
-extern int bpf_qspinlock_lock(struct qspinlock *lock, unsigned long *flags_out);
-
 static inline void __bpf_spin_lock_irqsave(struct bpf_spin_lock *lock)
 {
 	unsigned long flags;
 
-#ifdef CONFIG_QUEUED_SPINLOCKS
-	/*
-	 * Custom qspinlock path: acquires the lock with IRQs enabled so the
-	 * waiter's hrtimer can fire on this CPU, then disables IRQs after
-	 * acquisition.  Preemption is disabled before the qspinlock path so
-	 * we can safely use per-CPU resources.
-	 */
-	preempt_disable();
-	bpf_qspinlock_lock((struct qspinlock *)lock, &flags);
-#else
 	local_irq_save(flags);
 	__bpf_spin_lock(lock);
-#endif
 	__this_cpu_write(irqsave_flags, flags);
+}
+
+static inline void __bpf_spin_unlock_irqrestore(struct bpf_spin_lock *lock)
+{
+	unsigned long flags;
+
+	flags = __this_cpu_read(irqsave_flags);
+	__bpf_spin_unlock(lock);
+	local_irq_restore(flags);
 }
 
 NOTRACE_BPF_CALL_1(bpf_spin_lock, struct bpf_spin_lock *, lock)
@@ -463,7 +565,9 @@ NOTRACE_BPF_CALL_1(bpf_spin_lock, struct bpf_spin_lock *, lock)
 	struct bpf_lock_entry *locks;
 	int cnt;
 
-	__bpf_spin_lock_irqsave(lock);
+	preempt_disable();
+	bpf_qspinlock_lock((
+		struct qspinlock *)lock); // TODO: Change it to irqsave version.
 
 	/* Track the acquired lock */
 	locks = this_cpu_ptr(held_locks);
@@ -486,6 +590,7 @@ NOTRACE_BPF_CALL_1(bpf_spin_lock, struct bpf_spin_lock *, lock)
 			 *  - The kthread notified from bpf_qspinlock_lock fast
 			 *    path (uncontended case).
 			 */
+            this_cpu_write(bpf_undo_log_cnt, 0);
 			WRITE_ONCE(ebpf_spinlock_timeout, 0);
 		}
 	} else {
@@ -497,21 +602,12 @@ NOTRACE_BPF_CALL_1(bpf_spin_lock, struct bpf_spin_lock *, lock)
 }
 
 const struct bpf_func_proto bpf_spin_lock_proto = {
-	.func		= bpf_spin_lock,
-	.gpl_only	= false,
-	.ret_type	= RET_VOID,
-	.arg1_type	= ARG_PTR_TO_SPIN_LOCK,
-	.arg1_btf_id    = BPF_PTR_POISON,
+	.func = bpf_spin_lock,
+	.gpl_only = false,
+	.ret_type = RET_VOID,
+	.arg1_type = ARG_PTR_TO_SPIN_LOCK,
+	.arg1_btf_id = BPF_PTR_POISON,
 };
-
-static inline void __bpf_spin_unlock_irqrestore(struct bpf_spin_lock *lock)
-{
-	unsigned long flags;
-
-	flags = __this_cpu_read(irqsave_flags);
-	__bpf_spin_unlock(lock);
-	local_irq_restore(flags);
-}
 
 NOTRACE_BPF_CALL_1(bpf_spin_unlock, struct bpf_spin_lock *, lock)
 {
@@ -519,7 +615,8 @@ NOTRACE_BPF_CALL_1(bpf_spin_unlock, struct bpf_spin_lock *, lock)
 	int cnt, i;
 	bool found = false;
 
-	__bpf_spin_unlock_irqrestore(lock);
+	bpf_qspinlock_unlock(
+		(struct qspinlock *)lock); // TODO: Change it to irqsave version
 
 	/* Remove lock from tracking (handle OOO unlocking) */
 	locks = this_cpu_ptr(held_locks);
@@ -547,8 +644,7 @@ NOTRACE_BPF_CALL_1(bpf_spin_unlock, struct bpf_spin_lock *, lock)
 		 * from this critical section are not replayed on a future
 		 * timeout of an unrelated section.
 		 */
-
-#ifdef CONFIG_QUEUED_SPINLOCKS
+		this_cpu_write(bpf_undo_log_cnt, 0);
 		/*
 		 * Cancel whichever timer is active for this CPU's lock session.
 		 * This covers both the waiter-started hrtimer (set in
@@ -556,29 +652,30 @@ NOTRACE_BPF_CALL_1(bpf_spin_unlock, struct bpf_spin_lock *, lock)
 		 * bpf_notify_lock_kthread).  hrtimer_cancel() is safe cross-CPU.
 		 */
 		{
-			struct bpf_lock_timer *active = this_cpu_read(bpf_active_timer);
+			struct bpf_lock_timer *active =
+				this_cpu_read(bpf_active_timer);
 
 			if (active) {
 				//bpf_lock_timer_cancel(active);
 				this_cpu_write(bpf_active_timer, NULL);
 			}
 		}
-#endif
 		WRITE_ONCE(ebpf_spinlock_timeout, 0);
 	}
+
+	preempt_enable();
 
 	return 0;
 }
 
 const struct bpf_func_proto bpf_spin_unlock_proto = {
-	.func		= bpf_spin_unlock,
-	.gpl_only	= false,
-	.ret_type	= RET_VOID,
-	.arg1_type	= ARG_PTR_TO_SPIN_LOCK,
-	.arg1_btf_id    = BPF_PTR_POISON,
+	.func = bpf_spin_unlock,
+	.gpl_only = false,
+	.ret_type = RET_VOID,
+	.arg1_type = ARG_PTR_TO_SPIN_LOCK,
+	.arg1_btf_id = BPF_PTR_POISON,
 };
 
-#ifdef CONFIG_QUEUED_SPINLOCKS
 /* ---------------------------------------------------------------------- */
 /* Kthread for uncontended timeout                                          */
 /* ---------------------------------------------------------------------- */
@@ -606,60 +703,48 @@ void bpf_notify_lock_kthread(void)
 }
 EXPORT_SYMBOL_GPL(bpf_notify_lock_kthread);
 
-noinline bool thread_in_interrupt_context(void) {
-    return in_interrupt();
-}
-
-noinline bool thread_in_softirq_context(void) {
-    return in_softirq();
-}
-
-noinline bool thread_in_hardirq_context(void) {
-    return in_hardirq();
-}
-
-noinline bool thread_in_nmi_context(void) {
-    return in_nmi();
+//TODO: Remove noinline
+noinline void tell_bpf_loop_to_terminate(void)
+{
+	WRITE_ONCE(ebpf_spinlock_timeout, 1);
 }
 
 //TODO: Remove noinline
-noinline void tell_bpf_loop_to_terminate(void) {
-    WRITE_ONCE(ebpf_spinlock_timeout, 1);
-}
+noinline void bpf_lock_timeout_rdtsc(u64 timeout_ns)
+{
+	u64 end_time = ktime_get_mono_fast_ns() + timeout_ns;
+	int bpf_cpuid = bpf_kthread_timer.bpf_cpuid;
 
-//TODO: Remove noinline
-noinline void bpf_lock_timeout_rdtsc(u64 timeout_ns) {
-    u64 end_time = ktime_get_mono_fast_ns() + timeout_ns;
-    int bpf_cpuid = bpf_kthread_timer.bpf_cpuid;
+	while (true) {
+		if (ktime_get_mono_fast_ns() > end_time) {
+			tell_bpf_loop_to_terminate();
+			break;
+		}
 
-    while(true) {
-        if(ktime_get_mono_fast_ns() > end_time) {
-        	tell_bpf_loop_to_terminate();
-            break;
-        }
-        
-        if(per_cpu_ptr(&bpf_active_timer, bpf_cpuid) == NULL)
-            break;
+		if (per_cpu_ptr(&bpf_active_timer, bpf_cpuid) == NULL)
+			break;
 
-        cpu_relax(); 
-    }
+		cpu_relax();
+	}
 }
 
 static int bpf_lock_timeout_kthread_fn(void *data)
 {
 	while (!kthread_should_stop()) {
-		wait_event_interruptible(bpf_lock_timeout_wq,
-					 atomic_read(&bpf_lock_timeout_pending) ||
-					 kthread_should_stop());
+		wait_event_interruptible(
+			bpf_lock_timeout_wq,
+			atomic_read(&bpf_lock_timeout_pending) ||
+				kthread_should_stop());
 
 		if (kthread_should_stop())
 			break;
 
 		if (atomic_cmpxchg(&bpf_lock_timeout_pending, 1, 0) == 1) {
-			u64 timeout_ns = (u64)READ_ONCE(sysctl_bpf_spin_lock_timeout)
-					 * NSEC_PER_MSEC;
+			u64 timeout_ns =
+				(u64)READ_ONCE(sysctl_bpf_spin_lock_timeout) *
+				NSEC_PER_MSEC;
 			//bpf_lock_timer_start(&bpf_kthread_timer, timeout_ns);
-            bpf_lock_timeout_rdtsc(timeout_ns);
+			bpf_lock_timeout_rdtsc(timeout_ns);
 		}
 	}
 	return 0;
@@ -690,7 +775,6 @@ static int __init bpf_lock_kthread_init(void)
 	return 0;
 }
 late_initcall(bpf_lock_kthread_init);
-#endif /* CONFIG_QUEUED_SPINLOCKS */
 
 void copy_map_value_locked(struct bpf_map *map, void *dst, void *src,
 			   bool lock_src)
