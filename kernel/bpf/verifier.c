@@ -25298,6 +25298,8 @@ skip_full_check:
 		/* program is valid, convert *(u32*)(ctx + off) accesses */
 		ret = convert_ctx_accesses(env);
 
+	env->seen_exception = true;
+
 	if (ret == 0)
 		ret = do_misc_fixups(env);
 
