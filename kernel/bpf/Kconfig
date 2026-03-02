@@ -109,13 +109,13 @@ config BPF_UNDO_LOG_MAX_ENTRIES
 	help
 	  Sets the maximum number of memory write operations that can be
 	  tracked in the per-CPU undo log for a single BPF spinlock critical
-	  section (code between bpf_spin_lock and bpf_spin_unlock).
+	  section.
 
 	  Any BPF program whose critical section contains more write
 	  operations than this limit on any execution path will be rejected
 	  by the verifier at load time.
 
-	  On timeout (bpf_spin_lock_timeout_handler), all tracked writes are
+	  On timeout, all tracked writes are
 	  replayed in reverse to restore the original values before the locks
 	  are released.
 
