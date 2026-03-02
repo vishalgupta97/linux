@@ -30,6 +30,9 @@
 #include <linux/irq_work.h>
 #include <linux/buildid.h>
 #include <linux/hrtimer.h>
+#include <linux/bpf_lock_timer.h>
+#include <linux/kthread.h>
+#include <linux/wait.h>
 
 #include "../../lib/kstrtox.h"
 
@@ -289,21 +292,46 @@ struct bpf_lock_entry {
 #define MAX_HELD_LOCKS 32
 static DEFINE_PER_CPU(struct bpf_lock_entry[MAX_HELD_LOCKS], held_locks);
 static DEFINE_PER_CPU(int, held_locks_cnt);
-static DEFINE_PER_CPU(struct hrtimer, lock_watchdog_timer);
 int ebpf_spinlock_timeout;
 
 void bpf_throw(u64 cookie);
 
 /*
- * hrtimer callback: sets the timeout flag. The actual lock release
- * and program termination is handled in bpf_loop/bpf_for iterations.
+ * hrtimer backend ops for bpf_lock_timer.  Used by both the per-CPU waiter
+ * timers (bpf_qspinlock.c) and the global kthread timer (below).
  */
-static enum hrtimer_restart bpf_spin_lock_timer_cb(struct hrtimer *timer)
+static void bpf_hrtimer_start_fn(void *ctx, u64 timeout_ns)
+{
+	struct hrtimer *timer = ctx;
+
+	hrtimer_start(timer, ns_to_ktime(timeout_ns),
+		      HRTIMER_MODE_REL | HRTIMER_MODE_HARD);
+}
+
+static void bpf_hrtimer_cancel_fn(void *ctx)
+{
+	struct hrtimer *timer = ctx;
+
+	hrtimer_cancel(timer);
+}
+
+const struct bpf_lock_timer_ops bpf_hrtimer_ops = {
+	.start  = bpf_hrtimer_start_fn,
+	.cancel = bpf_hrtimer_cancel_fn,
+};
+EXPORT_SYMBOL_GPL(bpf_hrtimer_ops);
+
+/*
+ * hrtimer callback: sets the timeout flag.  The actual lock release and
+ * program termination is handled in bpf_loop/bpf_for iterations via
+ * bpf_spin_lock_timeout_handler().
+ */
+enum hrtimer_restart bpf_qspinlock_timer_cb(struct hrtimer *timer)
 {
 	WRITE_ONCE(ebpf_spinlock_timeout, 1);
-	printk(KERN_ALERT "hrtimer callback called\n");
 	return HRTIMER_NORESTART;
 }
+EXPORT_SYMBOL_GPL(bpf_qspinlock_timer_cb);
 
 /*
  * bpf_spin_lock_timeout_handler - release all held locks and terminate program.
@@ -338,12 +366,27 @@ void bpf_spin_lock_timeout_handler(void)
 	this_cpu_write(held_locks_cnt, 0);
 	WRITE_ONCE(ebpf_spinlock_timeout, 0);
 
-	printk(KERN_ALERT "bpf_spin_lock_timeout_handler: BPF program is terminated\n");
-
 	/* Terminate the BPF program */
-	bpf_die(NULL);
+    bpf_throw(100);
+	//bpf_die(NULL);
 }
 EXPORT_SYMBOL_GPL(bpf_spin_lock_timeout_handler);
+
+#ifdef CONFIG_QUEUED_SPINLOCKS
+/*
+ * Global kthread timer instance — used for the uncontended (fast-path) case
+ * where no waiter is present to start the hrtimer.
+ */
+static struct task_struct *bpf_lock_timeout_kthread;
+static DECLARE_WAIT_QUEUE_HEAD(bpf_lock_timeout_wq);
+static atomic_t bpf_lock_timeout_pending = ATOMIC_INIT(0);
+
+static struct hrtimer bpf_kthread_hrtimer;
+static struct bpf_lock_timer bpf_kthread_timer;
+
+/* Declared in bpf_qspinlock.c / exported via EXPORT_PER_CPU_SYMBOL_GPL */
+DECLARE_PER_CPU(struct bpf_lock_timer *, bpf_active_timer);
+#endif /* CONFIG_QUEUED_SPINLOCKS */
 
 #if defined(CONFIG_QUEUED_SPINLOCKS) || defined(CONFIG_BPF_ARCH_SPINLOCK)
 
@@ -393,12 +436,25 @@ static inline void __bpf_spin_unlock(struct bpf_spin_lock *lock)
 
 static DEFINE_PER_CPU(unsigned long, irqsave_flags);
 
+extern int bpf_qspinlock_lock(struct qspinlock *lock, unsigned long *flags_out);
+
 static inline void __bpf_spin_lock_irqsave(struct bpf_spin_lock *lock)
 {
 	unsigned long flags;
 
+#ifdef CONFIG_QUEUED_SPINLOCKS
+	/*
+	 * Custom qspinlock path: acquires the lock with IRQs enabled so the
+	 * waiter's hrtimer can fire on this CPU, then disables IRQs after
+	 * acquisition.  Preemption is disabled before the qspinlock path so
+	 * we can safely use per-CPU resources.
+	 */
+	preempt_disable();
+	bpf_qspinlock_lock((struct qspinlock *)lock, &flags);
+#else
 	local_irq_save(flags);
 	__bpf_spin_lock(lock);
+#endif
 	__this_cpu_write(irqsave_flags, flags);
 }
 
@@ -407,11 +463,7 @@ NOTRACE_BPF_CALL_1(bpf_spin_lock, struct bpf_spin_lock *, lock)
 	struct bpf_lock_entry *locks;
 	int cnt;
 
-	printk(KERN_ALERT "bpf_spin_lock helper called\n");
-
 	__bpf_spin_lock_irqsave(lock);
-
-	printk(KERN_ALERT "bpf_spin_lock lock acquired\n");
 
 	/* Track the acquired lock */
 	locks = this_cpu_ptr(held_locks);
@@ -424,26 +476,22 @@ NOTRACE_BPF_CALL_1(bpf_spin_lock, struct bpf_spin_lock *, lock)
 
 		printk(KERN_ALERT "bpf_spin_lock Held lock count: %d\n", cnt);
 
-		/* Start watchdog timer for outermost lock */
-		if (cnt == 1 && READ_ONCE(sysctl_bpf_spin_lock_timeout) > 0) {
-			struct hrtimer *timer = this_cpu_ptr(&lock_watchdog_timer);
-			ktime_t timeout_ms = ms_to_ktime(READ_ONCE(sysctl_bpf_spin_lock_timeout));
-
-			printk(KERN_ALERT "Setting hrtimer\n");
-
-			/* Reset timeout flag */
+		if (cnt == 1) {
+			/*
+			 * Outermost lock: reset the undo log for a clean slate
+			 * and reset the timeout flag.
+			 * The watchdog timer is already started by:
+			 *  - The waiter at the head of the MCS queue (contended
+			 *    case, started in bpf_qspinlock.c slow path), or
+			 *  - The kthread notified from bpf_qspinlock_lock fast
+			 *    path (uncontended case).
+			 */
 			WRITE_ONCE(ebpf_spinlock_timeout, 0);
-
-			hrtimer_setup(timer, bpf_spin_lock_timer_cb, CLOCK_MONOTONIC, HRTIMER_MODE_REL | HRTIMER_MODE_HARD);
-			hrtimer_start(timer, timeout_ms, HRTIMER_MODE_REL | HRTIMER_MODE_HARD);
-			printk(KERN_ALERT "hrtimer started\n");
 		}
 	} else {
 		/* Should not happen if verifier does its job */
 		WARN_ONCE(1, "BPF held lock count exceeded MAX_HELD_LOCKS\n");
 	}
-
-	printk(KERN_ALERT "bpf_spin_lock helper exiting\n");
 
 	return 0;
 }
@@ -471,11 +519,7 @@ NOTRACE_BPF_CALL_1(bpf_spin_unlock, struct bpf_spin_lock *, lock)
 	int cnt, i;
 	bool found = false;
 
-	printk(KERN_ALERT "bpf_spin_unlock helper called\n");
-
 	__bpf_spin_unlock_irqrestore(lock);
-
-	printk(KERN_ALERT "bpf_spin_unlock lock released\n");
 
 	/* Remove lock from tracking (handle OOO unlocking) */
 	locks = this_cpu_ptr(held_locks);
@@ -491,27 +535,38 @@ NOTRACE_BPF_CALL_1(bpf_spin_unlock, struct bpf_spin_lock *, lock)
 			locks[cnt - 1].lock = NULL;
 			this_cpu_dec(held_locks_cnt);
 			found = true;
-			printk(KERN_ALERT "bpf_spin_unlock held lock released\n");
 			break;
 		}
 	}
 
-	printk(KERN_ALERT "bpf_spin_unlock found: %d held_lock_count: %d\n", found, this_cpu_read(held_locks_cnt));
-
-	/* Cancel watchdog timer if this was the last lock */
+	/* Cancel the active timer and clear undo log when last lock is released */
 	if (found && this_cpu_read(held_locks_cnt) == 0) {
-		if (READ_ONCE(sysctl_bpf_spin_lock_timeout) > 0) {
-			struct hrtimer *timer = this_cpu_ptr(&lock_watchdog_timer);
-			hrtimer_cancel(timer);
-			/* Reset timeout flag */
-			WRITE_ONCE(ebpf_spinlock_timeout, 0);
-			printk(KERN_ALERT "bpf_spin_unlock outermost lock cancelling hrtimer\n");
-		} else {
-			printk(KERN_ALERT "bpf_spin_unlock sysctl_spin_lock_timeout not set\n");
+		/*
+		 * Normal (non-timeout) release of the last lock: all writes
+		 * committed successfully.  Clear the undo log so the entries
+		 * from this critical section are not replayed on a future
+		 * timeout of an unrelated section.
+		 */
+
+#ifdef CONFIG_QUEUED_SPINLOCKS
+		/*
+		 * Cancel whichever timer is active for this CPU's lock session.
+		 * This covers both the waiter-started hrtimer (set in
+		 * bpf_qspinlock.c) and the kthread-started hrtimer (set by
+		 * bpf_notify_lock_kthread).  hrtimer_cancel() is safe cross-CPU.
+		 */
+		{
+			struct bpf_lock_timer *active = this_cpu_read(bpf_active_timer);
+
+			if (active) {
+				//bpf_lock_timer_cancel(active);
+				this_cpu_write(bpf_active_timer, NULL);
+			}
 		}
+#endif
+		WRITE_ONCE(ebpf_spinlock_timeout, 0);
 	}
 
-	printk(KERN_ALERT "bpf_spin_unlock helper exiting\n");
 	return 0;
 }
 
@@ -522,6 +577,120 @@ const struct bpf_func_proto bpf_spin_unlock_proto = {
 	.arg1_type	= ARG_PTR_TO_SPIN_LOCK,
 	.arg1_btf_id    = BPF_PTR_POISON,
 };
+
+#ifdef CONFIG_QUEUED_SPINLOCKS
+/* ---------------------------------------------------------------------- */
+/* Kthread for uncontended timeout                                          */
+/* ---------------------------------------------------------------------- */
+
+/**
+ * bpf_notify_lock_kthread - notify the watchdog kthread to start a timer.
+ *
+ * Called from bpf_qspinlock_lock() when the lock is acquired via the
+ * uncontended fast path (no waiter was present to start the hrtimer).
+ * Records that the kthread's timer instance is the active timer for this
+ * CPU's lock session, then wakes the kthread.
+ */
+void bpf_notify_lock_kthread(void)
+{
+	if (READ_ONCE(sysctl_bpf_spin_lock_timeout) <= 0)
+		return;
+
+	/* Record kthread's global timer as the active timer for this CPU */
+    bpf_kthread_timer.bpf_cpuid = smp_processor_id(); 
+	this_cpu_write(bpf_active_timer, &bpf_kthread_timer);
+
+	/* One-way notification: set pending flag and wake the kthread */
+	atomic_set(&bpf_lock_timeout_pending, 1);
+	wake_up(&bpf_lock_timeout_wq);
+}
+EXPORT_SYMBOL_GPL(bpf_notify_lock_kthread);
+
+noinline bool thread_in_interrupt_context(void) {
+    return in_interrupt();
+}
+
+noinline bool thread_in_softirq_context(void) {
+    return in_softirq();
+}
+
+noinline bool thread_in_hardirq_context(void) {
+    return in_hardirq();
+}
+
+noinline bool thread_in_nmi_context(void) {
+    return in_nmi();
+}
+
+//TODO: Remove noinline
+noinline void tell_bpf_loop_to_terminate(void) {
+    WRITE_ONCE(ebpf_spinlock_timeout, 1);
+}
+
+//TODO: Remove noinline
+noinline void bpf_lock_timeout_rdtsc(u64 timeout_ns) {
+    u64 end_time = ktime_get_mono_fast_ns() + timeout_ns;
+    int bpf_cpuid = bpf_kthread_timer.bpf_cpuid;
+
+    while(true) {
+        if(ktime_get_mono_fast_ns() > end_time) {
+        	tell_bpf_loop_to_terminate();
+            break;
+        }
+        
+        if(per_cpu_ptr(&bpf_active_timer, bpf_cpuid) == NULL)
+            break;
+
+        cpu_relax(); 
+    }
+}
+
+static int bpf_lock_timeout_kthread_fn(void *data)
+{
+	while (!kthread_should_stop()) {
+		wait_event_interruptible(bpf_lock_timeout_wq,
+					 atomic_read(&bpf_lock_timeout_pending) ||
+					 kthread_should_stop());
+
+		if (kthread_should_stop())
+			break;
+
+		if (atomic_cmpxchg(&bpf_lock_timeout_pending, 1, 0) == 1) {
+			u64 timeout_ns = (u64)READ_ONCE(sysctl_bpf_spin_lock_timeout)
+					 * NSEC_PER_MSEC;
+			//bpf_lock_timer_start(&bpf_kthread_timer, timeout_ns);
+            bpf_lock_timeout_rdtsc(timeout_ns);
+		}
+	}
+	return 0;
+}
+
+extern void __init bpf_qspinlock_init_timers(void);
+
+static int __init bpf_lock_kthread_init(void)
+{
+	/* Initialise the kthread's own hrtimer instance */
+	hrtimer_setup(&bpf_kthread_hrtimer, bpf_qspinlock_timer_cb,
+		      CLOCK_MONOTONIC, HRTIMER_MODE_REL | HRTIMER_MODE_HARD);
+	bpf_kthread_timer.ops = &bpf_hrtimer_ops;
+	bpf_kthread_timer.ctx = &bpf_kthread_hrtimer;
+
+	/* Initialise per-CPU waiter timers in bpf_qspinlock.c */
+	bpf_qspinlock_init_timers();
+
+	/* Start the watchdog kthread */
+	bpf_lock_timeout_kthread = kthread_run(bpf_lock_timeout_kthread_fn,
+					       NULL, "bpf_lock_wd");
+	if (IS_ERR(bpf_lock_timeout_kthread)) {
+		pr_err("BPF: Failed to create bpf_lock_wd kthread: %ld\n",
+		       PTR_ERR(bpf_lock_timeout_kthread));
+		bpf_lock_timeout_kthread = NULL;
+		return PTR_ERR(bpf_lock_timeout_kthread);
+	}
+	return 0;
+}
+late_initcall(bpf_lock_kthread_init);
+#endif /* CONFIG_QUEUED_SPINLOCKS */
 
 void copy_map_value_locked(struct bpf_map *map, void *dst, void *src,
 			   bool lock_src)
@@ -3278,8 +3447,10 @@ static bool bpf_stack_walker(void *cookie, u64 ip, u64 sp, u64 bp)
 	rcu_read_lock();
 	prog = bpf_prog_ksym_find(ip);
 	rcu_read_unlock();
+
+	//Modified to support callbacks. TODO: Check if kernel frames can come in between BPF programs.
 	if (!prog)
-		return !ctx->cnt;
+		return true;
 	ctx->cnt++;
 	if (bpf_is_subprog(prog))
 		return true;
