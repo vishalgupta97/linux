@@ -1,0 +1,17 @@
+[ 1172.968842] rcuhashbash starting threads
+[ 1179.017256] perf: interrupt took too long (6393 > 6290), lowering kernel.perf_event_max_sample_rate to 31250
+[ 1183.009616] rcuhashbash exiting threads
+[ 1183.044925] ======== KOMB spinlock stats ========
+[ 1183.046120] Combiner_count: 0
+[ 1183.046930] waiter_combined: 0
+[ 1183.047615] ooo_unlocks: 0
+[ 1183.047950] ooo_combiner_count: 0
+[ 1183.048344] ooo_waiter_combined: 0
+[ 1183.048772] rcuhashbash summary: (up: 17748102 down: 17776847)
+[ 1183.049519] rcuhashbash summary: ro=0 rw=48 reader_type=table_aqs writer_type=table_aqs
+               rcuhashbash summary: writer proportion 100/100
+               rcuhashbash summary: buckets=1024 entries=1024 reader_range=2048 writer_range=2048
+               rcuhashbash summary: writes: 35524949 moves, 0 dests in use, 0 misses (35524949)
+               rcuhashbash summary: reads: 0 hits, 0 misses (0)
+               rcuhashbash summary: total: 35524949 (avg: 10031055345 min: 10019989990 max: 10040219300)
+[ 1183.057165] rcuhashbash done
