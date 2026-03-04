@@ -104,7 +104,7 @@ struct rcuhashbash_ops {
 struct rcuhashbash_entry {
 		struct hlist_node node;
 		struct rcu_head rcu_head;
-		u32 value;
+		u64 value;
 };
 
 static struct rcuhashbash_ops *ops;
@@ -176,7 +176,42 @@ static int rcuhashbash_read_lock(u32 value, struct stats *stats)
 }
 
 #if USE_UNDO_LOG
-DEFINE_PER_CPU(u32*, undo_log);
+DEFINE_PER_CPU(u64*, undo_log);
+#endif
+
+#if USE_UNDO_LOG
+#if USE_UNDO_LOG_STORE
+static inline void bring_modified_and_store(struct rcuhashbash_entry *entry, int i)
+{
+    typeof((*this_cpu_ptr(&undo_log))[i]) *dst;
+    typeof(entry->value) val;
+
+    /* Resolve per-CPU destination outside the asm block */
+    dst = &(*this_cpu_ptr(&undo_log))[i];
+
+    asm volatile(
+        /* Instruction 1:
+         * Add 0 directly to entry->value in MEMORY.
+         * This is a read-modify-write on entry->value's cache line,
+         * forcing it into MESI Modified state on this CPU's cache. */
+        "addq $0, %[src]\n\t"
+
+        /* Instruction 2:
+         * Load the (now Modified) entry->value from memory into a register. */
+        "movq %[src], %[tmp]\n\t"
+
+        /* Instruction 3:
+         * Store the value to the per-CPU target location. */
+        "movq %[tmp], %[dst]\n\t"
+
+        : [src] "+m" (entry->value),   /* read-write memory: entry->value (modified in-place) */
+          [dst] "=m" (*dst),           /* write-only memory: per-CPU target location */
+          [tmp] "=&r" (val)            /* early-clobber register: scratch for the transfer */
+        :                              /* no pure inputs; [src] already a "+m" read-write */
+        : "cc"                         /* addq modifies FLAGS */
+    );
+}
+#endif
 #endif
 
 static int rcuhashbash_write_lock(u32 src_value, u32 dst_value, struct stats *stats)
@@ -193,7 +228,9 @@ static int rcuhashbash_write_lock(u32 src_value, u32 dst_value, struct stats *st
 
 		hlist_for_each_entry (entry, &hash_table[src_bucket].head, node) {
 #if USE_UNDO_LOG
-#if USE_UNDO_LOG_PREFETCH
+#if USE_UNDO_LOG_STORE
+                bring_modified_and_store(entry, i);
+#elif USE_UNDO_LOG_PREFETCH
                 prefetchw(&(entry->value));
 				(*this_cpu_ptr(&undo_log))[i] = entry->value;
 #elif USE_UNDO_LOG_ATOMIC

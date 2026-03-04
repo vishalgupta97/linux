@@ -1,7 +1,7 @@
 source defaults.sh
 
 locks=(table_spinlock table_aqs table_cna)
-binaries=(withundologprefetch) #withundologatomic) #withundolog baseline)
+binaries=(withundologstore) #withundologprefetch) #withundologatomic) #withundolog baseline)
 
 lock_type=spinlock
 
