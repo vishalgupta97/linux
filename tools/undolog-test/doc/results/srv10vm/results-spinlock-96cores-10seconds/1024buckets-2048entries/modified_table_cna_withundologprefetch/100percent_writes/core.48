@@ -1,16 +1,16 @@
-[ 1649.984960] rcuhashbash starting threads
-[ 1660.031927] rcuhashbash exiting threads
-[ 1660.073405] ======== KOMB spinlock stats ========
-[ 1660.074715] Combiner_count: 0
-[ 1660.075473] waiter_combined: 0
-[ 1660.076260] ooo_unlocks: 0
-[ 1660.076939] ooo_combiner_count: 0
-[ 1660.077867] ooo_waiter_combined: 0
-[ 1660.078619] rcuhashbash summary: (up: 35486060 down: 35545722)
-[ 1660.079646] rcuhashbash summary: ro=0 rw=48 reader_type=table_cna writer_type=table_cna
+[10787.942284] rcuhashbash starting threads
+[10797.992152] rcuhashbash exiting threads
+[10798.034604] ======== KOMB spinlock stats ========
+[10798.036180] Combiner_count: 0
+[10798.037585] waiter_combined: 0
+[10798.038063] ooo_unlocks: 0
+[10798.038788] ooo_combiner_count: 0
+[10798.039230] ooo_waiter_combined: 0
+[10798.039924] rcuhashbash summary: (up: 35981698 down: 36047496)
+[10798.041364] rcuhashbash summary: ro=0 rw=48 reader_type=table_cna writer_type=table_cna
                rcuhashbash summary: writer proportion 100/100
                rcuhashbash summary: buckets=1024 entries=2048 reader_range=4096 writer_range=4096
-               rcuhashbash summary: writes: 71031782 moves, 0 dests in use, 0 misses (71031782)
+               rcuhashbash summary: writes: 72029194 moves, 0 dests in use, 0 misses (72029194)
                rcuhashbash summary: reads: 0 hits, 0 misses (0)
-               rcuhashbash summary: total: 71031782 (avg: 10033984676 min: 10020052624 max: 10046319049)
-[ 1660.087145] rcuhashbash done
+               rcuhashbash summary: total: 72029194 (avg: 10035582818 min: 10020611245 max: 10048985289)
+[10798.050459] rcuhashbash done
