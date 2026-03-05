@@ -193,7 +193,7 @@ int bpf_queued_spin_lock_slowpath(struct qspinlock *lock, u32 val,
 	 * Lock acquired.  Disable IRQs now.  The timer (if started) keeps
 	 * running — it will be cancelled by bpf_spin_unlock via bpf_active_timer.
 	 */
-	local_irq_save(*flags_out);
+	local_irq_save(*flags_out); //TODO: Fix this. Cancel timer here only.
 	clear_pending_set_locked(lock);
 	return 0;
 
@@ -210,7 +210,7 @@ queue:
 		node->count--;
 		while (!queued_spin_trylock(lock))
 			cpu_relax();
-		local_irq_save(*flags_out);
+		local_irq_save(*flags_out); //TODO: Move this to the parent function.
 		return 0;
 	}
 
@@ -231,7 +231,7 @@ queue:
 	 */
 	if (queued_spin_trylock(lock)) {
 		__this_cpu_dec(bpf_qnodes[0].mcs.count);
-		local_irq_save(*flags_out);
+		local_irq_save(*flags_out); // TODO: Move this to parent.
 		return 0;
 	}
 
@@ -291,7 +291,7 @@ queue:
 	 * Lock acquired.  Disable IRQs now.  The timer (if started) keeps
 	 * running — it will be cancelled by bpf_spin_unlock via bpf_active_timer.
 	 */
-	local_irq_save(*flags_out);
+	local_irq_save(*flags_out); //TODO: Move this to parent.
 
 	/*
 	 * Claim the lock:
