@@ -367,7 +367,8 @@ void bpf_spin_lock_timeout_handler(void)
 	WRITE_ONCE(ebpf_spinlock_timeout, 0);
 
 	/* Terminate the BPF program */
-	bpf_die(NULL);
+    bpf_throw(100);
+	//bpf_die(NULL);
 }
 EXPORT_SYMBOL_GPL(bpf_spin_lock_timeout_handler);
 
@@ -3375,8 +3376,10 @@ static bool bpf_stack_walker(void *cookie, u64 ip, u64 sp, u64 bp)
 	rcu_read_lock();
 	prog = bpf_prog_ksym_find(ip);
 	rcu_read_unlock();
+
+	//Modified to support callbacks. TODO: Check if kernel frames can come in between BPF programs.
 	if (!prog)
-		return !ctx->cnt;
+		return true;
 	ctx->cnt++;
 	if (bpf_is_subprog(prog))
 		return true;
