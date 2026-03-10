@@ -91,7 +91,7 @@ int test_timeout_trigger(struct __sk_buff *ctx)
 
 	sum++;
 
-	//while(can_loop);
+	while(can_loop);
 	
 	bpf_spin_unlock(&a->lock);
 

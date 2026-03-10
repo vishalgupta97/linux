@@ -294,6 +294,8 @@ static DEFINE_PER_CPU(struct bpf_lock_entry[MAX_HELD_LOCKS], held_locks);
 static DEFINE_PER_CPU(int, held_locks_cnt);
 int ebpf_spinlock_timeout;
 
+void bpf_throw(u64 cookie);
+
 /*
  * Per-CPU undo log: records old values of memory locations written inside
  * a bpf_spin_lock critical section so that bpf_spin_lock_timeout_handler()
@@ -711,22 +713,6 @@ void bpf_notify_lock_kthread(void)
 	wake_up(&bpf_lock_timeout_wq);
 }
 EXPORT_SYMBOL_GPL(bpf_notify_lock_kthread);
-
-noinline bool thread_in_interrupt_context(void) {
-    return in_interrupt();
-}
-
-noinline bool thread_in_softirq_context(void) {
-    return in_softirq();
-}
-
-noinline bool thread_in_hardirq_context(void) {
-    return in_hardirq();
-}
-
-noinline bool thread_in_nmi_context(void) {
-    return in_nmi();
-}
 
 //TODO: Remove noinline
 noinline void tell_bpf_loop_to_terminate(void) {

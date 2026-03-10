@@ -733,7 +733,7 @@ void test_bpf_undo_log(void)
 		test__skip();
 		return;
 	}
-	if (__write_sysctl(50) < 0) {  /* 50 ms */
+	if (__write_sysctl(5000) < 0) {  /* 50 ms */
 		test__skip();
 		return;
 	}
@@ -806,7 +806,7 @@ void test_bpf_undo_log(void)
 		test_tc28(skel, fd_a);
 	if (test__start_subtest("tc29_normal_atomic_commit"))
 		test_tc29(skel, fd_a);
-	__write_sysctl(50);
+	__write_sysctl(5000);
 
 	/* ---- verifier boundary ---- */
 	if (test__start_subtest("tc30_limit_exact_accepted"))

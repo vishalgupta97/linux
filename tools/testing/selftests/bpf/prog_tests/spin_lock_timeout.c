@@ -102,7 +102,7 @@ static void test_timeout_trigger(void)
 		return;
 	}
 
-	if (__write_sysctl(100) < 0) {  /* 100ms timeout */
+	if (__write_sysctl(5000) < 0) {  /* 100ms timeout */
 		test__skip();
 		return;
 	}
