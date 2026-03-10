@@ -558,7 +558,7 @@ NOTRACE_BPF_CALL_1(bpf_spin_unlock, struct bpf_spin_lock *, lock)
 			struct bpf_lock_timer *active = this_cpu_read(bpf_active_timer);
 
 			if (active) {
-				bpf_lock_timer_cancel(active);
+				//bpf_lock_timer_cancel(active);
 				this_cpu_write(bpf_active_timer, NULL);
 			}
 		}
@@ -596,6 +596,7 @@ void bpf_notify_lock_kthread(void)
 		return;
 
 	/* Record kthread's global timer as the active timer for this CPU */
+    bpf_kthread_timer.bpf_cpuid = smp_processor_id(); 
 	this_cpu_write(bpf_active_timer, &bpf_kthread_timer);
 
 	/* One-way notification: set pending flag and wake the kthread */
@@ -603,6 +604,45 @@ void bpf_notify_lock_kthread(void)
 	wake_up(&bpf_lock_timeout_wq);
 }
 EXPORT_SYMBOL_GPL(bpf_notify_lock_kthread);
+
+noinline bool thread_in_interrupt_context(void) {
+    return in_interrupt();
+}
+
+noinline bool thread_in_softirq_context(void) {
+    return in_softirq();
+}
+
+noinline bool thread_in_hardirq_context(void) {
+    return in_hardirq();
+}
+
+noinline bool thread_in_nmi_context(void) {
+    return in_nmi();
+}
+
+//TODO: Remove noinline
+noinline void tell_bpf_loop_to_terminate(void) {
+    WRITE_ONCE(ebpf_spinlock_timeout, 1);
+}
+
+//TODO: Remove noinline
+noinline void bpf_lock_timeout_rdtsc(u64 timeout_ns) {
+    u64 end_time = ktime_get_mono_fast_ns() + timeout_ns;
+    int bpf_cpuid = bpf_kthread_timer.bpf_cpuid;
+
+    while(true) {
+        if(ktime_get_mono_fast_ns() > end_time) {
+        	tell_bpf_loop_to_terminate();
+            break;
+        }
+        
+        if(per_cpu_ptr(&bpf_active_timer, bpf_cpuid) == NULL)
+            break;
+
+        cpu_relax(); 
+    }
+}
 
 static int bpf_lock_timeout_kthread_fn(void *data)
 {
@@ -617,7 +657,8 @@ static int bpf_lock_timeout_kthread_fn(void *data)
 		if (atomic_cmpxchg(&bpf_lock_timeout_pending, 1, 0) == 1) {
 			u64 timeout_ns = (u64)READ_ONCE(sysctl_bpf_spin_lock_timeout)
 					 * NSEC_PER_MSEC;
-			bpf_lock_timer_start(&bpf_kthread_timer, timeout_ns);
+			//bpf_lock_timer_start(&bpf_kthread_timer, timeout_ns);
+            bpf_lock_timeout_rdtsc(timeout_ns);
 		}
 	}
 	return 0;

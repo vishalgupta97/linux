@@ -24,6 +24,7 @@ struct bpf_lock_timer_ops {
 struct bpf_lock_timer {
 	const struct bpf_lock_timer_ops *ops;
 	void *ctx;
+    int bpf_cpuid;
 };
 
 static inline void bpf_lock_timer_start(struct bpf_lock_timer *t, u64 timeout_ns)
