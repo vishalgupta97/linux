@@ -126,7 +126,7 @@ void test_minimal_bpf_undo_log(void)
 		test__skip();
 		return;
 	}
-	if (__write_sysctl(50) < 0) {  /* 50 ms */
+	if (__write_sysctl(5000) < 0) {  /* 50 ms */
 		test__skip();
 		return;
 	}
