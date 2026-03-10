@@ -594,6 +594,7 @@ NOTRACE_BPF_CALL_1(bpf_spin_lock, struct bpf_spin_lock *, lock)
 			 *  - The kthread notified from bpf_qspinlock_lock fast
 			 *    path (uncontended case).
 			 */
+            this_cpu_write(bpf_undo_log_cnt, 0);
 			WRITE_ONCE(ebpf_spinlock_timeout, 0);
 		}
 	} else {
@@ -655,7 +656,7 @@ NOTRACE_BPF_CALL_1(bpf_spin_unlock, struct bpf_spin_lock *, lock)
 		 * from this critical section are not replayed on a future
 		 * timeout of an unrelated section.
 		 */
-
+        this_cpu_write(bpf_undo_log_cnt, 0);
 #ifdef CONFIG_QUEUED_SPINLOCKS
 		/*
 		 * Cancel whichever timer is active for this CPU's lock session.
