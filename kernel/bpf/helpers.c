@@ -31,6 +31,7 @@
 #include <linux/buildid.h>
 #include <linux/hrtimer.h>
 #include <linux/bpf_lock_timer.h>
+#include <linux/bpf_qspinlock.h>
 #include <linux/kthread.h>
 #include <linux/wait.h>
 
@@ -286,7 +287,7 @@ const struct bpf_func_proto bpf_get_current_comm_proto = {
 };
 
 struct bpf_lock_entry {
-	struct bpf_spin_lock *lock;
+	struct qspinlock *lock;
 };
 
 #define MAX_HELD_LOCKS 32
@@ -450,7 +451,7 @@ void bpf_spin_lock_timeout_handler(void)
 	locks = this_cpu_ptr(held_locks);
 	cnt = this_cpu_read(held_locks_cnt);
 
-	printk(KERN_ALERT "Timeout handler is called\n");
+	//printk(KERN_ALERT "Timeout handler is called\n");
 
 	/*
 	 * Replay the undo log in reverse to restore all writes made inside
@@ -560,14 +561,13 @@ static inline void __bpf_spin_unlock_irqrestore(struct bpf_spin_lock *lock)
 	local_irq_restore(flags);
 }
 
-NOTRACE_BPF_CALL_1(bpf_spin_lock, struct bpf_spin_lock *, lock)
+noinline void __internal__bpf_spin_lock(struct qspinlock *lock)
 {
 	struct bpf_lock_entry *locks;
 	int cnt;
 
 	preempt_disable();
-	bpf_qspinlock_lock((
-		struct qspinlock *)lock); // TODO: Change it to irqsave version.
+	bpf_qspinlock_lock(lock); // TODO: Change it to irqsave version.
 
 	/* Track the acquired lock */
 	locks = this_cpu_ptr(held_locks);
@@ -578,7 +578,7 @@ NOTRACE_BPF_CALL_1(bpf_spin_lock, struct bpf_spin_lock *, lock)
 		this_cpu_inc(held_locks_cnt);
 		cnt++;
 
-		printk(KERN_ALERT "bpf_spin_lock Held lock count: %d\n", cnt);
+		//printk(KERN_ALERT "bpf_spin_lock Held lock count: %d\n", cnt);
 
 		if (cnt == 1) {
 			/*
@@ -597,7 +597,12 @@ NOTRACE_BPF_CALL_1(bpf_spin_lock, struct bpf_spin_lock *, lock)
 		/* Should not happen if verifier does its job */
 		WARN_ONCE(1, "BPF held lock count exceeded MAX_HELD_LOCKS\n");
 	}
+}
+EXPORT_SYMBOL_GPL(__internal__bpf_spin_lock);
 
+NOTRACE_BPF_CALL_1(bpf_spin_lock, struct bpf_spin_lock *, lock)
+{
+    __internal__bpf_spin_lock((struct qspinlock*)lock);
 	return 0;
 }
 
@@ -609,14 +614,13 @@ const struct bpf_func_proto bpf_spin_lock_proto = {
 	.arg1_btf_id = BPF_PTR_POISON,
 };
 
-NOTRACE_BPF_CALL_1(bpf_spin_unlock, struct bpf_spin_lock *, lock)
+noinline void __internal__bpf_spin_unlock(struct qspinlock *lock)
 {
 	struct bpf_lock_entry *locks;
 	int cnt, i;
 	bool found = false;
 
-	bpf_qspinlock_unlock(
-		(struct qspinlock *)lock); // TODO: Change it to irqsave version
+	bpf_qspinlock_unlock(lock); // TODO: Change it to irqsave version
 
 	/* Remove lock from tracking (handle OOO unlocking) */
 	locks = this_cpu_ptr(held_locks);
@@ -664,7 +668,12 @@ NOTRACE_BPF_CALL_1(bpf_spin_unlock, struct bpf_spin_lock *, lock)
 	}
 
 	preempt_enable();
+}
+EXPORT_SYMBOL_GPL(__internal__bpf_spin_unlock);
 
+NOTRACE_BPF_CALL_1(bpf_spin_unlock, struct bpf_spin_lock *, lock)
+{
+    __internal__bpf_spin_unlock((struct qspinlock *)lock);
 	return 0;
 }
 

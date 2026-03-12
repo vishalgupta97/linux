@@ -16,7 +16,6 @@
  */
 
 #include <linux/smp.h>
-#include <linux/bug.h>
 #include <linux/bpf.h>
 #include <linux/cpumask.h>
 #include <linux/percpu.h>
@@ -30,6 +29,8 @@
 
 #include "../locking/qspinlock.h"
 #include "../locking/mcs_spinlock.h"
+
+#include <linux/bpf_qspinlock.h>
 
 /*
  * Separate per-CPU MCS queue nodes for BPF — must not share nodes with the
@@ -113,7 +114,7 @@ extern void tell_bpf_loop_to_terminate(void);
  *
  * Preemption MUST already be disabled by the caller.
  */
-void bpf_queued_spin_lock_slowpath(struct qspinlock *lock, u32 val)
+static void bpf_queued_spin_lock_slowpath(struct qspinlock *lock, u32 val)
 {
 	struct mcs_spinlock *prev, *next, *node;
 	struct bpf_lock_timer *lt;
@@ -332,7 +333,6 @@ queue:
 release:
 	__this_cpu_dec(bpf_qnodes[0].mcs.count);
 }
-EXPORT_SYMBOL_GPL(bpf_queued_spin_lock_slowpath);
 
 /* ---------------------------------------------------------------------- */
 /* Top-level wrapper                                                        */
