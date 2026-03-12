@@ -1,0 +1,13 @@
+build
+*.o
+*.ko
+*.cmd
+*.mod
+modules.order
+*/*.o
+*/*.cmd
+send-ioctl
+*.btf
+*/*.skel.h
+*/vmlinux.h
+ebpf/loader
