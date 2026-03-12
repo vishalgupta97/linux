@@ -1,0 +1,16 @@
+[13350.585529] rcuhashbash starting threads
+[13360.647499] rcuhashbash exiting threads
+[13360.712724] ======== KOMB spinlock stats ========
+[13360.714117] Combiner_count: 0
+[13360.715013] waiter_combined: 0
+[13360.715498] ooo_unlocks: 0
+[13360.715900] ooo_combiner_count: 0
+[13360.716291] ooo_waiter_combined: 0
+[13360.716813] rcuhashbash summary: (up: 27187134 down: 27279624)
+[13360.718008] rcuhashbash summary: ro=0 rw=72 reader_type=table_cna writer_type=table_cna
+               rcuhashbash summary: writer proportion 100/100
+               rcuhashbash summary: buckets=1024 entries=6144 reader_range=12288 writer_range=12288
+               rcuhashbash summary: writes: 54466758 moves, 0 dests in use, 0 misses (54466758)
+               rcuhashbash summary: reads: 0 hits, 0 misses (0)
+               rcuhashbash summary: total: 54466758 (avg: 10042752173 min: 10020720460 max: 10061811765)
+[13360.723982] rcuhashbash done
