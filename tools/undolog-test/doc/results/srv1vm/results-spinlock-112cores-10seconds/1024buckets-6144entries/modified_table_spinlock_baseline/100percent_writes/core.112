@@ -1,17 +1,16 @@
-[ 1451.202318] rcuhashbash starting threads
-[ 1453.405229] workqueue: page_reporting_process hogged CPU for >10000us 7 times, consider switching to WQ_UNBOUND
-[ 1461.310442] rcuhashbash exiting threads
-[ 1461.397944] ======== KOMB spinlock stats ========
-[ 1461.398511] Combiner_count: 0
-[ 1461.398923] waiter_combined: 0
-[ 1461.399198] ooo_unlocks: 0
-[ 1461.399448] ooo_combiner_count: 0
-[ 1461.399706] ooo_waiter_combined: 0
-[ 1461.399996] rcuhashbash summary: (up: 21083850 down: 22023492)
-[ 1461.400231] rcuhashbash summary: ro=0 rw=112 reader_type=table_spinlock writer_type=table_spinlock
+[  634.150717] rcuhashbash starting threads
+[  644.222170] rcuhashbash exiting threads
+[  644.319751] ======== KOMB spinlock stats ========
+[  644.321148] Combiner_count: 0
+[  644.322046] waiter_combined: 0
+[  644.323110] ooo_unlocks: 0
+[  644.324210] ooo_combiner_count: 0
+[  644.325361] ooo_waiter_combined: 0
+[  644.326404] rcuhashbash summary: (up: 17689386 down: 21538026)
+[  644.328100] rcuhashbash summary: ro=0 rw=112 reader_type=table_spinlock writer_type=table_spinlock
                rcuhashbash summary: writer proportion 100/100
                rcuhashbash summary: buckets=1024 entries=6144 reader_range=12288 writer_range=12288
-               rcuhashbash summary: writes: 43107342 moves, 0 dests in use, 0 misses (43107342)
+               rcuhashbash summary: writes: 39227412 moves, 0 dests in use, 0 misses (39227412)
                rcuhashbash summary: reads: 0 hits, 0 misses (0)
-               rcuhashbash summary: total: 43107342 (avg: 10126956225 min: 10108112643 max: 10134753830)
-[ 1461.401812] rcuhashbash done
+               rcuhashbash summary: total: 39227412 (avg: 10107676875 min: 10071613752 max: 10116249862)
+[  644.336246] rcuhashbash done
