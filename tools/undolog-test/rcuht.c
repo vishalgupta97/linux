@@ -13,6 +13,8 @@
 #include "spinlock/cna.h"
 #include "spinlock/komb.h"
 
+#include "linux/bpf_qspinlock.h"
+
 #define RCU_RANDOM_MULT 39916801 /* prime */
 #define RCU_RANDOM_ADD 479001701 /* prime */
 #define RCU_RANDOM_REFRESH 10000
@@ -110,6 +112,8 @@ struct rcuhashbash_entry {
 static struct rcuhashbash_ops *ops;
 
 DECLARE_TABLE_LOCK(table_spinlock, DEFINE_SPINLOCK, spin_lock, spin_unlock, spin_lock, spin_unlock);
+
+DECLARE_TABLE_LOCK(table_bpf_qspinlock, DEFINE_KOMBSPINLOCK, __internal__bpf_spin_lock, __internal__bpf_spin_unlock, __internal__bpf_spin_lock, __internal__bpf_spin_unlock);
 
 DECLARE_TABLE_LOCK(table_komb, DEFINE_KOMBSPINLOCK, komb_spin_lock, komb_spin_unlock,
 				   komb_spin_lock, komb_spin_unlock);
@@ -612,6 +616,16 @@ static struct rcuhashbash_ops all_ops[] = {
 				.write = rcuhashbash_write_lock,
 				.write_lock_buckets = table_komb_write_lock_buckets,
 				.write_unlock_buckets = table_komb_write_unlock_buckets,
+		},
+		{
+				.reader_type = "table_bpf_qspinlock",
+				.writer_type = "table_bpf_qspinlock",
+				.read = rcuhashbash_read_lock,
+				.read_lock_bucket = table_bpf_qspinlock_read_lock_bucket,
+				.read_unlock_bucket = table_bpf_qspinlock_read_unlock_bucket,
+				.write = rcuhashbash_write_lock,
+				.write_lock_buckets = table_bpf_qspinlock_write_lock_buckets,
+				.write_unlock_buckets = table_bpf_qspinlock_write_unlock_buckets,
 		},
 		{
 				.reader_type = "table_aqs",
