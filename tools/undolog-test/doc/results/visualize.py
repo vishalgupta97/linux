@@ -27,13 +27,13 @@ import pandas as pd
 BASE_DIR = os.path.join(os.path.dirname(__file__), "")
 
 # Servers to include
-SERVERS = ["srv10vm"]
+SERVERS = ["srv1vm"]
 
 # Sub-directory template inside each server folder
 # {max_cores} and {duration} are filled from MAX_CORES / DURATION below
 RESULT_SUBDIR_TEMPLATE = "results-spinlock-{max_cores}cores-{duration}seconds"
-#MAX_CORES = 112
-MAX_CORES = 96
+MAX_CORES = 112
+#MAX_CORES = 96
 DURATION = 10
 
 # Hash-table parameters
@@ -41,14 +41,14 @@ BUCKETS = 1024
 ENTRIES_LIST = [1024, 2048, 4096, 6144, 8192]
 
 # Lock implementations
-LOCKS = ["spinlock", "cna", "aqs"]
+LOCKS = ["spinlock", "bpf_qspinlock"]
 
 # Undo-log variants (suffix after lock name in the directory)
-UNDOLOG_TYPES = ["baseline", "withundolog", "withundologatomic", "withundologprefetch", "withundologstore"]
+UNDOLOG_TYPES = ["baseline"] #, "withundolog", "withundologatomic", "withundologprefetch", "withundologstore"]
 
 # Core counts to include
-# CORE_COUNTS = [4, 8, 28, 56, 112]
-CORE_COUNTS = [8, 24, 48, 72, 96]
+CORE_COUNTS = [1, 2, 4, 8, 14, 28, 42, 56, 112]
+#CORE_COUNTS = [8, 24, 48, 72, 96]
 
 # Write-percentage subdirectory
 WRITE_PCT = "100percent_writes"
@@ -149,13 +149,23 @@ _UNDOLOG_LABELS = {
     "withundologstore": "Undo Log (Store)",
 }
 
+LOCK_COLORS = {
+    "spinlock":            "#4C72B0",
+    "bpf_qspinlock":         "#DD8452",
+}
+LOCK_LABELS = {
+    "spinlock":            "Kernel Qspinlock",
+    "bpf_qspinlock":         "BPF Qspinlock",
+}
 
-def plot_lock_figure(df: pd.DataFrame, server: str, lock: str) -> plt.Figure:
+
+
+def plot_lock_figure(df: pd.DataFrame, server: str, undolog: str) -> plt.Figure:
     """
     Create a figure with one subplot per entries count for a given lock type.
     Each subplot is a grouped bar chart: X = core count, bars = undolog types.
     """
-    lock_df = df[(df["lock"] == lock) & (df["server"] == server)]
+    undolog_df = df[(df["undolog"] == undolog) & (df["server"] == server)]
 
     n_entries = len(ENTRIES_LIST)
     fig, axes = plt.subplots(
@@ -166,26 +176,26 @@ def plot_lock_figure(df: pd.DataFrame, server: str, lock: str) -> plt.Figure:
     if n_entries == 1:
         axes = [axes]
 
-    n_undolog = len(UNDOLOG_TYPES)
+    n_locks = len(UNDOLOG_TYPES)
     x = np.arange(len(CORE_COUNTS))
-    bar_width = 0.8 / n_undolog   # total group width = 0.8
+    bar_width = 0.4 #0.8 / n_locks   # total group width = 0.8
 
     for ax, entries in zip(axes, ENTRIES_LIST):
-        sub = lock_df[lock_df["entries"] == entries]
+        sub = undolog_df[undolog_df["entries"] == entries]
 
-        for i, undolog in enumerate(UNDOLOG_TYPES):
+        for i, lock in enumerate(LOCKS):
             vals = []
             for cores in CORE_COUNTS:
-                row = sub[(sub["undolog"] == undolog) & (sub["cores"] == cores)]
+                row = sub[(sub["lock"] == lock) & (sub["cores"] == cores)]
                 vals.append(int(row["throughput"].iloc[0]) if len(row) else 0)
 
-            offset = (i - n_undolog / 2 + 0.5) * bar_width
+            offset = (i - n_locks / 2 + 0.5) * bar_width
             ax.bar(
                 x + offset,
                 vals,
                 width=bar_width,
-                color=_UNDOLOG_COLORS[undolog],
-                label=_UNDOLOG_LABELS[undolog],
+                color=LOCK_COLORS[lock],
+                label=LOCK_LABELS[lock],
                 edgecolor="white",
                 linewidth=0.5,
             )
@@ -209,14 +219,14 @@ def plot_lock_figure(df: pd.DataFrame, server: str, lock: str) -> plt.Figure:
     fig.legend(
         handles, labels,
         loc="upper center",
-        ncol=n_undolog,
+        ncol=n_locks,
         fontsize=8,
         frameon=True,
         bbox_to_anchor=(0.5, 1.02),
     )
 
     fig.suptitle(
-        f"Lock: {lock.upper()}  —  {BUCKETS} buckets, {DURATION}s, 100% writes",
+        f"Undolog: {undolog.upper()}  —  {BUCKETS} buckets, {DURATION}s, 100% writes",
         fontsize=11,
         y=1.07,
     )
@@ -239,9 +249,9 @@ def main():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
     for server in SERVERS:
-        for lock in LOCKS:
-            fig = plot_lock_figure(df, server, lock)
-            out_path = os.path.join(OUTPUT_DIR, f"{server}_{lock}_throughput.png")
+        for undolog in UNDOLOG_TYPES:
+            fig = plot_lock_figure(df, server, undolog)
+            out_path = os.path.join(OUTPUT_DIR, f"{server}_{undolog}_throughput.png")
             fig.savefig(out_path, dpi=DPI, bbox_inches="tight")
             plt.close(fig)
             print(f"Saved: {out_path}")
