@@ -21,6 +21,11 @@
 #include <linux/sort.h>
 #include <linux/vmalloc.h>
 #include <asm/uaccess.h>
+#include <linux/fs.h>
+#include <linux/device.h>
+#include <linux/cdev.h>
+#include <linux/ioctl.h>
+#include <linux/wait.h>
 
 #include <linux/spinlock.h>
 #include <linux/rwsem.h>

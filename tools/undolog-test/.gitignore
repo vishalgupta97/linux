@@ -6,3 +6,4 @@ build
 modules.order
 */*.o
 */*.cmd
+send-ioctl

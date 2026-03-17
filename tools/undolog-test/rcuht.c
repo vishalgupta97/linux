@@ -759,6 +759,45 @@ static void rcuhashbash_print_stats(void)
 			   s.time / (ro + rw), min_time, max_time);
 }
 
+// ----------- IOCTL DEF BEGIN -------------
+
+#define DEVICE_NAME "bpf_rcuht_sync"
+#define CLASS_NAME "bpf_rcuht_sync_class"
+#define IOCTL_MAGIC 'B'
+
+#define BPF_READY _IO(IOCTL_MAGIC, 1)
+
+static int major_num;
+static struct class* bpf_class = NULL;
+static struct device* bpf_dev = NULL;
+static struct cdev bpf_cdev;
+
+static bool bpf_ready = false;        // Flag for other module code
+static DECLARE_WAIT_QUEUE_HEAD(bpf_wq);  // Waitqueue for kthread + others
+
+static struct task_struct *waiter_kthread;
+
+// Other module threads can wait like this:
+// wait_event(bpf_wq, bpf_ready);
+
+static long bpf_ioctl(struct file *file, unsigned int cmd, unsigned long arg) {
+    switch (cmd) {
+    case BPF_READY:
+        pr_info("BPF_IOCTL: BPF program attached, signaling ready!\n");
+        bpf_ready = true;
+        wake_up(&bpf_wq);  // Wake kthread + anyone else
+        return 0;
+    default:
+        return -ENOTTY;
+    }
+}
+
+static struct file_operations fops = {
+    .unlocked_ioctl = bpf_ioctl,
+};
+
+// ----------- IOCTL DEF END -------------
+
 static void rcuhashbash_exit(void)
 {
 		unsigned long i;
@@ -811,13 +850,66 @@ static void rcuhashbash_exit(void)
         }
 #endif
 
+        // ----------- IOCTL DEF BEGIN -------------
+
+        pr_info("Removing IOCTL chardev\n");
+        if (waiter_kthread) {
+            kthread_stop(waiter_kthread);
+        }
+        device_destroy(bpf_class, MKDEV(major_num, 0));
+        class_destroy(bpf_class);
+        unregister_chrdev(major_num, DEVICE_NAME);
+        // ----------- IOCTL DEF END -------------
+
 		printk(KERN_ALERT "rcuhashbash done\n");
+}
+
+static void rcuhashbash_start_benchmark(void)
+{
+    u32 i, new_cpuid; 
+
+    printk(KERN_ALERT "rcuhashbash starting threads\n");
+
+    new_cpuid = 0;
+    for (i = 0; i < ro + rw; i++) {
+            struct task_struct *task;
+
+            if (i < ro)
+                    task = kthread_create(rcuhashbash_ro_thread, &thread_stats[i],
+                                          "rcuhashbash_ro");
+            else
+                    task = kthread_create(rcuhashbash_rw_thread, &thread_stats[i],
+                                          "rcuhashbash_rw");
+            if (IS_ERR(task)) {
+                    printk(KERN_ALERT "error creating thread\n");
+            }
+
+            tasks[i] = task;
+
+            kthread_bind(tasks[i], cpuseq[new_cpuid]);
+            new_cpuid += 1;
+            wake_up_process(tasks[i]);
+    }
+}
+
+// Kthread that blocks until ioctl arrives
+static int waiter_thread(void *data) {
+    pr_info("BPF waiter kthread: waiting for BPF attach signal...\n");
+    
+    // Block indefinitely until woken
+    wait_event(bpf_wq, bpf_ready);
+
+    rcuhashbash_start_benchmark();
+    
+    pr_info("BPF waiter kthread exiting: BPF ready! Flag set.\n");
+    waiter_kthread = NULL;
+    return 0;
 }
 
 static __init int rcuhashbash_init(void)
 {
 		int ret;
-		u32 i, new_cpuid;
+		u32 i;
 
 		for (i = 0; i < ARRAY_SIZE(all_ops); i++)
 				if (strcmp(reader_type, all_ops[i].reader_type) == 0 &&
@@ -892,37 +984,48 @@ static __init int rcuhashbash_init(void)
 
 		BUG_ON((ro + rw) > num_online_cpus());
 
-		printk(KERN_ALERT "rcuhashbash starting threads\n");
-
-		new_cpuid = 0;
-		for (i = 0; i < ro + rw; i++) {
-				struct task_struct *task;
-
-				if (i < ro)
-						task = kthread_create(rcuhashbash_ro_thread, &thread_stats[i],
-											  "rcuhashbash_ro");
-				else
-						task = kthread_create(rcuhashbash_rw_thread, &thread_stats[i],
-											  "rcuhashbash_rw");
-				if (IS_ERR(task)) {
-						ret = PTR_ERR(task);
-						goto error;
-				}
-
-				tasks[i] = task;
-
-				kthread_bind(tasks[i], cpuseq[new_cpuid]);
-				new_cpuid += 1;
-				wake_up_process(tasks[i]);
-		}
+        // ----------- IOCTL DEF BEGIN -------------
+        
+        // Register char device
+        major_num = register_chrdev(0, DEVICE_NAME, &fops);
+        if (major_num < 0)
+            goto enochrdev;
+        
+        // Sysfs class/device
+        bpf_class = class_create(CLASS_NAME);
+        if (IS_ERR(bpf_class))
+            goto enoclass;
+        
+        bpf_dev = device_create(bpf_class, NULL, MKDEV(major_num, 0), NULL, DEVICE_NAME);
+        if (IS_ERR(bpf_dev))
+            goto enodevice;
+        
+        bpf_ready = false;
+        
+        // Spawn background kthread
+        waiter_kthread = kthread_run(waiter_thread, NULL, "bpf_waiter");
+        if (IS_ERR(waiter_kthread))
+            goto ewaiter_kthread;
+        
+        pr_info("BPF_SYNC: Module loaded, device /dev/%s created. Send BPF_READY ioctl to unblock.\n", DEVICE_NAME);
+        // ----------- IOCTL DEF END -------------
 
 		return 0;
 
+ewaiter_kthread:
+        pr_err("BPF_SYNC: Failed to create kthread\n");
+        device_destroy(bpf_class, MKDEV(major_num, 0));
+enodevice:
+        pr_err("BPF_SYNC: Failed to create class\n");
+        class_destroy(bpf_class);
+enoclass:
+        pr_err("BPF_SYNC: Failed to create device\n");
+        unregister_chrdev(major_num, DEVICE_NAME);
+enochrdev:
+        pr_err("BPF_SYNC: Failed to register device\n");
 enomem:
 		komb_free();
 		ret = -ENOMEM;
-error:
-		rcuhashbash_exit();
 		return ret;
 }
 

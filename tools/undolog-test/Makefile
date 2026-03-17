@@ -3,7 +3,8 @@ KDIR ?= $(PWD)/../..
 
 ifneq ($(KERNELRELEASE),)
 
-obj-m += baseline.o withundolog.o withundologatomic.o withundologprefetch.o withundologstore.o
+obj-m += baseline.o 
+#withundolog.o withundologatomic.o withundologprefetch.o withundologstore.o
 common_objs := locks/qspinlock.o \
                locks/aqs.o \
                locks/cna.o \
