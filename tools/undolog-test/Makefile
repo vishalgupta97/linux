@@ -41,6 +41,8 @@ CPUSEQ:
 
 clean:
 	$(Q)rm -f include/cpuseq.h
-	sed -i 's/NUM_PREFETCH_LINES ./NUM_PREFETCH_LINES 6/' include/lib/combiner.h 
+	sed -i 's/NUM_PREFETCH_LINES ./NUM_PREFETCH_LINES 6/' include/lib/combiner.h
+	$(Q)rm -f *.o *.ko *.cmd *.mod modules.order
+	$(Q)rm -f */*.o */*.cmd
 
 endif
