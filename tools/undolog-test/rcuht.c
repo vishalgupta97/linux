@@ -104,10 +104,15 @@ struct rcuhashbash_ops {
 };
 
 struct rcuhashbash_entry {
-		struct hlist_node node;
-		struct rcu_head rcu_head;
-		u64 value;
-};
+        union {
+            struct {
+		        struct hlist_node node;
+		        struct rcu_head rcu_head;
+		        u64 value;
+            };
+            char cache_alignment[64];
+        };
+} ____cacheline_aligned;
 
 static struct rcuhashbash_ops *ops;
 
