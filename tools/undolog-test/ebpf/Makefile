@@ -1,20 +1,32 @@
-# Makefile (for eBPF + loader)
 CLANG   ?= clang
-ARCH    := $(shell uname -m | sed 's/x86_64/x86/' | sed 's/aarch64/arm64/')
-VMLINUX := vmlinux.h
+BPFTOOL ?= bpftool
+CC      ?= gcc
 
-all: fentry_mymodule.bpf.o loader
+BPF_CFLAGS := -g -O2 -target bpf -D__TARGET_ARCH_x86 \
+              -I/usr/include/x86_64-linux-gnu \
+              -I/usr/include
 
+LDFLAGS := -lbpf -lelf -lz
+
+all: loader
+
+# 1. Compile BPF object
+rcuhashbash.bpf.o: rcuhashbash.bpf.c vmlinux.h
+	$(CLANG) $(BPF_CFLAGS) -c $< -o $@
+
+# 2. Generate skeleton
+rcuhashbash.skel.h: rcuhashbash.bpf.o
+	$(BPFTOOL) gen skeleton $< > $@
+
+# 3. Compile loader
+loader: loader.c rcuhashbash.skel.h
+	$(CC) -g -O2 -o $@ loader.c $(LDFLAGS)
+
+# Generate vmlinux.h for the running kernel
 vmlinux.h:
-	bpftool btf dump file /sys/kernel/btf/vmlinux format c > vmlinux.h
-
-fentry_mymodule.bpf.o: fentry_mymodule.bpf.c $(VMLINUX)
-	$(CLANG) -g -O2 -target bpf -D__TARGET_ARCH_$(ARCH) \
-		-I. -c fentry_mymodule.bpf.c -o fentry_mymodule.bpf.o
-
-loader: loader.c
-	gcc -o loader loader.c -lbpf
+	$(BPFTOOL) btf dump file /sys/kernel/btf/vmlinux format c > $@
 
 clean:
-	rm -f *.o loader vmlinux.h
+	rm -f *.o *.skel.h loader vmlinux.h
+
 

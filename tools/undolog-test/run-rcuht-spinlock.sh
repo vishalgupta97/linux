@@ -46,13 +46,11 @@ do
 					rw_writes=${write} rw_total=${rw_total} \
 					buckets=${bucket} \
 					entries=${entries}
-                btf_id=`sudo bpftool btf list | grep ${binary} | awk '{print substr($1,0,length($1)-1)}'`
-                echo ${btf_id}
-                sudo ./ebpf/loader ${btf_id} &
+                sudo ./ebpf/loader --buckets ${bucket} --entries-per-bucket ${entry_ratio} &
                 loader_pid=$!
-                sleep 5
+                sleep 2
                 sudo ./send-ioctl 1
-				sleep ${time}
+		sleep ${time}
                 sudo ./send-ioctl 2
                 kill -TERM ${loader_pid}
                 wait ${loader_pid}

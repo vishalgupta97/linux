@@ -1,81 +1,102 @@
-// loader.c
+// SPDX-License-Identifier: GPL-2.0
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdint.h>
+#include <string.h>
+#include <errno.h>
+#include <signal.h>
 #include <unistd.h>
 #include <bpf/libbpf.h>
 #include <bpf/bpf.h>
-#include <errno.h>
-#include <signal.h>
+#include "rcuhashbash.skel.h"
 
-static volatile bool exiting = false;
+#define MAX_ENTRIES_PER_BUCKET 64
 
-void handle_signal(int sig) {
-    exiting = true;
+static volatile int keep_running = 1;
+static void sig_handler(int sig) { keep_running = 0; }
+
+static void usage(const char *prog)
+{
+    fprintf(stderr,
+            "Usage: %s --buckets <N> --entries-per-bucket <M>\n"
+            "  --buckets              number of hash buckets (max 1024)\n"
+            "  --entries-per-bucket   entries per bucket     (max %d)\n",
+            prog, MAX_ENTRIES_PER_BUCKET);
 }
 
 int main(int argc, char **argv)
 {
-    if(argc < 2)
+    uint32_t num_buckets = 0, entries_per_bucket = 0;
+
+    for (int i = 1; i < argc; i++) {
+        if (!strcmp(argv[i], "--buckets") && i + 1 < argc)
+            num_buckets = (uint32_t)atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--entries-per-bucket") && i + 1 < argc)
+            entries_per_bucket = (uint32_t)atoi(argv[++i]);
+        else { usage(argv[0]); return 1; }
+    }
+
+    if (!num_buckets || !entries_per_bucket) { usage(argv[0]); return 1; }
+    if (num_buckets > 1024) {
+        fprintf(stderr, "buckets must be <= 1024\n"); return 1;
+    }
+    if (entries_per_bucket > MAX_ENTRIES_PER_BUCKET) {
+        fprintf(stderr, "entries-per-bucket must be <= %d\n",
+                MAX_ENTRIES_PER_BUCKET); return 1;
+    }
+
+    /* ── Load BPF skeleton ──────────────────────────────────── */
+    struct rcuhashbash_bpf *skel = rcuhashbash_bpf__open_and_load();
+    if (!skel) {
+        fprintf(stderr, "Failed to load BPF skeleton: %s\n", strerror(errno));
         return 1;
-
-    signal(SIGINT, handle_signal);
-    signal(SIGTERM, handle_signal);
-
-    int btf_id = atoi(argv[1]);
-
-    struct bpf_object *obj;
-    struct bpf_program *prog, *prog1;
-    struct bpf_link *link, *link1;
-    int btf_fd, err;
-
-    /* Open the module BTF to resolve fentry target in kmod, not vmlinux */
-    btf_fd = bpf_btf_get_fd_by_id(btf_id);
-    if (btf_fd < 0) {
-        fprintf(stderr, "Failed to get BTF fd for mymodule. "
-                        "Is the module loaded and BTF embedded? %d error:%d %s\n", btf_id, btf_fd, strerror(errno));
-        return 2;
     }
 
-    obj = bpf_object__open_file("ebpf/fentry_mymodule.bpf.o", NULL);
-    if (libbpf_get_error(obj)) {
-        fprintf(stderr, "Failed to open BPF object\n");
-        return 3;
+    int cfg_fd    = bpf_map__fd(skel->maps.num_bucket_config);
+    int entries_fd = bpf_map__fd(skel->maps.entries);
+
+    /* ── Write num_buckets into config ──────────────────────── */
+    uint32_t cfg_key = 0;
+    if (bpf_map_update_elem(cfg_fd, &cfg_key, &num_buckets, BPF_ANY)) {
+        perror("bpf_map_update_elem(config)"); goto cleanup;
     }
 
-    prog = bpf_object__find_program_by_name(obj, "trace_init_ht");
-    prog1 = bpf_object__find_program_by_name(obj, "trace_attach_cs_ht");
-    if (!prog || !prog1) {
-        fprintf(stderr, "Failed to find BPF program\n");
-        return 4;
+    cfg_key = 1;
+    if (bpf_map_update_elem(cfg_fd, &cfg_key, &entries_per_bucket, BPF_ANY)) {
+        perror("bpf_map_update_elem(config)"); goto cleanup;
     }
 
-    /* Point the program at the module's BTF */
-    //bpf_program__set_attach_target(prog, btf_fd, "baseline");
+    printf("Allocating %u buckets × %u entries = %u total entries...\n",
+           num_buckets, entries_per_bucket,
+           num_buckets * entries_per_bucket);
 
-    err = bpf_object__load(obj);
-    if (err) {
-        fprintf(stderr, "Failed to load BPF object: %d\n", err);
-        return 5;
+    /* ── Pre-populate bucket_count and entries maps ─────────── */
+    for (uint32_t b = 0; b < num_buckets; b++) {
+        for (uint32_t i = 0; i < entries_per_bucket; i++) {
+	    uint32_t ekey = b * entries_per_bucket + i;
+            uint64_t initial_value = (uint64_t)b * entries_per_bucket + i;
+
+            if (bpf_map_update_elem(entries_fd, &ekey,
+                                    &initial_value, BPF_ANY)) {
+                perror("bpf_map_update_elem(entries)"); goto cleanup;
+            }
+        }
     }
 
-    link = bpf_program__attach(prog);
-    link1 = bpf_program__attach(prog1);
-    if (libbpf_get_error(link) || libbpf_get_error(link1)) {
-        fprintf(stderr, "Failed to attach BPF program\n");
-        return 6;
+    /* ── Attach ─────────────────────────────────────────────── */
+    printf("Attaching to bpf_attachement_point...\n");
+    if (rcuhashbash_bpf__attach(skel)) {
+        fprintf(stderr, "Failed to attach: %s\n", strerror(errno));
+        goto cleanup;
     }
 
-    printf("Attached! Reading trace output from /sys/kernel/debug/tracing/trace_pipe\n");
-    printf("Press Ctrl+C to stop.\n");
+    printf("Attached. Send SIGINT to detach.\n");
+    signal(SIGINT, sig_handler);
+    signal(SIGTERM, sig_handler);
+    while (keep_running) sleep(1);
+    printf("\nDetaching...\n");
 
-    while (!exiting) { 
-       sleep(1);
-    }
-
-    bpf_link__destroy(link);
-    bpf_link__destroy(link1);
-    bpf_object__close(obj);
-    close(btf_fd);
+cleanup:
+    rcuhashbash_bpf__destroy(skel);
     return 0;
 }
-
