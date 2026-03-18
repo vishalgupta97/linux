@@ -8,3 +8,6 @@ modules.order
 */*.cmd
 send-ioctl
 *.btf
+*/*.skel.h
+*/vmlinux.h
+ebpf/loader

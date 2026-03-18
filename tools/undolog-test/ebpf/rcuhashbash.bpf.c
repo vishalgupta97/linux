@@ -86,14 +86,23 @@ int BPF_PROG(trace_attach_cs_ht, u32 src_value, u32 dst_value, void *stats)
     if (!glv)
         return 0;
 
-    u32 entry_key = src_bucket * (*entries_per_bucket);
-
     bpf_spin_lock(&glv->lock);
 	
     //bpf_loop(*entries_per_bucket, write_entry_cb, &entry_key, 0);
-    bpf_loop(4, write_entry_cb, &entry_key, 0);
+    //bpf_loop(4, write_entry_cb, &entry_key, 0);
+    for(int i = 0; i < 4; i++)
+	{
+	    u32 entry_key = (src_bucket * (*entries_per_bucket)) + i;
 
-
+	    struct entry_val *eval = bpf_map_lookup_elem(&entries, &entry_key);
+	    if (!eval) {
+		goto end;
+            }
+    		//if (!eval)
+        	//return 0; /* skip missing entries, keep going */
+	    eval->value = entry_key + i;
+	}
+end:
     bpf_spin_unlock(&glv->lock);
 
     return 0;
