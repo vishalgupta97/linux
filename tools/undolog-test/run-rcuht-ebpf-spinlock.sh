@@ -1,6 +1,6 @@
 source defaults.sh
 
-locks=(table_spinlock) # table_bpf_qspinlock) #table_aqs table_cna)
+locks=(table_bpf_spinlock_undolog) # table_bpf_qspinlock) #table_aqs table_cna)
 binaries=(baseline) #withundologstore) #withundologprefetch) #withundologatomic) #withundolog baseline)
 
 lock_type=spinlock
@@ -33,7 +33,7 @@ do
 		entries=$((${bucket}*${entry_ratio}))
 		for write in ${rw_writes[@]}
 		do
-			lock_name='modified_'$l'_'$binary
+			lock_name='modified_bpf_'$l'_'$binary
 			out_dir=${DIR}/${bucket}buckets-${entries}entries/${run}/${lock_name}/${write}percent_writes
 			echo ${out_dir}
 			mkdir -p ${out_dir} || exit
@@ -46,9 +46,14 @@ do
 					rw_writes=${write} rw_total=${rw_total} \
 					buckets=${bucket} \
 					entries=${entries}
-                		sudo ./send-ioctl 1
+				sudo ./ebpf/loader --buckets ${bucket} --entries-per-bucket ${entry_ratio} &
+				loader_pid=$!
+				sleep 2
+				sudo ./send-ioctl 1
 				sleep ${time}
-                		sudo ./send-ioctl 2
+				sudo ./send-ioctl 2
+				kill -TERM ${loader_pid}
+				wait ${loader_pid}
 				sudo rmmod ${binary}.ko
 				sleep 1
 				sudo dmesg > ${out_dir}/core.${c}

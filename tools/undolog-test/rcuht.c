@@ -163,9 +163,10 @@ noinline void init_ht(void)
 }
 EXPORT_SYMBOL(init_ht);
 
-noinline void attach_cs_ht(u32 src_value, u32 dst_value, struct stats *stats)
+noinline int attach_cs_ht(u32 src_value, u32 dst_value, struct stats *stats)
 {
-    stats->write_moves++;    
+	stats->write_moves++;
+	return 0;
 }
 EXPORT_SYMBOL(attach_cs_ht);
 
@@ -237,37 +238,35 @@ static inline void bring_modified_and_store(struct rcuhashbash_entry *entry, int
 
 static int rcuhashbash_write_lock(u32 src_value, u32 dst_value, struct stats *stats)
 {
-//		u32 src_bucket;
-//		u32 dst_bucket;
-//		struct rcuhashbash_entry *entry = NULL;
-//		int i = 0;
-//
-//		src_bucket = src_value % buckets;
-//		dst_bucket = dst_value % buckets;
-//
-//		ops->write_lock_buckets(&hash_table[src_bucket], &hash_table[dst_bucket]);
-//
-//		hlist_for_each_entry (entry, &hash_table[src_bucket].head, node) {
-//#if USE_UNDO_LOG
-//#if USE_UNDO_LOG_STORE
-//                bring_modified_and_store(entry, i);
-//#elif USE_UNDO_LOG_PREFETCH
-//                prefetchw(&(entry->value));
-//				(*this_cpu_ptr(&undo_log))[i] = entry->value;
-//#elif USE_UNDO_LOG_ATOMIC
-//				(*this_cpu_ptr(&undo_log))[i] = __sync_fetch_and_add(&(entry->value), 0);
-//#else
-//				(*this_cpu_ptr(&undo_log))[i] = entry->value;
-//#endif
-//#endif
-//				entry->value = dst_value + i;
-//				stats->write_moves++;
-//				i++;
-//		}
-//
-//		ops->write_unlock_buckets(&hash_table[src_bucket], &hash_table[dst_bucket]);
+		u32 src_bucket;
+		u32 dst_bucket;
+		struct rcuhashbash_entry *entry = NULL;
+		int i = 0;
 
-        attach_cs_ht(src_value, dst_value, stats); //TODO: Remove this
+		src_bucket = src_value % buckets;
+		dst_bucket = dst_value % buckets;
+
+		ops->write_lock_buckets(&hash_table[src_bucket], &hash_table[dst_bucket]);
+
+		hlist_for_each_entry (entry, &hash_table[src_bucket].head, node) {
+#if USE_UNDO_LOG
+#if USE_UNDO_LOG_STORE
+                bring_modified_and_store(entry, i);
+#elif USE_UNDO_LOG_PREFETCH
+                prefetchw(&(entry->value));
+				(*this_cpu_ptr(&undo_log))[i] = entry->value;
+#elif USE_UNDO_LOG_ATOMIC
+				(*this_cpu_ptr(&undo_log))[i] = __sync_fetch_and_add(&(entry->value), 0);
+#else
+				(*this_cpu_ptr(&undo_log))[i] = entry->value;
+#endif
+#endif
+				entry->value = dst_value + i;
+				stats->write_moves++;
+				i++;
+		}
+
+		ops->write_unlock_buckets(&hash_table[src_bucket], &hash_table[dst_bucket]);
 
 		return 0;
 }
@@ -627,6 +626,16 @@ static struct rcuhashbash_ops all_ops[] = {
 				.write_unlock_buckets = table_spinlock_write_unlock_buckets,
 		},
 		{
+				.reader_type = "table_bpf_spinlock_undolog",
+				.writer_type = "table_bpf_spinlock_undolog",
+				.read = NULL,
+				.read_lock_bucket = NULL,
+				.read_unlock_bucket = NULL,
+				.write = attach_cs_ht,
+				.write_lock_buckets = NULL,
+				.write_unlock_buckets = NULL,
+		},
+		{
 				.reader_type = "table_komb",
 				.writer_type = "table_komb",
 				.read = rcuhashbash_read_lock,
@@ -956,10 +965,10 @@ static __init int rcuhashbash_init(void)
 				return -EINVAL;
 		}
 
-		if (!ops->read) {
+		/*if (!ops->read) {
 				printk(KERN_ALERT "rcuhashbash: Internal error: read function NULL\n");
 				return -EINVAL;
-		}
+		}*/
 		if (rw > 0 && !ops->write) {
 				printk(KERN_ALERT "rcuhashbash: Internal error: rw > 0 but write function NULL\n");
 				return -EINVAL;
