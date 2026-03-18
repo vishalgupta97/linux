@@ -7,3 +7,4 @@ modules.order
 */*.o
 */*.cmd
 send-ioctl
+*.btf

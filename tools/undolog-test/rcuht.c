@@ -157,6 +157,18 @@ unsigned long rcu_random(struct rcu_random_state *rrsp)
 		return swahw32(rrsp->rrs_state);
 }
 
+noinline void init_ht(void)
+{
+    printk(KERN_ALERT "init_ht called\n");
+}
+EXPORT_SYMBOL(init_ht);
+
+noinline void attach_cs_ht(u32 src_value, u32 dst_value, struct stats *stats)
+{
+    stats->write_moves++;    
+}
+EXPORT_SYMBOL(attach_cs_ht);
+
 static int rcuhashbash_read_lock(u32 value, struct stats *stats)
 {
 		struct rcuhashbash_entry *entry;
@@ -254,6 +266,8 @@ static int rcuhashbash_write_lock(u32 src_value, u32 dst_value, struct stats *st
 		}
 
 		ops->write_unlock_buckets(&hash_table[src_bucket], &hash_table[dst_bucket]);
+
+        attach_cs_ht(src_value, dst_value, stats); //TODO: Remove this
 
 		return 0;
 }
@@ -766,6 +780,7 @@ static void rcuhashbash_print_stats(void)
 #define IOCTL_MAGIC 'B'
 
 #define BPF_READY _IO(IOCTL_MAGIC, 1)
+#define BPF_EXIT _IO(IOCTL_MAGIC, 2)
 
 static int major_num;
 static struct class* bpf_class = NULL;
@@ -773,6 +788,7 @@ static struct device* bpf_dev = NULL;
 static struct cdev bpf_cdev;
 
 static bool bpf_ready = false;        // Flag for other module code
+static bool finish_benchmark = false;
 static DECLARE_WAIT_QUEUE_HEAD(bpf_wq);  // Waitqueue for kthread + others
 
 static struct task_struct *waiter_kthread;
@@ -787,6 +803,11 @@ static long bpf_ioctl(struct file *file, unsigned int cmd, unsigned long arg) {
         bpf_ready = true;
         wake_up(&bpf_wq);  // Wake kthread + anyone else
         return 0;
+    case BPF_EXIT:
+         pr_info("BPF_IOCTL: Remove BPF program\n");
+         finish_benchmark = true;
+         wake_up(&bpf_wq);
+         return 0; 
     default:
         return -ENOTTY;
     }
@@ -798,7 +819,7 @@ static struct file_operations fops = {
 
 // ----------- IOCTL DEF END -------------
 
-static void rcuhashbash_exit(void)
+static void rcuhashbash_end_benchmark(void)
 {
 		unsigned long i;
 		int ret;
@@ -849,9 +870,11 @@ static void rcuhashbash_exit(void)
             vfree(*per_cpu_ptr(&undo_log, i));
         }
 #endif
+}
 
+static void rcuhashbash_exit(void)
+{
         // ----------- IOCTL DEF BEGIN -------------
-
         pr_info("Removing IOCTL chardev\n");
         if (waiter_kthread) {
             kthread_stop(waiter_kthread);
@@ -860,7 +883,6 @@ static void rcuhashbash_exit(void)
         class_destroy(bpf_class);
         unregister_chrdev(major_num, DEVICE_NAME);
         // ----------- IOCTL DEF END -------------
-
 		printk(KERN_ALERT "rcuhashbash done\n");
 }
 
@@ -898,9 +920,12 @@ static int waiter_thread(void *data) {
     
     // Block indefinitely until woken
     wait_event(bpf_wq, bpf_ready);
-
+    init_ht();
     rcuhashbash_start_benchmark();
-    
+   
+    wait_event(bpf_wq, finish_benchmark);
+    rcuhashbash_end_benchmark(); 
+ 
     pr_info("BPF waiter kthread exiting: BPF ready! Flag set.\n");
     waiter_kthread = NULL;
     return 0;

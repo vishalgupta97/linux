@@ -46,10 +46,16 @@ do
 					rw_writes=${write} rw_total=${rw_total} \
 					buckets=${bucket} \
 					entries=${entries}
+                btf_id=`sudo bpftool btf list | grep ${binary} | awk '{print substr($1,0,length($1)-1)}'`
+                echo ${btf_id}
+                sudo ./ebpf/loader ${btf_id} &
+                loader_pid=$!
                 sleep 5
-                #echo "BPF_READY" | sudo tee /dev/bpf_rcuht_sync
-                sudo ./send-ioctl
+                sudo ./send-ioctl 1
 				sleep ${time}
+                sudo ./send-ioctl 2
+                kill -TERM ${loader_pid}
+                wait ${loader_pid}
 				sudo rmmod ${binary}.ko
 				sleep 1
 				sudo dmesg > ${out_dir}/core.${c}

@@ -36,6 +36,8 @@ else
 
 all: CPUSEQ
 	$(MAKE) -C $(KDIR) M=$(PWD) src=$(PWD) modules
+	pahole --btf_encode_detached baseline.btf baseline.ko
+	gcc send-ioctl.c -o send-ioctl
 
 CPUSEQ:
 	$(Q)python3 ./script/gen-cpuseq.py
@@ -43,7 +45,7 @@ CPUSEQ:
 clean:
 	$(Q)rm -f include/cpuseq.h
 	sed -i 's/NUM_PREFETCH_LINES ./NUM_PREFETCH_LINES 6/' include/lib/combiner.h
-	$(Q)rm -f *.o *.ko *.cmd *.mod modules.order
+	$(Q)rm -f *.o *.ko *.cmd *.mod modules.order *.btf
 	$(Q)rm -f */*.o */*.cmd
 
 endif
