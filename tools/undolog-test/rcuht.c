@@ -262,11 +262,11 @@ static int rcuhashbash_write_lock(u32 src_value, u32 dst_value, struct stats *st
 #endif
 #endif
 				entry->value = dst_value + i;
-				stats->write_moves++;
 				i++;
 		}
 
 		ops->write_unlock_buckets(&hash_table[src_bucket], &hash_table[dst_bucket]);
+		stats->write_moves++;
 
 		return 0;
 }
