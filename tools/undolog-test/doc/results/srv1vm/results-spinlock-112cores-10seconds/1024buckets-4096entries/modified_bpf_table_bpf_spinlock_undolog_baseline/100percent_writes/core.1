@@ -1,0 +1,193 @@
+[   27.751322] baseline: loading out-of-tree module taints kernel.
+[   27.758166] BPF_SYNC: Module loaded, device /dev/bpf_rcuht_sync created. Send BPF_READY ioctl to unblock.
+[   27.758177] BPF waiter kthread: waiting for BPF attach signal...
+[   27.819958] inserting bpf_undo_log_push
+[   27.820380] inserting bpf_undo_log_push
+[   27.820725] inserting bpf_undo_log_push
+[   27.821059] inserting bpf_undo_log_push
+[   29.771020] BPF_IOCTL: BPF program attached, signaling ready!
+[   29.771205] init_ht called
+[   29.771843] rcuhashbash starting threads
+[   29.772657] BUG: kernel NULL pointer dereference, address: 0000000000000000
+[   29.773977] #PF: supervisor write access in kernel mode
+[   29.774497] #PF: error_code(0x0002) - not-present page
+[   29.774938] PGD 0 P4D 0 
+[   29.775177] Oops: Oops: 0002 [#1] SMP
+[   29.775511] CPU: 0 UID: 0 PID: 4412 Comm: rcuhashbash_rw Tainted: G           OE       6.19.0-rc1-ebpftest-timeout+ #36 PREEMPT(voluntary) 
+[   29.776561] Tainted: [O]=OOT_MODULE, [E]=UNSIGNED_MODULE
+[   29.777020] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS rel-1.17.0-0-gb52ca86e094d-prebuilt.qemu.org 04/01/2014
+[   29.777977] RIP: 0010:bpf_prog_8af3851c2a7f2a1a_trace_attach_cs_ht+0x16a/0x295
+[   29.778591] Code: 00 01 00 73 09 48 c1 e0 06 48 01 f8 eb 02 31 c0 48 85 c0 0f 84 27 01 00 00 8b 7d f4 48 8b 7d e8 be 08 00 00 00 e8 e6 0a 60 e1 <48> 89 78 00 41 8b 7d 00 41 0f af fe 83 c7 01 89 7d f4 48 89 ee 48
+[   29.780125] RSP: 0018:ffffc90009e63da8 EFLAGS: 00010246
+[   29.780583] RAX: 0000000000000000 RBX: ffff88810bb9d330 RCX: 0000000000000000
+[   29.781183] RDX: 0000000000000000 RSI: 0000000000000000 RDI: 0000000000000000
+[   29.781788] RBP: ffffc90009e63e10 R08: ffffffffa0c919f0 R09: 0000000000000000
+[   29.782395] R10: 0000000000000000 R11: 0000000000000000 R12: ffffffffa0b6b080
+[   29.783002] R13: ffff88810bb9f338 R14: 0000000000000266 R15: 0000000000000400
+[   29.783615] FS:  0000000000000000(0000) GS:ffff88889b0e0000(0000) knlGS:0000000000000000
+[   29.784296] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[   29.784786] CR2: 0000000000000000 CR3: 000000000323f001 CR4: 0000000000770ef0
+[   29.785395] PKRU: 55555554
+[   29.785641] Call Trace:
+[   29.785873]  <TASK>
+[   29.786076]  ? rcuhashbash_ro_thread+0x1b0/0x1b0 [baseline]
+[   29.786561]  ? table_rwlock_read_lock_bucket+0x20/0x20 [baseline]
+[   29.787079]  ? __bpf_prog_enter_recur+0x56/0xe0
+[   29.787490]  bpf_trampoline_302795334044+0x4b/0xb3
+[   29.787903]  attach_cs_ht+0x5/0x10 [baseline]
+[   29.788292]  ? rcuhashbash_rw_thread+0x117/0x380 [baseline]
+[   29.788765]  ? _raw_spin_unlock_irqrestore+0xd/0x50
+[   29.789191]  ? kthread+0xf5/0x210
+[   29.789496]  ? kthreads_online_cpu+0x130/0x130
+[   29.789883]  ? kthreads_online_cpu+0x130/0x130
+[   29.790279]  ? ret_from_fork+0x266/0x2a0
+[   29.790646]  ? kthreads_online_cpu+0x130/0x130
+[   29.791032]  ? ret_from_fork_asm+0x11/0x20
+[   29.791399]  </TASK>
+[   29.791603] Modules linked in: baseline(OE) qrtr(E) cfg80211(E) binfmt_misc(E) i2c_piix4(E) i2c_smbus(E) vmgenid(E) input_leds(E) joydev(E) mac_hid(E) sch_fq_codel(E) msr(E) efi_pstore(E) dm_multipath(E) nfnetlink(E) vsock_loopback(E) vmw_vsock_virtio_transport_common(E) vmw_vsock_vmci_transport(E) vmw_vmci(E) vsock(E) dmi_sysfs(E) qemu_fw_cfg(E) ip_tables(E) x_tables(E) autofs4(E) raid10(E) raid456(E) async_raid6_recov(E) async_memcpy(E) async_pq(E) async_xor(E) xor(E) async_tx(E) raid6_pq(E) raid1(E) raid0(E) linear(E) psmouse(E) serio_raw(E) pata_acpi(E) bochs(E) floppy(E) hid_generic(E) usbhid(E) hid(E) aesni_intel(E)
+[   29.796355] CR2: 0000000000000000
+[   29.796878] ---[ end trace 0000000000000000 ]---
+[   29.797521] RIP: 0010:bpf_prog_8af3851c2a7f2a1a_trace_attach_cs_ht+0x16a/0x295
+[   29.798363] Code: 00 01 00 73 09 48 c1 e0 06 48 01 f8 eb 02 31 c0 48 85 c0 0f 84 27 01 00 00 8b 7d f4 48 8b 7d e8 be 08 00 00 00 e8 e6 0a 60 e1 <48> 89 78 00 41 8b 7d 00 41 0f af fe 83 c7 01 89 7d f4 48 89 ee 48
+[   29.800358] RSP: 0018:ffffc90009e63da8 EFLAGS: 00010246
+[   29.801040] RAX: 0000000000000000 RBX: ffff88810bb9d330 RCX: 0000000000000000
+[   29.801882] RDX: 0000000000000000 RSI: 0000000000000000 RDI: 0000000000000000
+[   29.802722] RBP: ffffc90009e63e10 R08: ffffffffa0c919f0 R09: 0000000000000000
+[   29.803561] R10: 0000000000000000 R11: 0000000000000000 R12: ffffffffa0b6b080
+[   29.804403] R13: ffff88810bb9f338 R14: 0000000000000266 R15: 0000000000000400
+[   29.805243] FS:  0000000000000000(0000) GS:ffff88889b0e0000(0000) knlGS:0000000000000000
+[   29.806160] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[   29.806894] CR2: 0000000000000000 CR3: 000000000323f001 CR4: 0000000000770ef0
+[   29.807739] PKRU: 55555554
+[   29.808212] note: rcuhashbash_rw[4412] exited with irqs disabled
+[   29.808987] note: rcuhashbash_rw[4412] exited with preempt_count 1
+[   39.782426] BPF_IOCTL: Remove BPF program
+[   39.783516] rcuhashbash exiting threads
+[   39.784465] ------------[ cut here ]------------
+[   39.786417] refcount_t: addition on 0; use-after-free.
+[   39.787487] WARNING: lib/refcount.c:25 at refcount_warn_saturate+0x5f/0x80, CPU#59: bpf_waiter/4389
+[   39.789086] Modules linked in: baseline(OE) qrtr(E) cfg80211(E) binfmt_misc(E) i2c_piix4(E) i2c_smbus(E) vmgenid(E) input_leds(E) joydev(E) mac_hid(E) sch_fq_codel(E) msr(E) efi_pstore(E) dm_multipath(E) nfnetlink(E) vsock_loopback(E) vmw_vsock_virtio_transport_common(E) vmw_vsock_vmci_transport(E) vmw_vmci(E) vsock(E) dmi_sysfs(E) qemu_fw_cfg(E) ip_tables(E) x_tables(E) autofs4(E) raid10(E) raid456(E) async_raid6_recov(E) async_memcpy(E) async_pq(E) async_xor(E) xor(E) async_tx(E) raid6_pq(E) raid1(E) raid0(E) linear(E) psmouse(E) serio_raw(E) pata_acpi(E) bochs(E) floppy(E) hid_generic(E) usbhid(E) hid(E) aesni_intel(E)
+[   39.794507] CPU: 59 UID: 0 PID: 4389 Comm: bpf_waiter Tainted: G      D    OE       6.19.0-rc1-ebpftest-timeout+ #36 PREEMPT(voluntary) 
+[   39.795782] Tainted: [D]=DIE, [O]=OOT_MODULE, [E]=UNSIGNED_MODULE
+[   39.796595] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS rel-1.17.0-0-gb52ca86e094d-prebuilt.qemu.org 04/01/2014
+[   39.797875] RIP: 0010:refcount_warn_saturate+0x5f/0x80
+[   39.798586] Code: c3 48 8d 3d 23 8e b8 01 67 48 0f b9 3a 31 f6 31 ff c3 48 8d 3d 22 8e b8 01 67 48 0f b9 3a 31 f6 31 ff c3 48 8d 3d 21 8e b8 01 <67> 48 0f b9 3a 31 f6 31 ff c3 48 8d 3d 20 8e b8 01 67 48 0f b9 3a
+[   39.800677] RSP: 0018:ffffc9000e4efe38 EFLAGS: 00010293
+[   39.801432] RAX: 0000000000000000 RBX: ffff8898497a3100 RCX: 0000000000000000
+[   39.802325] RDX: 0000000000000000 RSI: 0000000000000002 RDI: ffffffff836ac0d0
+[   39.803262] RBP: 0000000000000001 R08: 0000000000000000 R09: 0000000000000000
+[   39.804197] R10: 0000000000000000 R11: 0000000000000000 R12: 0000000000000001
+[   39.805129] R13: ffff88904afa9080 R14: ffffffffa0b6f740 R15: 0000000000000000
+[   39.805998] FS:  0000000000000000(0000) GS:ffff88989b260000(0000) knlGS:0000000000000000
+[   39.806976] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[   39.807757] CR2: 00005904b11e7000 CR3: 000000000323f001 CR4: 0000000000770ef0
+[   39.808658] PKRU: 55555554
+[   39.809216] Call Trace:
+[   39.809720]  <TASK>
+[   39.810215]  kthread_stop+0x174/0x180
+[   39.810814]  waiter_thread+0x2a9/0x560 [baseline]
+[   39.811506]  ? housekeeping_affine+0x80/0x80
+[   39.812162]  ? rcuhashbash_exit+0x70/0x70 [baseline]
+[   39.812817]  ? kthread+0xf5/0x210
+[   39.813404]  ? kthreads_online_cpu+0x130/0x130
+[   39.814265]  ? ret_from_fork+0x266/0x2a0
+[   39.815011]  ? kthreads_online_cpu+0x130/0x130
+[   39.815661]  ? ret_from_fork_asm+0x11/0x20
+[   39.816275]  </TASK>
+[   39.816699] ---[ end trace 0000000000000000 ]---
+[   39.817341] BUG: kernel NULL pointer dereference, address: 0000000000000000
+[   39.818127] #PF: supervisor write access in kernel mode
+[   39.818757] #PF: error_code(0x0002) - not-present page
+[   39.819377] PGD 0 P4D 0 
+[   39.819790] Oops: Oops: 0002 [#2] SMP
+[   39.820294] CPU: 59 UID: 0 PID: 4389 Comm: bpf_waiter Tainted: G      D W  OE       6.19.0-rc1-ebpftest-timeout+ #36 PREEMPT(voluntary) 
+[   39.821444] Tainted: [D]=DIE, [W]=WARN, [O]=OOT_MODULE, [E]=UNSIGNED_MODULE
+[   39.822193] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS rel-1.17.0-0-gb52ca86e094d-prebuilt.qemu.org 04/01/2014
+[   39.823289] RIP: 0010:kthread_stop+0x3c/0x180
+[   39.823848] Code: 00 f0 0f c1 43 28 85 c0 0f 84 46 01 00 00 8d 50 01 09 c2 0f 88 09 01 00 00 f6 43 2e 20 0f 84 17 01 00 00 48 8b ab a0 0b 00 00 <f0> 80 4d 00 02 48 89 df e8 67 fe ff ff f0 80 0b 04 48 89 df e8 cb
+[   39.825705] RSP: 0018:ffffc9000e4efe40 EFLAGS: 00010202
+[   39.826345] RAX: 0000000000000000 RBX: ffff8898497a3100 RCX: 0000000000000000
+[   39.827133] RDX: 0000000000000000 RSI: 0000000000000000 RDI: 0000000000000000
+[   39.827927] RBP: 0000000000000000 R08: 0000000000000000 R09: 0000000000000000
+[   39.828698] R10: 0000000000000000 R11: 0000000000000000 R12: 0000000000000001
+[   39.829477] R13: ffff88904afa9080 R14: ffffffffa0b6f740 R15: 0000000000000000
+[   39.830242] FS:  0000000000000000(0000) GS:ffff88989b260000(0000) knlGS:0000000000000000
+[   39.831080] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[   39.831729] CR2: 0000000000000000 CR3: 000000000323f001 CR4: 0000000000770ef0
+[   39.832490] PKRU: 55555554
+[   39.832919] Call Trace:
+[   39.833312]  <TASK>
+[   39.833676]  waiter_thread+0x2a9/0x560 [baseline]
+[   39.834238]  ? housekeeping_affine+0x80/0x80
+[   39.834755]  ? rcuhashbash_exit+0x70/0x70 [baseline]
+[   39.835321]  ? kthread+0xf5/0x210
+[   39.835756]  ? kthreads_online_cpu+0x130/0x130
+[   39.836405]  ? ret_from_fork+0x266/0x2a0
+[   39.836897]  ? kthreads_online_cpu+0x130/0x130
+[   39.837412]  ? ret_from_fork_asm+0x11/0x20
+[   39.837910]  </TASK>
+[   39.838253] Modules linked in: baseline(OE) qrtr(E) cfg80211(E) binfmt_misc(E) i2c_piix4(E) i2c_smbus(E) vmgenid(E) input_leds(E) joydev(E) mac_hid(E) sch_fq_codel(E) msr(E) efi_pstore(E) dm_multipath(E) nfnetlink(E) vsock_loopback(E) vmw_vsock_virtio_transport_common(E) vmw_vsock_vmci_transport(E) vmw_vmci(E) vsock(E) dmi_sysfs(E) qemu_fw_cfg(E) ip_tables(E) x_tables(E) autofs4(E) raid10(E) raid456(E) async_raid6_recov(E) async_memcpy(E) async_pq(E) async_xor(E) xor(E) async_tx(E) raid6_pq(E) raid1(E) raid0(E) linear(E) psmouse(E) serio_raw(E) pata_acpi(E) bochs(E) floppy(E) hid_generic(E) usbhid(E) hid(E) aesni_intel(E)
+[   39.843532] CR2: 0000000000000000
+[   39.844019] ---[ end trace 0000000000000000 ]---
+[   39.844617] RIP: 0010:bpf_prog_8af3851c2a7f2a1a_trace_attach_cs_ht+0x16a/0x295
+[   39.845405] Code: 00 01 00 73 09 48 c1 e0 06 48 01 f8 eb 02 31 c0 48 85 c0 0f 84 27 01 00 00 8b 7d f4 48 8b 7d e8 be 08 00 00 00 e8 e6 0a 60 e1 <48> 89 78 00 41 8b 7d 00 41 0f af fe 83 c7 01 89 7d f4 48 89 ee 48
+[   39.847273] RSP: 0018:ffffc90009e63da8 EFLAGS: 00010246
+[   39.847929] RAX: 0000000000000000 RBX: ffff88810bb9d330 RCX: 0000000000000000
+[   39.848721] RDX: 0000000000000000 RSI: 0000000000000000 RDI: 0000000000000000
+[   39.849513] RBP: ffffc90009e63e10 R08: ffffffffa0c919f0 R09: 0000000000000000
+[   39.850307] R10: 0000000000000000 R11: 0000000000000000 R12: ffffffffa0b6b080
+[   39.851105] R13: ffff88810bb9f338 R14: 0000000000000266 R15: 0000000000000400
+[   39.851937] FS:  0000000000000000(0000) GS:ffff88989b260000(0000) knlGS:0000000000000000
+[   39.852837] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[   39.853554] CR2: 0000000000000000 CR3: 000000000323f001 CR4: 0000000000770ef0
+[   39.854362] PKRU: 55555554
+[   39.854821] note: bpf_waiter[4389] exited with irqs disabled
+[   40.015043] Removing IOCTL chardev
+[   40.015861] BUG: kernel NULL pointer dereference, address: 0000000000000000
+[   40.016751] #PF: supervisor write access in kernel mode
+[   40.017448] #PF: error_code(0x0002) - not-present page
+[   40.018118] PGD 0 P4D 0 
+[   40.018572] Oops: Oops: 0002 [#3] SMP
+[   40.019117] CPU: 14 UID: 0 PID: 4434 Comm: rmmod Tainted: G      D W  OE       6.19.0-rc1-ebpftest-timeout+ #36 PREEMPT(voluntary) 
+[   40.020305] Tainted: [D]=DIE, [W]=WARN, [O]=OOT_MODULE, [E]=UNSIGNED_MODULE
+[   40.021094] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS rel-1.17.0-0-gb52ca86e094d-prebuilt.qemu.org 04/01/2014
+[   40.022254] RIP: 0010:kthread_stop+0x3c/0x180
+[   40.022848] Code: 00 f0 0f c1 43 28 85 c0 0f 84 46 01 00 00 8d 50 01 09 c2 0f 88 09 01 00 00 f6 43 2e 20 0f 84 17 01 00 00 48 8b ab a0 0b 00 00 <f0> 80 4d 00 02 48 89 df e8 67 fe ff ff f0 80 0b 04 48 89 df e8 cb
+[   40.024805] RSP: 0018:ffffc9000cd5bda8 EFLAGS: 00010202
+[   40.025482] RAX: 0000000000000000 RBX: ffff8881101cb100 RCX: 0000000000000000
+[   40.026316] RDX: 0000000000000000 RSI: 0000000000000000 RDI: 0000000000000000
+[   40.027137] RBP: 0000000000000000 R08: 0000000000000000 R09: 0000000000000000
+[   40.027962] R10: 0000000000000000 R11: 0000000000000000 R12: ffffc9000cd5bf48
+[   40.028776] R13: 00000000000000b0 R14: 0000000000000000 R15: 0000000000000000
+[   40.029599] FS:  00007c8e15d16380(0000) GS:ffff88889b7e0000(0000) knlGS:0000000000000000
+[   40.030490] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[   40.031204] CR2: 0000000000000000 CR3: 00000001958d1005 CR4: 0000000000770ef0
+[   40.032033] PKRU: 55555554
+[   40.032499] Call Trace:
+[   40.032952]  <TASK>
+[   40.033371]  rcuhashbash_exit+0x22/0x70 [baseline]
+[   40.034018]  ? __do_sys_delete_module.isra.0+0x1b7/0x2e0
+[   40.034690]  ? do_syscall_64+0x82/0x730
+[   40.035262]  ? count_memcg_events+0xe4/0x210
+[   40.035858]  ? handle_mm_fault+0x1d9/0x2e0
+[   40.036447]  ? do_user_addr_fault+0x2bc/0x7d0
+[   40.037048]  ? irqentry_exit+0x7c/0x5c0
+[   40.037592]  ? exc_page_fault+0x7a/0x1a0
+[   40.038140]  ? entry_SYSCALL_64_after_hwframe+0x4b/0x53
+[   40.038782]  </TASK>
+[   40.039185] Modules linked in: baseline(OE-) qrtr(E) cfg80211(E) binfmt_misc(E) i2c_piix4(E) i2c_smbus(E) vmgenid(E) input_leds(E) joydev(E) mac_hid(E) sch_fq_codel(E) msr(E) efi_pstore(E) dm_multipath(E) nfnetlink(E) vsock_loopback(E) vmw_vsock_virtio_transport_common(E) vmw_vsock_vmci_transport(E) vmw_vmci(E) vsock(E) dmi_sysfs(E) qemu_fw_cfg(E) ip_tables(E) x_tables(E) autofs4(E) raid10(E) raid456(E) async_raid6_recov(E) async_memcpy(E) async_pq(E) async_xor(E) xor(E) async_tx(E) raid6_pq(E) raid1(E) raid0(E) linear(E) psmouse(E) serio_raw(E) pata_acpi(E) bochs(E) floppy(E) hid_generic(E) usbhid(E) hid(E) aesni_intel(E)
+[   40.044391] CR2: 0000000000000000
+[   40.044902] ---[ end trace 0000000000000000 ]---
+[   40.045520] RIP: 0010:0xffffffffa001f9ca
+[   40.046085] Code: cc cc cc cc cc cc cc cc cc cc cc cc cc cc cc cc cc cc cc cc cc cc cc cc cc cc cc cc cc cc cc cc cc cc cc cc cc cc cc cc cc cc <cc> cc cc cc cc cc cc cc cc cc cc cc cc cc cc cc cc cc cc cc cc cc
+[   40.048054] RSP: 0018:ffffc90009e63da8 EFLAGS: 00010246
+[   40.048728] RAX: 0000000000000000 RBX: ffff88810bb9d330 RCX: 0000000000000000
+[   40.049558] RDX: 0000000000000000 RSI: 0000000000000000 RDI: 0000000000000000
+[   40.050386] RBP: ffffc90009e63e10 R08: ffffffffa0c919f0 R09: 0000000000000000
+[   40.051214] R10: 0000000000000000 R11: 0000000000000000 R12: ffffffffa0b6b080
+[   40.052046] R13: ffff88810bb9f338 R14: 0000000000000266 R15: 0000000000000400
+[   40.052864] FS:  00007c8e15d16380(0000) GS:ffff88889b7e0000(0000) knlGS:0000000000000000
+[   40.053775] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[   40.054499] CR2: 0000000000000000 CR3: 00000001958d1005 CR4: 0000000000770ef0
+[   40.055348] PKRU: 55555554
+[   40.055818] note: rmmod[4434] exited with irqs disabled
