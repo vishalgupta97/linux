@@ -3140,6 +3140,11 @@ bool __weak bpf_jit_inlines_helper_call(s32 imm)
 	return false;
 }
 
+bool __weak bpf_jit_supports_undo_log_nospill(void)
+{
+	return false;
+}
+
 /* Return TRUE if the JIT backend supports mixing bpf2bpf and tailcalls. */
 bool __weak bpf_jit_supports_subprog_tailcalls(void)
 {

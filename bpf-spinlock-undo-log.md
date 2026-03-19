@@ -224,7 +224,20 @@ R0–R5 spill slots.  Rejects with an error if the resulting stack would exceed
 
 **Per-instruction injection**:  
 For every instruction with `insn_aux_data[i].in_critical_section == true`,
-replaces it with a sequence:
+the rewrite now uses one of two paths:
+
+- **x86 JIT no-spill path** (`prog->jit_requested` and JIT advertises
+  `bpf_jit_supports_undo_log_nospill()`):
+
+```
+CALL bpf_undo_log_push          ; marker call, no BPF arg setup
+<original STX / ST / atomic>    ; unchanged write
+```
+
+  The x86 JIT recognizes this marker and derives `(addr, size)` from the
+  following write instruction while preserving BPF R0-R5 in native code.
+
+- **generic fallback path** (unchanged behavior):
 
 ```
 ; --- spill R0-R5 to reserved stack slots ---

@@ -414,6 +414,9 @@ static void emit_nops(u8 **pprog, int len)
  * in arch/x86/kernel/alternative.c
  */
 static int emit_call(u8 **prog, void *func, void *ip);
+static void emit_mov_imm32(u8 **pprog, bool sign_propagate,
+			   u32 dst_reg, const u32 imm32);
+static void emit_mov_reg(u8 **pprog, bool is64, u32 dst_reg, u32 src_reg);
 
 static void emit_fineibt(u8 **pprog, u8 *ip, u32 hash, int arity)
 {
@@ -581,6 +584,65 @@ static int emit_rsb_call(u8 **pprog, void *func, void *ip)
 	OPTIMIZER_HIDE_VAR(func);
 	ip += x86_call_depth_emit_accounting(pprog, func, ip);
 	return emit_patch(pprog, func, ip, 0xE8);
+}
+
+static bool bpf_insn_is_undo_log_write(const struct bpf_insn *insn)
+{
+	u8 cls = BPF_CLASS(insn->code);
+	u8 mode = BPF_MODE(insn->code);
+
+	return (cls == BPF_STX || cls == BPF_ST) &&
+		(mode == BPF_MEM || mode == BPF_ATOMIC ||
+		 mode == BPF_PROBE_MEM32 || mode == BPF_PROBE_ATOMIC);
+}
+
+static int emit_undo_log_push_call(u8 **pprog, u8 *image, u8 *temp, int *addrs,
+				   int insn_idx, struct bpf_insn *next_insn,
+				   void *func,
+				   void __percpu *priv_frame_ptr)
+{
+	u8 *prog = *pprog;
+	u32 dst_reg = next_insn->dst_reg;
+	u8 *ip;
+
+	if (!bpf_insn_is_undo_log_write(next_insn))
+		return 0;
+
+	if (priv_frame_ptr && dst_reg == BPF_REG_FP)
+		dst_reg = X86_REG_R9;
+
+	EMIT1(0x50); /* push rax */
+	EMIT1(0x57); /* push rdi */
+	EMIT1(0x56); /* push rsi */
+	EMIT1(0x52); /* push rdx */
+	EMIT1(0x51); /* push rcx */
+	EMIT2(0x41, 0x50); /* push r8 */
+
+	emit_mov_reg(&prog, true, BPF_REG_1, dst_reg);
+	if (next_insn->off)
+		EMIT3_off32(0x48, 0x81, 0xC7, next_insn->off);
+	emit_mov_imm32(&prog, true, BPF_REG_2, BPF_LDST_BYTES(next_insn));
+
+	if (priv_frame_ptr)
+		push_r9(&prog);
+
+	ip = image + addrs[insn_idx - 1] + (prog - temp);
+	ip += x86_call_depth_emit_accounting(&prog, func, ip);
+	if (emit_call(&prog, func, ip))
+		return -EINVAL;
+
+	if (priv_frame_ptr)
+		pop_r9(&prog);
+
+	EMIT2(0x41, 0x58); /* pop r8 */
+	EMIT1(0x59); /* pop rcx */
+	EMIT1(0x5A); /* pop rdx */
+	EMIT1(0x5E); /* pop rsi */
+	EMIT1(0x5F); /* pop rdi */
+	EMIT1(0x58); /* pop rax */
+
+	*pprog = prog;
+	return 1;
 }
 
 static int emit_jump(u8 **pprog, void *func, void *ip)
@@ -2443,6 +2505,15 @@ populate_extable:
 			u8 *ip = image + addrs[i - 1];
 
 			func = (u8 *) __bpf_call_base + imm32;
+			if (func == (u8 *)bpf_undo_log_push && i < insn_cnt) {
+				err = emit_undo_log_push_call(&prog, image, temp, addrs, i,
+						      insn + 1, func,
+						      priv_frame_ptr);
+				if (err < 0)
+					return err;
+				if (err > 0)
+					break;
+			}
 			if (src_reg == BPF_PSEUDO_CALL && tail_call_reachable) {
 				LOAD_TAIL_CALL_CNT_PTR(stack_depth);
 				ip += 7;
@@ -3951,6 +4022,11 @@ bool bpf_jit_supports_subprog_tailcalls(void)
 }
 
 bool bpf_jit_supports_percpu_insn(void)
+{
+	return true;
+}
+
+bool bpf_jit_supports_undo_log_nospill(void)
 {
 	return true;
 }
