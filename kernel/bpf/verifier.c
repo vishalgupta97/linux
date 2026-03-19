@@ -22705,6 +22705,8 @@ static int do_misc_fixups(struct bpf_verifier_env *env)
 	struct bpf_subprog_info *subprogs = env->subprog_info;
 	u16 stack_depth = subprogs[cur_subprog].stack_depth;
 	u16 stack_depth_extra = 0;
+	const bool undo_log_nospill =
+		prog->jit_requested && bpf_jit_supports_undo_log_nospill();
 
 	if (env->seen_exception && !env->exception_callback_subprog) {
 		struct bpf_insn *patch = insn_buf;
@@ -22724,10 +22726,9 @@ static int do_misc_fixups(struct bpf_verifier_env *env)
 	}
 
 	/*
-	 * Pre-pass: extend the stack of any subprogram containing
-	 * critical-section writes.  Reserve BPF_UNDO_LOG_SPILL_SIZE bytes
-	 * below the existing BPF stack for R0-R5 spill slots used by the
-	 * undo-log prefix injected in the main loop below.
+	 * Pre-pass: if spill-based undo logging is used, extend the stack of
+	 * any subprogram containing critical-section writes by
+	 * BPF_UNDO_LOG_SPILL_SIZE for R0-R5 spill slots.
 	 */
 	{
 		int sp;
@@ -22746,6 +22747,8 @@ static int do_misc_fixups(struct bpf_verifier_env *env)
 			}
 			if (!has_cs_write)
 				continue;
+			if (undo_log_nospill)
+				continue;
 
 			subprogs[sp].stack_depth += BPF_UNDO_LOG_SPILL_SIZE;
 			if (subprogs[sp].stack_depth > MAX_BPF_STACK) {
@@ -22761,14 +22764,15 @@ static int do_misc_fixups(struct bpf_verifier_env *env)
 
 	for (i = 0; i < insn_cnt;) {
 		/*
-		 * Undo-log injection: for every write instruction inside a BPF
-		 * spinlock critical section, prepend a register-save block, a
-		 * call to bpf_undo_log_push(), and a register-restore block.
-		 * This records the old value so that bpf_spin_lock_timeout_handler()
-		 * can roll back all writes made before a timeout.
+		 * Undo-log injection for write instructions inside a BPF spinlock
+		 * critical section.
 		 *
-		 * Spill slot offsets (stack already extended by BPF_UNDO_LOG_SPILL_SIZE):
-		 *   R_k  →  FP - (stack_depth - 40 + k*8),  k ∈ {0..5}
+		 * - no-spill mode (x86 JIT): emit only a marker call to
+		 *   bpf_undo_log_push() before the write. The JIT derives
+		 *   address/size from the following write instruction and preserves
+		 *   R0-R5.
+		 * - fallback mode: save R0-R5, prepare helper args, call helper,
+		 *   restore R0-R5, then execute original write.
 		 */
 		if (env->insn_aux_data[i + delta].in_critical_section) {
 			u8 cls  = BPF_CLASS(insn->code);
@@ -22777,39 +22781,41 @@ static int do_misc_fixups(struct bpf_verifier_env *env)
 			if ((cls == BPF_STX || cls == BPF_ST) &&
 			    (mode == BPF_MEM         || mode == BPF_ATOMIC       ||
 			     mode == BPF_PROBE_MEM32 || mode == BPF_PROBE_ATOMIC)) {
-				int usd = (int)stack_depth; /* includes spill extension */
-				int k;
+				if (undo_log_nospill) {
+					cnt = 0;
+					insn_buf[cnt++] = BPF_EMIT_CALL(bpf_undo_log_push);
+					insn_buf[cnt++] = *insn;
+				} else {
+					int usd = (int)stack_depth;
+					int k;
 
-				cnt = 0;
-				/* --- Save R0–R5 to dedicated spill slots --- */
-				for (k = 0; k <= 5; k++)
-					insn_buf[cnt++] = BPF_STX_MEM(BPF_DW,
-						BPF_REG_FP, k,
-						-(usd - 40 + k * 8));
-				/* --- R1 = effective write address = dst_reg + off --- */
-				if (insn->dst_reg <= BPF_REG_5)
-					/* dst_reg was already spilled; reload from slot */
-					insn_buf[cnt++] = BPF_LDX_MEM(BPF_DW,
-						BPF_REG_1, BPF_REG_FP,
-						-(usd - 40 + insn->dst_reg * 8));
-				else
-					insn_buf[cnt++] = BPF_MOV64_REG(
-						BPF_REG_1, insn->dst_reg);
-				if (insn->off)
-					insn_buf[cnt++] = BPF_ALU64_IMM(
-						BPF_ADD, BPF_REG_1, insn->off);
-				/* --- R2 = write size in bytes (1/2/4/8) --- */
-				insn_buf[cnt++] = BPF_MOV64_IMM(BPF_REG_2,
-					BPF_LDST_BYTES(insn));
-				/* --- Call bpf_undo_log_push(addr, size) --- */
-				insn_buf[cnt++] = BPF_EMIT_CALL(bpf_undo_log_push);
-				/* --- Restore R0–R5 --- */
-				for (k = 0; k <= 5; k++)
-					insn_buf[cnt++] = BPF_LDX_MEM(BPF_DW,
-						k, BPF_REG_FP,
-						-(usd - 40 + k * 8));
-				/* --- Original write instruction --- */
-				insn_buf[cnt++] = *insn;
+					cnt = 0;
+					for (k = 0; k <= 5; k++)
+						insn_buf[cnt++] = BPF_STX_MEM(BPF_DW,
+							BPF_REG_FP, k,
+							-(usd - 40 + k * 8));
+
+					if (insn->dst_reg <= BPF_REG_5)
+						insn_buf[cnt++] = BPF_LDX_MEM(BPF_DW,
+							BPF_REG_1, BPF_REG_FP,
+							-(usd - 40 + insn->dst_reg * 8));
+					else
+						insn_buf[cnt++] = BPF_MOV64_REG(BPF_REG_1,
+									insn->dst_reg);
+
+					if (insn->off)
+						insn_buf[cnt++] = BPF_ALU64_IMM(BPF_ADD,
+									BPF_REG_1, insn->off);
+					insn_buf[cnt++] = BPF_MOV64_IMM(BPF_REG_2,
+						BPF_LDST_BYTES(insn));
+					insn_buf[cnt++] = BPF_EMIT_CALL(bpf_undo_log_push);
+
+					for (k = 0; k <= 5; k++)
+						insn_buf[cnt++] = BPF_LDX_MEM(BPF_DW,
+							k, BPF_REG_FP,
+							-(usd - 40 + k * 8));
+					insn_buf[cnt++] = *insn;
+				}
 
 				if (WARN_ONCE(cnt > INSN_BUF_SIZE,
 					      "BPF undo log: insn_buf overflow cnt=%d\n",

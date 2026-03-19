@@ -336,27 +336,12 @@ NOTRACE_BPF_CALL_2(bpf_undo_log_push, unsigned long, addr, u64, size)
 	int cnt;
 
 	cnt = this_cpu_read(bpf_undo_log_cnt);
-	if (WARN_ONCE(cnt >= CONFIG_BPF_UNDO_LOG_MAX_ENTRIES,
-		      "BPF undo log overflow (cnt=%d max=%d)\n",
-		      cnt, CONFIG_BPF_UNDO_LOG_MAX_ENTRIES))
-		return -ENOSPC;
 
 	switch (size) {
-	case 1:
-		old_value = READ_ONCE(*(u8 *)addr);
-		break;
-	case 2:
-		old_value = READ_ONCE(*(u16 *)addr);
-		break;
-	case 4:
-		old_value = READ_ONCE(*(u32 *)addr);
-		break;
-	case 8:
-		old_value = READ_ONCE(*(u64 *)addr);
-		break;
-	default:
-		WARN_ONCE(1, "bpf_undo_log_push: invalid size %llu\n", size);
-		return -EINVAL;
+	case 1: old_value = READ_ONCE(*(u8 *)addr);  break;
+	case 2: old_value = READ_ONCE(*(u16 *)addr); break;
+	case 4: old_value = READ_ONCE(*(u32 *)addr); break;
+	case 8: old_value = READ_ONCE(*(u64 *)addr); break;
 	}
 
 	log = this_cpu_ptr(bpf_undo_log);
