@@ -72,6 +72,34 @@ extern unsigned long rcu_random(struct rcu_random_state *rrsp);
 				preempt_enable();                                                                  \
 		}
 
+#define DECLARE_TABLE_LOCK_IRQ(l, linit, wl, wul, rl, rul)                                             \
+                                                                                                   \
+		static __cacheline_aligned_in_smp linit(l);                                                \
+		static unsigned long l##_flags;                                                \
+                                                                                                   \
+		static void l##_write_lock_buckets(struct rcuhashbash_bucket *b1,                          \
+										   struct rcuhashbash_bucket *b2)                          \
+		{                    local_irq_save(l##_flags);                                                                      \
+				wl(&l);                                                                            \
+		}                                                                                          \
+                                                                                                   \
+		static void l##_write_unlock_buckets(struct rcuhashbash_bucket *b1,                        \
+											 struct rcuhashbash_bucket *b2)                        \
+		{                                                                                          \
+				wul(&l); local_irq_restore(l##_flags);                                                                           \
+		}                                                                                          \
+                                                                                                   \
+		static void l##_read_lock_bucket(struct rcuhashbash_bucket *bucket)                        \
+		{                                                                                          \
+				rl(&l);                                                                            \
+		}                                                                                          \
+                                                                                                   \
+		static void l##_read_unlock_bucket(struct rcuhashbash_bucket *bucket)                      \
+		{                                                                                          \
+				rul(&l);                                                                           \
+		}
+
+
 #define DECLARE_PARTITIONED_TABLE_LOCK(l, linit, wl, wul, rl, rul)                                 \
                                                                                                    \
 		static __cacheline_aligned_in_smp linit(l);                                                \

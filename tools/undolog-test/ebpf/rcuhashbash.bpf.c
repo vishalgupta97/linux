@@ -68,18 +68,7 @@ static int write_entry_cb(u32 i, void *ctx)
 SEC("fentry/attach_cs_ht")
 int BPF_PROG(trace_attach_cs_ht, u32 src_value, u32 dst_value, void *stats)
 {
-    /* Read num_buckets from config */
-    u32 cfg_key = 0;
-    u32 *num_buckets = bpf_map_lookup_elem(&num_bucket_config, &cfg_key);
-    cfg_key = 1;
-    u32 *entries_per_bucket = bpf_map_lookup_elem(&num_bucket_config, &cfg_key);
-    if (!num_buckets || *num_buckets == 0)
-        return 0;
-
-    if(!entries_per_bucket || *entries_per_bucket == 0 || *entries_per_bucket > MAX_ENTRIES_PER_BUCKET)
-	return 0;
-
-    u32 src_bucket = src_value % *num_buckets;
+    u32 src_bucket = src_value % 1024;
 
     u32 lock_key = 0;
     struct global_lock_val *glv = bpf_map_lookup_elem(&global_lock_map, &lock_key);
@@ -88,19 +77,15 @@ int BPF_PROG(trace_attach_cs_ht, u32 src_value, u32 dst_value, void *stats)
 
     bpf_spin_lock(&glv->lock);
 	
-    //bpf_loop(*entries_per_bucket, write_entry_cb, &entry_key, 0);
-    //bpf_loop(4, write_entry_cb, &entry_key, 0);
     for(int i = 0; i < 4; i++)
 	{
-	    u32 entry_key = (src_bucket * (*entries_per_bucket)) + i;
+	    u32 entry_key = (src_bucket * 4) + i;
 
 	    struct entry_val *eval = bpf_map_lookup_elem(&entries, &entry_key);
 	    if (!eval) {
 		goto end;
             }
-    		//if (!eval)
-        	//return 0; /* skip missing entries, keep going */
-	    eval->value = entry_key + i;
+	    eval->value = dst_value + i;
 	}
 end:
     bpf_spin_unlock(&glv->lock);

@@ -117,6 +117,7 @@ struct rcuhashbash_entry {
 static struct rcuhashbash_ops *ops;
 
 DECLARE_TABLE_LOCK(table_spinlock, DEFINE_SPINLOCK, spin_lock, spin_unlock, spin_lock, spin_unlock);
+DECLARE_TABLE_LOCK_IRQ(table_spinlock_irqsave, DEFINE_SPINLOCK, spin_lock, spin_unlock, spin_lock, spin_unlock);
 
 DECLARE_TABLE_LOCK(table_bpf_qspinlock, DEFINE_KOMBSPINLOCK, __internal__bpf_spin_lock, __internal__bpf_spin_unlock, __internal__bpf_spin_lock, __internal__bpf_spin_unlock);
 
@@ -624,6 +625,16 @@ static struct rcuhashbash_ops all_ops[] = {
 				.write = rcuhashbash_write_lock,
 				.write_lock_buckets = table_spinlock_write_lock_buckets,
 				.write_unlock_buckets = table_spinlock_write_unlock_buckets,
+		},
+		{
+				.reader_type = "table_spinlock_irqsave",
+				.writer_type = "table_spinlock_irqsave",
+				.read = rcuhashbash_read_lock,
+				.read_lock_bucket = table_spinlock_irqsave_read_lock_bucket,
+				.read_unlock_bucket = table_spinlock_irqsave_read_unlock_bucket,
+				.write = rcuhashbash_write_lock,
+				.write_lock_buckets = table_spinlock_irqsave_write_lock_buckets,
+				.write_unlock_buckets = table_spinlock_irqsave_write_unlock_buckets,
 		},
 		{
 				.reader_type = "table_bpf_spinlock_undolog",
