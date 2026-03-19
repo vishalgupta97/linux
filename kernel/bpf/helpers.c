@@ -587,7 +587,8 @@ EXPORT_SYMBOL_GPL(__internal__bpf_spin_lock);
 
 NOTRACE_BPF_CALL_1(bpf_spin_lock, struct bpf_spin_lock *, lock)
 {
-    __internal__bpf_spin_lock((struct qspinlock*)lock);
+    	//__internal__bpf_spin_lock((struct qspinlock*)lock);
+	__bpf_spin_lock_irqsave(lock);
 	return 0;
 }
 
@@ -658,7 +659,8 @@ EXPORT_SYMBOL_GPL(__internal__bpf_spin_unlock);
 
 NOTRACE_BPF_CALL_1(bpf_spin_unlock, struct bpf_spin_lock *, lock)
 {
-    __internal__bpf_spin_unlock((struct qspinlock *)lock);
+    	//__internal__bpf_spin_unlock((struct qspinlock *)lock);
+	__bpf_spin_unlock_irqrestore(lock);
 	return 0;
 }
 
