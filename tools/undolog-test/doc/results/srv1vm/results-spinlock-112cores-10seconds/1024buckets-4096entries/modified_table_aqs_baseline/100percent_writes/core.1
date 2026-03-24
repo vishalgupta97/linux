@@ -1,16 +1,23 @@
-[ 1780.651022] rcuhashbash starting threads
-[ 1790.667527] rcuhashbash exiting threads
-[ 1790.718267] ======== KOMB spinlock stats ========
-[ 1790.718670] Combiner_count: 0
-[ 1790.718954] waiter_combined: 0
-[ 1790.719228] ooo_unlocks: 0
-[ 1790.719459] ooo_combiner_count: 0
-[ 1790.719677] ooo_waiter_combined: 0
-[ 1790.719898] rcuhashbash summary: (up: 0 down: 0)
-[ 1790.720127] rcuhashbash summary: ro=0 rw=1 reader_type=table_aqs writer_type=table_aqs
+[12384.927445] BPF_SYNC: Module loaded, device /dev/bpf_rcuht_sync created. Send BPF_READY ioctl to unblock.
+[12384.927462] BPF waiter kthread: waiting for BPF attach signal...
+[12384.939955] BPF_IOCTL: BPF program attached, signaling ready!
+[12384.940087] init_ht called
+[12384.940816] rcuhashbash starting threads
+[12394.956616] BPF_IOCTL: Remove BPF program
+[12394.956658] rcuhashbash exiting threads
+[12394.969305] Removing IOCTL chardev
+[12394.992166] ======== KOMB spinlock stats ========
+[12394.993203] Combiner_count: 0
+[12394.993928] waiter_combined: 0
+[12394.994687] ooo_unlocks: 0
+[12394.995377] ooo_combiner_count: 0
+[12394.996628] ooo_waiter_combined: 0
+[12394.997755] rcuhashbash summary: (up: 0 down: 0)
+[12394.999296] rcuhashbash summary: ro=0 rw=1 reader_type=table_aqs writer_type=table_aqs
                rcuhashbash summary: writer proportion 100/100
                rcuhashbash summary: buckets=1024 entries=4096 reader_range=8192 writer_range=8192
-               rcuhashbash summary: writes: 965202804 moves, 0 dests in use, 0 misses (965202804)
+               rcuhashbash summary: writes: 136211720 moves, 0 dests in use, 0 misses (136211720)
                rcuhashbash summary: reads: 0 hits, 0 misses (0)
-               rcuhashbash summary: total: 965202804 (avg: 10016233324 min: 10016233324 max: 10016233324)
-[ 1790.721540] rcuhashbash done
+               rcuhashbash summary: total: 136211720 (avg: 10015077176 min: 10015077176 max: 10015077176)
+[12395.008179] BPF waiter kthread exiting: BPF ready! Flag set.
+[12395.008614] rcuhashbash done
