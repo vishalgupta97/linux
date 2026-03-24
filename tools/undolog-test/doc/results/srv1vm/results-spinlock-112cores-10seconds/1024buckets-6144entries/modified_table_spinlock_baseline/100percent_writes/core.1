@@ -1,16 +1,23 @@
-[  528.856904] rcuhashbash starting threads
-[  538.873123] rcuhashbash exiting threads
-[  538.914284] ======== KOMB spinlock stats ========
-[  538.915320] Combiner_count: 0
-[  538.915975] waiter_combined: 0
-[  538.916584] ooo_unlocks: 0
-[  538.917284] ooo_combiner_count: 0
-[  538.917977] ooo_waiter_combined: 0
-[  538.918633] rcuhashbash summary: (up: 0 down: 0)
-[  538.919751] rcuhashbash summary: ro=0 rw=1 reader_type=table_spinlock writer_type=table_spinlock
+[88529.603309] BPF_SYNC: Module loaded, device /dev/bpf_rcuht_sync created. Send BPF_READY ioctl to unblock.
+[88529.603313] BPF waiter kthread: waiting for BPF attach signal...
+[88529.611612] BPF_IOCTL: BPF program attached, signaling ready!
+[88529.611710] init_ht called
+[88529.612416] rcuhashbash starting threads
+[88539.623699] BPF_IOCTL: Remove BPF program
+[88539.623848] rcuhashbash exiting threads
+[88539.631482] Removing IOCTL chardev
+[88539.677883] ======== KOMB spinlock stats ========
+[88539.678926] Combiner_count: 0
+[88539.679470] waiter_combined: 0
+[88539.679995] ooo_unlocks: 0
+[88539.680448] ooo_combiner_count: 0
+[88539.681726] ooo_waiter_combined: 0
+[88539.682241] rcuhashbash summary: (up: 0 down: 0)
+[88539.683084] rcuhashbash summary: ro=0 rw=1 reader_type=table_spinlock writer_type=table_spinlock
                rcuhashbash summary: writer proportion 100/100
                rcuhashbash summary: buckets=1024 entries=6144 reader_range=12288 writer_range=12288
-               rcuhashbash summary: writes: 1268296014 moves, 0 dests in use, 0 misses (1268296014)
+               rcuhashbash summary: writes: 206668411 moves, 0 dests in use, 0 misses (206668411)
                rcuhashbash summary: reads: 0 hits, 0 misses (0)
-               rcuhashbash summary: total: 1268296014 (avg: 10015762272 min: 10015762272 max: 10015762272)
-[  538.926669] rcuhashbash done
+               rcuhashbash summary: total: 206668411 (avg: 10010959245 min: 10010959245 max: 10010959245)
+[88539.688847] BPF waiter kthread exiting: BPF ready! Flag set.
+[88539.689183] rcuhashbash done

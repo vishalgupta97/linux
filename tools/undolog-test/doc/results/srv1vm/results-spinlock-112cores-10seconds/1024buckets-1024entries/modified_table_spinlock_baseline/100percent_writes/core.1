@@ -1,16 +1,23 @@
-[  173.193237] rcuhashbash starting threads
-[  183.208413] rcuhashbash exiting threads
-[  183.257668] ======== KOMB spinlock stats ========
-[  183.258640] Combiner_count: 0
-[  183.259231] waiter_combined: 0
-[  183.259839] ooo_unlocks: 0
-[  183.260619] ooo_combiner_count: 0
-[  183.261278] ooo_waiter_combined: 0
-[  183.262050] rcuhashbash summary: (up: 0 down: 0)
-[  183.263102] rcuhashbash summary: ro=0 rw=1 reader_type=table_spinlock writer_type=table_spinlock
+[88055.518595] BPF_SYNC: Module loaded, device /dev/bpf_rcuht_sync created. Send BPF_READY ioctl to unblock.
+[88055.518612] BPF waiter kthread: waiting for BPF attach signal...
+[88055.527022] BPF_IOCTL: BPF program attached, signaling ready!
+[88055.527141] init_ht called
+[88055.527828] rcuhashbash starting threads
+[88065.541099] BPF_IOCTL: Remove BPF program
+[88065.541227] rcuhashbash exiting threads
+[88065.550739] Removing IOCTL chardev
+[88065.590075] ======== KOMB spinlock stats ========
+[88065.590960] Combiner_count: 0
+[88065.591435] waiter_combined: 0
+[88065.591919] ooo_unlocks: 0
+[88065.592381] ooo_combiner_count: 0
+[88065.593126] ooo_waiter_combined: 0
+[88065.593938] rcuhashbash summary: (up: 0 down: 0)
+[88065.594760] rcuhashbash summary: ro=0 rw=1 reader_type=table_spinlock writer_type=table_spinlock
                rcuhashbash summary: writer proportion 100/100
                rcuhashbash summary: buckets=1024 entries=1024 reader_range=2048 writer_range=2048
-               rcuhashbash summary: writes: 232002809 moves, 0 dests in use, 0 misses (232002809)
+               rcuhashbash summary: writes: 234129765 moves, 0 dests in use, 0 misses (234129765)
                rcuhashbash summary: reads: 0 hits, 0 misses (0)
-               rcuhashbash summary: total: 232002809 (avg: 10014808421 min: 10014808421 max: 10014808421)
-[  183.270869] rcuhashbash done
+               rcuhashbash summary: total: 234129765 (avg: 10012696368 min: 10012696368 max: 10012696368)
+[88065.600808] BPF waiter kthread exiting: BPF ready! Flag set.
+[88065.601291] rcuhashbash done
