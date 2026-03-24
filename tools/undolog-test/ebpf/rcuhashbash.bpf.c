@@ -7,6 +7,7 @@
 #define MAX_BUCKETS            1024
 #define MAX_ENTRIES            65536
 #define MAX_ENTRIES_PER_BUCKET 64
+#define NUM_ENTRIES 8          
 
 /* ─── Map key/value types ─────────────────────────────────────── */
 
@@ -77,9 +78,9 @@ int BPF_PROG(trace_attach_cs_ht, u32 src_value, u32 dst_value, void *stats)
 
     bpf_spin_lock(&glv->lock);
 	
-    for(int i = 0; i < 4; i++)
+    for(int i = 0; i < NUM_ENTRIES; i++)
 	{
-	    u32 entry_key = (src_bucket * 4) + i;
+	    u32 entry_key = (src_bucket * NUM_ENTRIES) + i;
 
 	    struct entry_val *eval = bpf_map_lookup_elem(&entries, &entry_key);
 	    if (!eval) {
