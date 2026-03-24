@@ -1,0 +1,26 @@
+[  225.994724] BPF_SYNC: Module loaded, device /dev/bpf_rcuht_sync created. Send BPF_READY ioctl to unblock.
+[  225.994741] BPF waiter kthread: waiting for BPF attach signal...
+[  228.010239] BPF_IOCTL: BPF program attached, signaling ready!
+[  228.010360] init_ht called
+[  228.011050] rcuhashbash starting threads
+[  234.733356] workqueue: netstamp_clear hogged CPU for >10000us 4 times, consider switching to WQ_UNBOUND
+[  235.182380] workqueue: netstamp_clear hogged CPU for >10000us 5 times, consider switching to WQ_UNBOUND
+[  235.422393] workqueue: netstamp_clear hogged CPU for >10000us 7 times, consider switching to WQ_UNBOUND
+[  238.074833] BPF_IOCTL: Remove BPF program
+[  238.082540] rcuhashbash exiting threads
+[  238.153680] ======== KOMB spinlock stats ========
+[  238.154687] Combiner_count: 0
+[  238.155302] waiter_combined: 0
+[  238.155931] ooo_unlocks: 0
+[  238.156676] ooo_combiner_count: 0
+[  238.157277] ooo_waiter_combined: 0
+[  238.158265] rcuhashbash summary: (up: 17948393 down: 23383004)
+[  238.159699] rcuhashbash summary: ro=0 rw=112 reader_type=table_bpf_spinlock_baseline writer_type=table_bpf_spinlock_baseline
+               rcuhashbash summary: writer proportion 100/100
+               rcuhashbash summary: buckets=1024 entries=1024 reader_range=2048 writer_range=2048
+               rcuhashbash summary: writes: 41331397 moves, 0 dests in use, 0 misses (41331397)
+               rcuhashbash summary: reads: 0 hits, 0 misses (0)
+               rcuhashbash summary: total: 41331397 (avg: 10090768828 min: 10074670953 max: 10096963927)
+[  238.166170] BPF waiter kthread exiting: BPF ready! Flag set.
+[  238.377854] Removing IOCTL chardev
+[  238.378062] rcuhashbash done
