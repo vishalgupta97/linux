@@ -1,23 +1,23 @@
-[ 3291.683777] BPF_SYNC: Module loaded, device /dev/bpf_rcuht_sync created. Send BPF_READY ioctl to unblock.
-[ 3291.683786] BPF waiter kthread: waiting for BPF attach signal...
-[ 3293.694700] BPF_IOCTL: BPF program attached, signaling ready!
-[ 3293.694750] init_ht called
-[ 3293.695882] rcuhashbash starting threads
-[ 3323.707603] BPF_IOCTL: Remove BPF program
-[ 3323.707752] rcuhashbash exiting threads
-[ 3323.745072] ======== KOMB spinlock stats ========
-[ 3323.746081] Combiner_count: 0
-[ 3323.746682] waiter_combined: 0
-[ 3323.747287] ooo_unlocks: 0
-[ 3323.747966] ooo_combiner_count: 0
-[ 3323.748736] ooo_waiter_combined: 0
-[ 3323.749397] rcuhashbash summary: (up: 39014541 down: 49799888)
-[ 3323.750529] rcuhashbash summary: ro=0 rw=48 reader_type=table_bpf_spinlock_baseline writer_type=table_bpf_spinlock_baseline
+[ 1838.211750] BPF_SYNC: Module loaded, device /dev/bpf_rcuht_sync created. Send BPF_READY ioctl to unblock.
+[ 1838.211760] BPF waiter kthread: waiting for BPF attach signal...
+[ 1840.222574] BPF_IOCTL: BPF program attached, signaling ready!
+[ 1840.222727] init_ht called
+[ 1840.223509] rcuhashbash starting threads
+[ 1870.233585] BPF_IOCTL: Remove BPF program
+[ 1870.233737] rcuhashbash exiting threads
+[ 1870.282522] ======== KOMB spinlock stats ========
+[ 1870.283372] Combiner_count: 0
+[ 1870.283945] waiter_combined: 0
+[ 1870.284594] ooo_unlocks: 0
+[ 1870.285146] ooo_combiner_count: 0
+[ 1870.285854] ooo_waiter_combined: 0
+[ 1870.286592] rcuhashbash summary: (up: 54538298 down: 64879986)
+[ 1870.287497] rcuhashbash summary: ro=0 rw=48 reader_type=table_bpf_spinlock_baseline writer_type=table_bpf_spinlock_baseline
                rcuhashbash summary: writer proportion 100/100
                rcuhashbash summary: buckets=1024 entries=4096 reader_range=8192 writer_range=8192
-               rcuhashbash summary: writes: 88814429 moves, 0 dests in use, 0 misses (88814429)
+               rcuhashbash summary: writes: 119418284 moves, 0 dests in use, 0 misses (119418284)
                rcuhashbash summary: reads: 0 hits, 0 misses (0)
-               rcuhashbash summary: total: 88814429 (avg: 30010555533 min: 30008049070 max: 30012033497)
-[ 3323.759366] BPF waiter kthread exiting: BPF ready! Flag set.
-[ 3323.874044] Removing IOCTL chardev
-[ 3323.874176] rcuhashbash done
+               rcuhashbash summary: total: 119418284 (avg: 30008677942 min: 30006464789 max: 30010787692)
+[ 1870.295696] BPF waiter kthread exiting: BPF ready! Flag set.
+[ 1870.503814] Removing IOCTL chardev
+[ 1870.504073] rcuhashbash done
