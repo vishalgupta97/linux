@@ -23527,6 +23527,7 @@ static int do_misc_fixups(struct bpf_verifier_env *env)
 		mark_subprog_exc_cb(env, env->exception_callback_subprog);
 	}
 
+#define CONFIG_BPF_UNDO_LOG
 	/*
 	 * Pre-pass: if spill-based undo logging is used, extend the stack of
 	 * any subprogram containing critical-section writes by
@@ -23563,8 +23564,10 @@ static int do_misc_fixups(struct bpf_verifier_env *env)
 		/* Refresh after pre-pass may have increased subprog[0].stack_depth. */
 		stack_depth = subprogs[cur_subprog].stack_depth;
 	}
+#endif // CONFIG_BPF_UNDO_LOG
 
 	for (i = 0; i < insn_cnt;) {
+#define CONFIG_BPF_UNDO_LOG
 		/*
 		 * Undo-log injection for write instructions inside a BPF spinlock
 		 * critical section.
@@ -23635,6 +23638,7 @@ static int do_misc_fixups(struct bpf_verifier_env *env)
 				goto next_insn;
 			}
 		}
+#endif
 
 		if (insn->code == (BPF_ALU64 | BPF_MOV | BPF_X) && insn->imm) {
 			if ((insn->off == BPF_ADDR_SPACE_CAST && insn->imm == 1) ||
