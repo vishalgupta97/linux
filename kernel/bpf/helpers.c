@@ -605,7 +605,7 @@ NOTRACE_BPF_CALL_1(bpf_spin_lock, struct bpf_spin_lock *, lock)
 #ifdef CONFIG_BPF_UNDO_LOG
    	 __internal__bpf_spin_lock((struct qspinlock*)lock);
 #else
-	__bpf_spin_lock_irqsave(lock);
+	__bpf_spin_lock(lock); //Remove IRQ variant. Check it later.
 #endif
 	return 0;
 }
@@ -680,7 +680,7 @@ NOTRACE_BPF_CALL_1(bpf_spin_unlock, struct bpf_spin_lock *, lock)
 #ifdef CONFIG_BPF_UNDO_LOG
     	__internal__bpf_spin_unlock((struct qspinlock *)lock);
 #else
-	__bpf_spin_unlock_irqrestore(lock);
+	__bpf_spin_unlock(lock); // Remove irq variants. TODO: Check it later.
 #endif
 	return 0;
 }
