@@ -4,7 +4,7 @@ CC      ?= gcc
 
 BPF_CFLAGS := -g -O2 -target bpf -D__TARGET_ARCH_x86 \
               -I/usr/include/x86_64-linux-gnu \
-			  -I/usr/include \
+			  -I. \
 			  -I../../testing/selftests/bpf
 
 LDFLAGS := -lbpf -lelf -lz
@@ -21,7 +21,7 @@ rcuhashbash.skel.h: rcuhashbash.bpf.o
 
 # 3. Compile loader
 loader: loader.c rcuhashbash.skel.h
-	$(CC) -g -O2 -o $@ loader.c $(LDFLAGS)
+	$(CLANG) -g -O2 -o $@ loader.c $(LDFLAGS)
 
 # Generate vmlinux.h for the running kernel
 vmlinux.h:

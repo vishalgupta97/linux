@@ -53,8 +53,8 @@ struct {
 } arena SEC(".maps");
 
 struct entry_val __arena *entries_base;
-u32 entries_initialized;
-u32 init_total_entries;
+__u32 entries_initialized;
+__u32 init_total_entries;
 
 static __always_inline struct entry_val __arena *get_entry_ptr(u32 entry_key)
 {
