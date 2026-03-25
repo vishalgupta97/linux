@@ -237,107 +237,107 @@ static inline void bring_modified_and_store(struct rcuhashbash_entry *entry, int
 #endif
 #endif
 
-static int rcuhashbash_write_lock(u32 src_value, u32 dst_value,
-				  struct stats *stats)
-{
-	u32 src_bucket;
-	u32 dst_bucket;
-	struct rcuhashbash_entry *entry = NULL;
-	struct rcuhashbash_entry *src_entry = NULL;
-	bool same_bucket;
-	bool dest_in_use = false;
-
-	src_bucket = src_value % buckets;
-	dst_bucket = dst_value % buckets;
-	same_bucket = src_bucket == dst_bucket;
-
-	if (ops->write_lock_buckets)
-		ops->write_lock_buckets(&hash_table[src_bucket],
-					&hash_table[dst_bucket]);
-	 
-	/* Find src_entry. */
-	hlist_for_each_entry (entry, &hash_table[src_bucket].head, node) {
-		if (entry->value == src_value)
-			src_entry = entry;
-		if (same_bucket && entry->value == dst_value)
-			dest_in_use = true;
-	}
-	if (!src_entry) {
-		stats->write_misses++;
-		goto unlock;
-	}
-	if (dest_in_use) {
-		stats->write_dests_in_use++;
-		goto unlock;
-	}
-
-	if (same_bucket) {
-		src_entry->value = dst_value;
-		stats->write_moves++;
-		goto unlock;
-	}
-
-	/* Check for existing destination. */
-	hlist_for_each_entry (entry, &hash_table[dst_bucket].head, node)
-		if (entry->value == dst_value) {
-			dest_in_use = true;
-			break;
-		}
-	if (dest_in_use) {
-		stats->write_dests_in_use++;
-		goto unlock;
-	}
-
-	hlist_del(&src_entry->node);
-	src_entry->value = dst_value;
-	hlist_add_head(&src_entry->node, &hash_table[dst_bucket].head);
-
-	stats->write_moves++;
-
-unlock:
-
-	if (ops->write_unlock_buckets)
-		ops->write_unlock_buckets(&hash_table[src_bucket],
-					  &hash_table[dst_bucket]);
-
-	return 0;
-}
-
-
-//static int rcuhashbash_write_lock(u32 src_value, u32 dst_value, struct stats *stats)
+//static int rcuhashbash_write_lock(u32 src_value, u32 dst_value,
+//				  struct stats *stats)
 //{
-//		u32 src_bucket;
-//		u32 dst_bucket;
-//		struct rcuhashbash_entry *entry = NULL;
-//		int i = 0;
+//	u32 src_bucket;
+//	u32 dst_bucket;
+//	struct rcuhashbash_entry *entry = NULL;
+//	struct rcuhashbash_entry *src_entry = NULL;
+//	bool same_bucket;
+//	bool dest_in_use = false;
 //
-//		src_bucket = src_value % buckets;
-//		dst_bucket = dst_value % buckets;
+//	src_bucket = src_value % buckets;
+//	dst_bucket = dst_value % buckets;
+//	same_bucket = src_bucket == dst_bucket;
 //
-//		ops->write_lock_buckets(&hash_table[src_bucket], &hash_table[dst_bucket]);
+//	if (ops->write_lock_buckets)
+//		ops->write_lock_buckets(&hash_table[src_bucket],
+//					&hash_table[dst_bucket]);
+//	 
+//	/* Find src_entry. */
+//	hlist_for_each_entry (entry, &hash_table[src_bucket].head, node) {
+//		if (entry->value == src_value)
+//			src_entry = entry;
+//		if (same_bucket && entry->value == dst_value)
+//			dest_in_use = true;
+//	}
+//	if (!src_entry) {
+//		stats->write_misses++;
+//		goto unlock;
+//	}
+//	if (dest_in_use) {
+//		stats->write_dests_in_use++;
+//		goto unlock;
+//	}
 //
-//		hlist_for_each_entry (entry, &hash_table[src_bucket].head, node) {
-//#if USE_UNDO_LOG
-//#if USE_UNDO_LOG_STORE
-//                bring_modified_and_store(entry, i);
-//#elif USE_UNDO_LOG_PREFETCH
-//                prefetchw(&(entry->value));
-//				(*this_cpu_ptr(&undo_log))[i] = entry->value;
-//#elif USE_UNDO_LOG_ATOMIC
-//				(*this_cpu_ptr(&undo_log))[i] = __sync_fetch_and_add(&(entry->value), 0);
-//#else
-//				(*this_cpu_ptr(&undo_log))[i] = entry->value;
-//#endif
-//#endif
-//				entry->value = dst_value + i;
-//				i++;
-//		}
-//
-//		ops->write_unlock_buckets(&hash_table[src_bucket], &hash_table[dst_bucket]);
+//	if (same_bucket) {
+//		src_entry->value = dst_value;
 //		stats->write_moves++;
+//		goto unlock;
+//	}
 //
-//		return 0;
+//	/* Check for existing destination. */
+//	hlist_for_each_entry (entry, &hash_table[dst_bucket].head, node)
+//		if (entry->value == dst_value) {
+//			dest_in_use = true;
+//			break;
+//		}
+//	if (dest_in_use) {
+//		stats->write_dests_in_use++;
+//		goto unlock;
+//	}
+//
+//	hlist_del(&src_entry->node);
+//	src_entry->value = dst_value;
+//	hlist_add_head(&src_entry->node, &hash_table[dst_bucket].head);
+//
+//	stats->write_moves++;
+//
+//unlock:
+//
+//	if (ops->write_unlock_buckets)
+//		ops->write_unlock_buckets(&hash_table[src_bucket],
+//					  &hash_table[dst_bucket]);
+//
+//	return 0;
 //}
+
+
+static int rcuhashbash_write_lock(u32 src_value, u32 dst_value, struct stats *stats)
+{
+		u32 src_bucket;
+		u32 dst_bucket;
+		struct rcuhashbash_entry *entry = NULL;
+		int i = 0;
+
+		src_bucket = src_value % buckets;
+		dst_bucket = dst_value % buckets;
+
+		ops->write_lock_buckets(&hash_table[src_bucket], &hash_table[dst_bucket]);
+
+		hlist_for_each_entry (entry, &hash_table[src_bucket].head, node) {
+#if USE_UNDO_LOG
+#if USE_UNDO_LOG_STORE
+                bring_modified_and_store(entry, i);
+#elif USE_UNDO_LOG_PREFETCH
+                prefetchw(&(entry->value));
+				(*this_cpu_ptr(&undo_log))[i] = entry->value;
+#elif USE_UNDO_LOG_ATOMIC
+				(*this_cpu_ptr(&undo_log))[i] = __sync_fetch_and_add(&(entry->value), 0);
+#else
+				(*this_cpu_ptr(&undo_log))[i] = entry->value;
+#endif
+#endif
+				entry->value = dst_value + i;
+				i++;
+		}
+
+		ops->write_unlock_buckets(&hash_table[src_bucket], &hash_table[dst_bucket]);
+		stats->write_moves++;
+
+		return 0;
+}
 
 static int rcuhashbash_ro_thread(void *arg)
 {
