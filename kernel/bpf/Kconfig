@@ -101,6 +101,15 @@ config BPF_LSM
 
 	  If you are unsure how to answer this question, answer N.
 
+config BPF_UNDO_LOG
+	bool "Enable BPF Undo log"
+	default n
+	help
+	  Enable BPF Undo log
+
+	  If unsure, use the default value of 64.
+
+
 config BPF_UNDO_LOG_MAX_ENTRIES
 	int "Maximum undo log entries per BPF spinlock critical section"
 	default 64
