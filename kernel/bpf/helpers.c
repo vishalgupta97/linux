@@ -602,7 +602,7 @@ EXPORT_SYMBOL_GPL(__internal__bpf_spin_lock);
 
 NOTRACE_BPF_CALL_1(bpf_spin_lock, struct bpf_spin_lock *, lock)
 {
-#define CONFIG_BPF_UNDO_LOG
+#ifdef CONFIG_BPF_UNDO_LOG
    	 __internal__bpf_spin_lock((struct qspinlock*)lock);
 #else
 	__bpf_spin_lock_irqsave(lock);
@@ -677,7 +677,7 @@ EXPORT_SYMBOL_GPL(__internal__bpf_spin_unlock);
 
 NOTRACE_BPF_CALL_1(bpf_spin_unlock, struct bpf_spin_lock *, lock)
 {
-#define CONFIG_BPF_UNDO_LOG
+#ifdef CONFIG_BPF_UNDO_LOG
     	__internal__bpf_spin_unlock((struct qspinlock *)lock);
 #else
 	__bpf_spin_unlock_irqrestore(lock);
