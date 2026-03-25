@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-Visualize rcuhashbash benchmark results as grouped bar charts.
+Visualize rcuhashbash benchmark results as line charts.
 
 Directory layout expected:
   <BASE_DIR>/<server>/results-spinlock-<MAX_CORES>cores-<DURATION>seconds/
       <BUCKETS>buckets-<entries>entries/
-          modified_table_<lock>_<undolog>/
+          modified_<lock>_<undolog>/
               <WRITE_PCT>/
                   core.<cores>
 """
@@ -16,7 +16,6 @@ import warnings
 
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
-import numpy as np
 import pandas as pd
 
 # ---------------------------------------------------------------------------
@@ -27,28 +26,34 @@ import pandas as pd
 BASE_DIR = os.path.join(os.path.dirname(__file__), "")
 
 # Servers to include
-SERVERS = ["srv1vm"]
+SERVERS = ["srv1vm", "srv10vm"]
+
+# Per-server experiment layout
+SERVER_CONFIGS = {
+    "srv1vm": {
+        "max_cores": 112,
+        "core_counts": [1, 2, 4, 8, 14, 28, 42, 56, 70, 84, 98, 112],
+    },
+    "srv10vm": {
+        "max_cores": 96,
+        "core_counts": [1, 2, 4, 8, 12, 24, 36, 48, 60, 72, 84, 96],
+    },
+}
 
 # Sub-directory template inside each server folder
-# {max_cores} and {duration} are filled from MAX_CORES / DURATION below
+# {max_cores} and {duration} are filled from SERVER_CONFIGS / DURATION below
 RESULT_SUBDIR_TEMPLATE = "results-spinlock-{max_cores}cores-{duration}seconds"
-MAX_CORES = 112
-#MAX_CORES = 96
-DURATION = 10
+DURATION = 30
 
 # Hash-table parameters
 BUCKETS = 1024
 ENTRIES_LIST = [1024, 2048, 4096, 6144, 8192]
 
 # Lock implementations
-LOCKS = ["spinlock", "bpf_qspinlock"]
+LOCKS = ["table_spinlock", "bpf_table_bpf_spinlock_baseline", "bpf_table_bpf_spinlock_undolog"]
 
 # Undo-log variants (suffix after lock name in the directory)
 UNDOLOG_TYPES = ["baseline"] #, "withundolog", "withundologatomic", "withundologprefetch", "withundologstore"]
-
-# Core counts to include
-CORE_COUNTS = [1, 2, 4, 8, 14, 28, 42, 56, 112]
-#CORE_COUNTS = [8, 24, 48, 72, 96]
 
 # Write-percentage subdirectory
 WRITE_PCT = "100percent_writes"
@@ -65,19 +70,23 @@ DPI = 150
 SHARED_Y_AXIS = False
 
 # ---------------------------------------------------------------------------
-# Regex for extracting total throughput
+# Regex for extracting throughput summary fields
 # ---------------------------------------------------------------------------
-_TOTAL_RE = re.compile(r"rcuhashbash summary: total:\s+(\d+)")
+_SUMMARY_RE = re.compile(r"rcuhashbash summary: total:\s+(\d+)\s+\(avg:\s+(\d+)")
 
 
 def parse_throughput(filepath: str):
-    """Return the integer total throughput from a result file, or None."""
+    """Return throughput in ops/sec computed from total ops and avg ns, or None."""
     try:
         with open(filepath, "r") as fh:
             for line in fh:
-                m = _TOTAL_RE.search(line)
+                m = _SUMMARY_RE.search(line)
                 if m:
-                    return int(m.group(1))
+                    total_ops = int(m.group(1))
+                    avg_ns = int(m.group(2))
+                    if avg_ns <= 0:
+                        return None
+                    return total_ops * 1e9 / avg_ns
     except OSError:
         return None
     return None
@@ -90,22 +99,27 @@ def load_data() -> pd.DataFrame:
     """
     warnings.simplefilter("always")
 
-    result_subdir = RESULT_SUBDIR_TEMPLATE.format(
-        max_cores=MAX_CORES, duration=DURATION
-    )
-
     rows = []
     for server in SERVERS:
+        if server not in SERVER_CONFIGS:
+            raise ValueError(f"Missing server config for '{server}' in SERVER_CONFIGS")
+
+        server_cfg = SERVER_CONFIGS[server]
+        result_subdir = RESULT_SUBDIR_TEMPLATE.format(
+            max_cores=server_cfg["max_cores"],
+            duration=DURATION,
+        )
+
         for entries in ENTRIES_LIST:
             for lock in LOCKS:
                 for undolog in UNDOLOG_TYPES:
-                    for cores in CORE_COUNTS:
+                    for cores in server_cfg["core_counts"]:
                         filepath = os.path.join(
                             BASE_DIR,
                             server,
                             result_subdir,
                             f"{BUCKETS}buckets-{entries}entries",
-                            f"modified_table_{lock}_{undolog}",
+                            f"modified_{lock}_{undolog}",
                             WRITE_PCT,
                             f"core.{cores}",
                         )
@@ -149,23 +163,49 @@ _UNDOLOG_LABELS = {
     "withundologstore": "Undo Log (Store)",
 }
 
-LOCK_COLORS = {
-    "spinlock":            "#4C72B0",
-    "bpf_qspinlock":         "#DD8452",
-}
-LOCK_LABELS = {
-    "spinlock":            "Kernel Qspinlock",
-    "bpf_qspinlock":         "BPF Qspinlock",
-}
+def lock_to_label(lock: str) -> str:
+    """Create a readable legend label from a lock identifier."""
+    token_overrides = {
+        "aqs": "AQS",
+        "bpf": "BPF",
+        "cna": "CNA",
+        "qspinlock": "Qspinlock",
+    }
+    tokens = lock.split("_")
+    pretty_tokens = [token_overrides.get(tok, tok.capitalize()) for tok in tokens]
+    return " ".join(pretty_tokens)
+
+
+def build_lock_styles(locks):
+    """Generate lock colors and labels from the configured lock list."""
+    cmap = plt.get_cmap("tab20" if len(locks) > 10 else "tab10")
+    colors = {lock: cmap(i % cmap.N) for i, lock in enumerate(locks)}
+    labels = {lock: lock_to_label(lock) for lock in locks}
+    return colors, labels
+
+
+def ops_formatter(value, _):
+    """Render y-axis values with compact engineering suffixes."""
+    abs_value = abs(value)
+    if abs_value >= 1e9:
+        return f"{value / 1e9:.1f}G"
+    if abs_value >= 1e6:
+        return f"{value / 1e6:.1f}M"
+    if abs_value >= 1e3:
+        return f"{value / 1e3:.1f}K"
+    return f"{value:.0f}"
 
 
 
 def plot_lock_figure(df: pd.DataFrame, server: str, undolog: str) -> plt.Figure:
     """
-    Create a figure with one subplot per entries count for a given lock type.
-    Each subplot is a grouped bar chart: X = core count, bars = undolog types.
+    Create a figure with one subplot per entries count for a given undolog type.
+    Each subplot is a line chart: X = core count, one line per lock.
     """
     undolog_df = df[(df["undolog"] == undolog) & (df["server"] == server)]
+    server_cfg = SERVER_CONFIGS[server]
+    core_counts = server_cfg["core_counts"]
+    lock_colors, lock_labels = build_lock_styles(LOCKS)
 
     n_entries = len(ENTRIES_LIST)
     fig, axes = plt.subplots(
@@ -176,61 +216,56 @@ def plot_lock_figure(df: pd.DataFrame, server: str, undolog: str) -> plt.Figure:
     if n_entries == 1:
         axes = [axes]
 
-    n_locks = len(UNDOLOG_TYPES)
-    x = np.arange(len(CORE_COUNTS))
-    bar_width = 0.4 #0.8 / n_locks   # total group width = 0.8
+    n_locks = len(LOCKS)
 
     for ax, entries in zip(axes, ENTRIES_LIST):
         sub = undolog_df[undolog_df["entries"] == entries]
 
-        for i, lock in enumerate(LOCKS):
+        for lock in LOCKS:
             vals = []
-            for cores in CORE_COUNTS:
+            for cores in core_counts:
                 row = sub[(sub["lock"] == lock) & (sub["cores"] == cores)]
-                vals.append(int(row["throughput"].iloc[0]) if len(row) else 0)
+                vals.append(float(row["throughput"].iloc[0]) if len(row) else 0)
 
-            offset = (i - n_locks / 2 + 0.5) * bar_width
-            ax.bar(
-                x + offset,
+            ax.plot(
+                core_counts,
                 vals,
-                width=bar_width,
-                color=LOCK_COLORS[lock],
-                label=LOCK_LABELS[lock],
-                edgecolor="white",
-                linewidth=0.5,
+                color=lock_colors[lock],
+                label=lock_labels[lock],
+                marker="o",
+                markersize=4,
+                linewidth=1.8,
             )
 
         ax.set_title(f"{entries} entries", fontsize=10, pad=6)
-        ax.set_xticks(x)
-        ax.set_xticklabels([str(c) for c in CORE_COUNTS])
+        ax.set_xticks(core_counts)
+        ax.set_xticklabels([str(c) for c in core_counts])
         ax.set_xlabel("Core count", fontsize=9)
-        ax.yaxis.set_major_formatter(
-            mticker.FuncFormatter(lambda v, _: f"{v/1e6:.1f}M" if v >= 1e6 else str(int(v)))
-        )
+        ax.yaxis.set_major_formatter(mticker.FuncFormatter(ops_formatter))
         ax.tick_params(axis="both", labelsize=8)
         ax.grid(axis="y", linestyle="--", linewidth=0.5, alpha=0.7)
         ax.set_axisbelow(True)
 
     # Y label only on first subplot
-    axes[0].set_ylabel("Throughput (ops/10s)", fontsize=9)
+    axes[0].set_ylabel("Throughput (ops/sec)", fontsize=9)
 
     # Single legend at the top of the figure
     handles, labels = axes[0].get_legend_handles_labels()
     fig.legend(
         handles, labels,
         loc="upper center",
-        ncol=n_locks,
+        ncol=max(1, len(labels)),
         fontsize=8,
         frameon=True,
-        bbox_to_anchor=(0.5, 1.02),
+        bbox_to_anchor=(0.5, 1.01),
     )
 
     fig.suptitle(
         f"Undolog: {undolog.upper()}  —  {BUCKETS} buckets, {DURATION}s, 100% writes",
         fontsize=11,
-        y=1.07,
+        y=1.08,
     )
-    fig.tight_layout()
+    fig.tight_layout(rect=[0, 0, 1, 0.9])
     return fig
 
 
