@@ -4,7 +4,8 @@ CC      ?= gcc
 
 BPF_CFLAGS := -g -O2 -target bpf -D__TARGET_ARCH_x86 \
               -I/usr/include/x86_64-linux-gnu \
-              -I/usr/include
+			  -I/usr/include \
+			  -I../../testing/selftests/bpf
 
 LDFLAGS := -lbpf -lelf -lz
 
