@@ -245,6 +245,8 @@ def plot_lock_figure(df: pd.DataFrame, server: str, undolog: str) -> plt.Figure:
         ax.tick_params(axis="both", labelsize=8)
         ax.grid(axis="y", linestyle="--", linewidth=0.5, alpha=0.7)
         ax.set_axisbelow(True)
+        #ax.set_xscale('log', base=2)
+        ax.set_yscale('log')
 
     # Y label only on first subplot
     axes[0].set_ylabel("Throughput (ops/sec)", fontsize=9)
