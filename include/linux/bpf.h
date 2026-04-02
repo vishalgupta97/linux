@@ -67,6 +67,17 @@ extern struct bpf_mem_alloc bpf_global_ma, bpf_global_percpu_ma;
 extern bool bpf_global_ma_set;
 extern int sysctl_bpf_spin_lock_timeout;
 
+#ifdef CONFIG_BPF_UNDO_LOG
+struct bpf_undo_log_entry {
+	void	*addr;
+	u64	old_value;
+};
+
+DECLARE_PER_CPU(struct bpf_undo_log_entry[CONFIG_BPF_UNDO_LOG_MAX_ENTRIES],
+		       bpf_undo_log);
+DECLARE_PER_CPU(struct bpf_undo_log_entry *, bpf_undo_log_cur);
+#endif
+
 typedef u64 (*bpf_callback_t)(u64, u64, u64, u64, u64);
 typedef int (*bpf_iter_init_seq_priv_t)(void *private_data,
 					struct bpf_iter_aux_info *aux);

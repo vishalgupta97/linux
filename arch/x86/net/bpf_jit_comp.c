@@ -605,6 +605,11 @@ static bool bpf_insn_is_undo_log_write(const struct bpf_insn *insn)
 		 mode == BPF_PROBE_MEM32 || mode == BPF_PROBE_ATOMIC);
 }
 
+static void emit_mov_imm64(u8 **pprog, u32 dst_reg,
+			   const u32 hi32, const u32 lo32);
+static void emit_ldx(u8 **pprog, u32 size, u32 dst_reg, u32 src_reg, int off);
+static void emit_stx(u8 **pprog, u32 size, u32 dst_reg, u32 src_reg, int off);
+
 static int emit_undo_log_push_call(u8 **pprog, u8 *image, u8 *temp, int *addrs,
 				   int insn_idx, struct bpf_insn *next_insn,
 				   void *func,
@@ -612,46 +617,68 @@ static int emit_undo_log_push_call(u8 **pprog, u8 *image, u8 *temp, int *addrs,
 {
 	u8 *prog = *pprog;
 	u32 dst_reg = next_insn->dst_reg;
-	u8 *ip;
+
+	(void)image;
+	(void)temp;
+	(void)addrs;
+	(void)insn_idx;
+	(void)func;
 
 	if (!bpf_insn_is_undo_log_write(next_insn))
 		return 0;
 
+#ifndef CONFIG_BPF_UNDO_LOG
+	return -EOPNOTSUPP;
+#else
+	if (BPF_LDST_BYTES(next_insn) != 8)
+		return -EINVAL;
+
 	if (priv_frame_ptr && dst_reg == BPF_REG_FP)
 		dst_reg = X86_REG_R9;
 
-	EMIT1(0x50); /* push rax */
-	EMIT1(0x57); /* push rdi */
-	EMIT1(0x56); /* push rsi */
-	EMIT1(0x52); /* push rdx */
-	EMIT1(0x51); /* push rcx */
-	EMIT2(0x41, 0x50); /* push r8 */
+	/* Load current undo-log pointer from percpu bpf_undo_log_cur into R12. */
+	emit_mov_imm64(&prog, AUX_REG,
+		       (__force long)&bpf_undo_log_cur >> 32,
+		       (u32)(__force long)&bpf_undo_log_cur);
+	/* Access per-CPU ptr */
+#ifdef CONFIG_SMP
+	EMIT2(0x65, add_1mod(0x48, AUX_REG));
+	EMIT3(0x03, add_2reg(0x04, 0, AUX_REG), 0x25);
+	EMIT((u32)(unsigned long)&this_cpu_off, 4);
+#endif
+	emit_ldx(&prog, BPF_DW, X86_REG_R12, AUX_REG, 0);
 
-	emit_mov_reg(&prog, true, BPF_REG_1, dst_reg);
+	/* AUX_REG tracks the current entry base, R12 keeps running end pointer. */
+	emit_mov_reg(&prog, true, AUX_REG, X86_REG_R12);
+
+	/* Compute effective destination address in AX (R10), then log it. */
+	emit_mov_reg(&prog, true, BPF_REG_AX, dst_reg);
 	if (next_insn->off)
-		EMIT3_off32(0x48, 0x81, 0xC7, next_insn->off);
-	emit_mov_imm32(&prog, true, BPF_REG_2, BPF_LDST_BYTES(next_insn));
+		EMIT3_off32(add_1mod(0x48, BPF_REG_AX),
+			    0x81, add_1reg(0xC0, BPF_REG_AX), next_insn->off);
+	emit_stx(&prog, BPF_DW, AUX_REG, BPF_REG_AX, 0);
 
-	if (priv_frame_ptr)
-		push_r9(&prog);
+	/* Read old value and log it at base + 8. */
+	emit_ldx(&prog, BPF_DW, BPF_REG_AX, BPF_REG_AX, 0);
+	emit_stx(&prog, BPF_DW, AUX_REG, BPF_REG_AX, sizeof(void *));
 
-	ip = image + addrs[insn_idx - 1] + (prog - temp);
-	ip += x86_call_depth_emit_accounting(&prog, func, ip);
-	if (emit_call(&prog, func, ip))
-		return -EINVAL;
+	/* Advance R12 to next entry and publish it back to percpu bpf_undo_log_cur. */
+	EMIT4(add_1mod(0x48, X86_REG_R12), 0x83,
+	      add_1reg(0xC0, X86_REG_R12), sizeof(struct bpf_undo_log_entry));
 
-	if (priv_frame_ptr)
-		pop_r9(&prog);
-
-	EMIT2(0x41, 0x58); /* pop r8 */
-	EMIT1(0x59); /* pop rcx */
-	EMIT1(0x5A); /* pop rdx */
-	EMIT1(0x5E); /* pop rsi */
-	EMIT1(0x5F); /* pop rdi */
-	EMIT1(0x58); /* pop rax */
+	emit_mov_imm64(&prog, AUX_REG,
+		       (__force long)&bpf_undo_log_cur >> 32,
+		       (u32)(__force long)&bpf_undo_log_cur);
+#ifdef CONFIG_SMP
+	EMIT2(0x65, add_1mod(0x48, AUX_REG));
+	EMIT3(0x03, add_2reg(0x04, 0, AUX_REG), 0x25);
+	EMIT((u32)(unsigned long)&this_cpu_off, 4);
+#endif
+	emit_stx(&prog, BPF_DW, AUX_REG, X86_REG_R12, 0);
 
 	*pprog = prog;
 	return 1;
+#endif
 }
 
 static int emit_jump(u8 **pprog, void *func, void *ip)
