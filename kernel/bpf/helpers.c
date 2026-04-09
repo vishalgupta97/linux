@@ -306,38 +306,50 @@ void bpf_throw(u64 cookie);
  * Any BPF program whose critical section exceeds this many write operations
  * on any execution path is rejected by the verifier at load time.
  */
-DEFINE_PER_CPU(struct bpf_undo_log_entry[CONFIG_BPF_UNDO_LOG_MAX_ENTRIES],
-	       bpf_undo_log);
-DEFINE_PER_CPU(struct bpf_undo_log_entry *, bpf_undo_log_cur);
+struct bpf_undo_log_entry {
+	void	*addr;		/* address of the write destination */
+	u64	old_value;	/* value at addr BEFORE the write */
+	u8	size;		/* operand size in bytes: 1, 2, 4, or 8 */
+};
+
+static DEFINE_PER_CPU(struct bpf_undo_log_entry[CONFIG_BPF_UNDO_LOG_MAX_ENTRIES],
+		      bpf_undo_log);
+static DEFINE_PER_CPU(int, bpf_undo_log_cnt);
 
 /**
  * bpf_undo_log_push - record old value of a memory location before a write.
  * @addr: effective address that is about to be written
- * @size: write size in bytes (kept for helper ABI compatibility)
+ * @size: write size in bytes (1, 2, 4, or 8)
  *
  * Called (via injected BPF helper call) immediately before every write
- * instruction inside a bpf_spin_lock critical section. The verifier rejects
- * undo-logged stores smaller than 8 bytes, so this helper always snapshots a
- * full 8-byte old value and appends (@addr, old_value) to the per-CPU undo log
- * so that bpf_spin_lock_timeout_handler() can restore data on timeout.
+ * instruction inside a bpf_spin_lock critical section.  Reads the current
+ * value at @addr and appends (@addr, old_value, @size) to the per-CPU undo
+ * log so that bpf_spin_lock_timeout_handler() can restore data on timeout.
  *
  * This function is notrace because it runs inside a spinlock with IRQs
  * disabled.  The verifier guarantees the log never overflows.
  */
 NOTRACE_BPF_CALL_2(bpf_undo_log_push, unsigned long, addr, u64, size)
 {
-	struct bpf_undo_log_entry *cur, *start;
+	struct bpf_undo_log_entry *log;
+	u64 old_value = 0;
+	int cnt;
 
-	(void)size;
+	cnt = this_cpu_read(bpf_undo_log_cnt);
 
-	start = this_cpu_ptr(bpf_undo_log);
-	cur = this_cpu_read(bpf_undo_log_cur);
-	if (!cur)
-		cur = start;
+	switch (size) {
+	case 1: old_value = READ_ONCE(*(u8 *)addr);  break;
+	case 2: old_value = READ_ONCE(*(u16 *)addr); break;
+	case 4: old_value = READ_ONCE(*(u32 *)addr); break;
+	case 8: old_value = READ_ONCE(*(u64 *)addr); break;
+	}
 
-	cur->addr = (void *)addr;
-	cur->old_value = READ_ONCE(*(u64 *)addr);
-	this_cpu_write(bpf_undo_log_cur, cur + 1);
+	log = this_cpu_ptr(bpf_undo_log);
+	log[cnt].addr      = (void *)addr;
+	log[cnt].old_value = old_value;
+	log[cnt].size      = (u8)size;
+
+	this_cpu_inc(bpf_undo_log_cnt);
 	return 0;
 }
 EXPORT_SYMBOL_GPL(bpf_undo_log_push);
@@ -350,25 +362,25 @@ EXPORT_SYMBOL_GPL(bpf_undo_log_push);
  */
 static void bpf_undo_log_replay(void)
 {
-	struct bpf_undo_log_entry *start, *cur;
+	struct bpf_undo_log_entry *log;
+	int cnt, i;
 
-	start = this_cpu_ptr(bpf_undo_log);
-	cur = this_cpu_read(bpf_undo_log_cur);
-	if (!cur || cur == start)
-		goto out;
+	log = this_cpu_ptr(bpf_undo_log);
+	cnt = this_cpu_read(bpf_undo_log_cnt);
 
-	while (cur != start) {
-		void *addr;
-		u64 val;
+	for (i = cnt - 1; i >= 0; i--) {
+		void *addr = log[i].addr;
+		u64  val  = log[i].old_value;
 
-		cur--;
-		addr = cur->addr;
-		val = cur->old_value;
-		WRITE_ONCE(*(u64 *)addr, val);
+		switch (log[i].size) {
+		case 1: WRITE_ONCE(*(u8  *)addr, (u8)val);  break;
+		case 2: WRITE_ONCE(*(u16 *)addr, (u16)val); break;
+		case 4: WRITE_ONCE(*(u32 *)addr, (u32)val); break;
+		case 8: WRITE_ONCE(*(u64 *)addr, (u64)val); break;
+		}
 	}
 
-out:
-	this_cpu_write(bpf_undo_log_cur, start);
+	this_cpu_write(bpf_undo_log_cnt, 0);
 }
 
 /*
@@ -563,7 +575,7 @@ noinline void __internal__bpf_spin_lock(struct qspinlock *lock)
 			 *  - The kthread notified from bpf_qspinlock_lock fast
 			 *    path (uncontended case).
 			 */
-			this_cpu_write(bpf_undo_log_cur, this_cpu_ptr(bpf_undo_log));
+            this_cpu_write(bpf_undo_log_cnt, 0);
 			WRITE_ONCE(ebpf_spinlock_timeout, 0);
 		}
 	} else {
@@ -625,7 +637,7 @@ noinline void __internal__bpf_spin_unlock(struct qspinlock *lock)
 		 * from this critical section are not replayed on a future
 		 * timeout of an unrelated section.
 		 */
-		this_cpu_write(bpf_undo_log_cur, this_cpu_ptr(bpf_undo_log));
+		this_cpu_write(bpf_undo_log_cnt, 0);
 		/*
 		 * Cancel whichever timer is active for this CPU's lock session.
 		 * This covers both the waiter-started hrtimer (set in

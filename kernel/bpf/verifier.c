@@ -7862,12 +7862,6 @@ static int check_store_reg(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	 */
 	if (env->cur_state->active_locks > 0 &&
 	    base_type(dst_reg_type) != PTR_TO_STACK) {
-		if (BPF_LDST_BYTES(insn) < 8) {
-			verbose(env,
-				"BPF critical section write size %u is unsupported; undo log requires 8-byte stores\n",
-				BPF_LDST_BYTES(insn));
-			return -EACCES;
-		}
 		if (env->cur_state->cs_write_count >=
 		    CONFIG_BPF_UNDO_LOG_MAX_ENTRIES) {
 			verbose(env,
@@ -7977,12 +7971,6 @@ static int check_atomic_rmw(struct bpf_verifier_env *env,
 		enum bpf_reg_type dst_type = reg_state(env, insn->dst_reg)->type;
 
 		if (base_type(dst_type) != PTR_TO_STACK) {
-			if (BPF_LDST_BYTES(insn) < 8) {
-				verbose(env,
-					"BPF critical section write size %u is unsupported; undo log requires 8-byte stores\n",
-					BPF_LDST_BYTES(insn));
-				return -EACCES;
-			}
 			if (env->cur_state->cs_write_count >=
 			    CONFIG_BPF_UNDO_LOG_MAX_ENTRIES) {
 				verbose(env,
@@ -8505,14 +8493,6 @@ static int process_spin_lock(struct bpf_verifier_env *env, int regno, int flags)
 	if (is_lock) {
 		void *ptr;
 		int type;
-
-	#ifdef CONFIG_BPF_UNDO_LOG
-		if (env->prog->aux->arena) {
-			verbose(env,
-				"Programs using arena memory cannot use bpf spin locks with undo logging on x86\n");
-			return -EOPNOTSUPP;
-		}
-	#endif
 
 		if (map)
 			ptr = map;
@@ -20457,12 +20437,6 @@ static int do_check_insn(struct bpf_verifier_env *env, bool *do_print_state)
 		 */
 		if (env->cur_state->active_locks > 0 &&
 		    base_type(dst_reg_type) != PTR_TO_STACK) {
-			if (BPF_LDST_BYTES(insn) < 8) {
-				verbose(env,
-					"BPF critical section write size %u is unsupported; undo log requires 8-byte stores\n",
-					BPF_LDST_BYTES(insn));
-				return -EACCES;
-			}
 			if (env->cur_state->cs_write_count >=
 			    CONFIG_BPF_UNDO_LOG_MAX_ENTRIES) {
 				verbose(env,
@@ -22759,7 +22733,6 @@ static int do_misc_fixups(struct bpf_verifier_env *env)
 	 */
 	{
 		int sp;
-		bool has_any_cs_write = false;
 
 		for (sp = 0; sp < env->subprog_cnt; sp++) {
 			const int sp_end = (sp + 1 < env->subprog_cnt)
@@ -22770,7 +22743,6 @@ static int do_misc_fixups(struct bpf_verifier_env *env)
 			for (j = subprogs[sp].start; j < sp_end; j++) {
 				if (env->insn_aux_data[j].in_critical_section) {
 					has_cs_write = true;
-					has_any_cs_write = true;
 					break;
 				}
 			}
@@ -22786,12 +22758,6 @@ static int do_misc_fixups(struct bpf_verifier_env *env)
 					subprogs[sp].stack_depth, MAX_BPF_STACK);
 				return -EINVAL;
 			}
-		}
-
-		if (has_any_cs_write && env->prog->aux->arena) {
-			verbose(env,
-				"Programs using arena memory cannot use spin-lock undo logging on x86\n");
-			return -EOPNOTSUPP;
 		}
 		/* Refresh after pre-pass may have increased subprog[0].stack_depth. */
 		stack_depth = subprogs[cur_subprog].stack_depth;
