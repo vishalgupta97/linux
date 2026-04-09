@@ -289,31 +289,6 @@ release:
 }
 #pragma GCC pop_options
 
-void komb_init(void)
-{
-	int i, j;
-	for_each_possible_cpu(i) {
-		void *stack_ptr = vzalloc(SIZE_OF_SHADOW_STACK);
-		struct shadow_stack *ptr = per_cpu_ptr(&local_shadow_stack, i);
-
-		ptr->ptr = stack_ptr + SIZE_OF_SHADOW_STACK;
-		ptr->lock_addr = NULL;
-		ptr->local_shadow_stack_ptr =
-			stack_ptr + SIZE_OF_SHADOW_STACK - 8;
-		ptr->curr_cs_cpu = -1;
-		ptr->prev_cs_cpu = -1;
-		ptr->counter_val = 0;
-		ptr->next_node_ptr = NULL;
-		ptr->local_queue_head = NULL;
-		ptr->local_queue_tail = NULL;
-	}
-}
-
-void komb_spin_lock_init(struct qspinlock *lock)
-{
-	atomic_set(&lock->val, 0);
-}
-
 __attribute__((noipa)) noinline notrace static void *get_shadow_stack_ptr(void)
 {
 	struct shadow_stack *ptr = this_cpu_ptr(&local_shadow_stack);
@@ -476,3 +451,28 @@ komb_spin_unlock(struct qspinlock *lock)
 	return;
 }
 EXPORT_SYMBOL_GPL(komb_spin_unlock);
+
+void komb_init(void)
+{
+	int i, j;
+	for_each_possible_cpu(i) {
+		void *stack_ptr = vzalloc(SIZE_OF_SHADOW_STACK);
+		struct shadow_stack *ptr = per_cpu_ptr(&local_shadow_stack, i);
+
+		ptr->ptr = stack_ptr + SIZE_OF_SHADOW_STACK;
+		ptr->lock_addr = NULL;
+		ptr->local_shadow_stack_ptr =
+			stack_ptr + SIZE_OF_SHADOW_STACK - 8;
+		ptr->curr_cs_cpu = -1;
+		ptr->prev_cs_cpu = -1;
+		ptr->counter_val = 0;
+		ptr->next_node_ptr = NULL;
+		ptr->local_queue_head = NULL;
+		ptr->local_queue_tail = NULL;
+	}
+}
+
+void komb_spin_lock_init(struct qspinlock *lock)
+{
+	atomic_set(&lock->val, 0);
+}
