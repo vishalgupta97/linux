@@ -10,7 +10,7 @@
 #define MAX_BUCKETS            1024
 #define MAX_ENTRIES            65536
 #define MAX_ENTRIES_PER_BUCKET 64
-#define NUM_ENTRIES 8          
+#define NUM_ENTRIES 4          
 #define ENTRIES_ARENA_BYTES    (MAX_ENTRIES * sizeof(struct entry_val))
 #define ENTRIES_ARENA_PAGES    ((ENTRIES_ARENA_BYTES + PAGE_SIZE - 1) / PAGE_SIZE)
 
@@ -60,8 +60,12 @@ static __always_inline struct entry_val __arena *get_entry_ptr(u32 entry_key)
 {
     struct entry_val __arena *base = entries_base;
 
-    if (!entries_initialized || !base || entry_key >= MAX_ENTRIES)
+    void __arena *ab = arena_base(&arena);
+
+    if (!ab || !entries_initialized || !base || entry_key >= MAX_ENTRIES) {
+	bpf_printk("return null entry_ptr key: %d\n", entry_key);
         return NULL;
+    }
 
     cast_kern(base);
     return &base[entry_key];
@@ -96,19 +100,6 @@ int init_entries_arena(void *ctx)
     return 0;
 }
 
-static int write_entry_cb(u32 i, void *ctx)
-{
-    u32 *entry_key = ctx;
-
-    struct entry_val __arena *eval = get_entry_ptr(*entry_key);
-    if (!eval)
-        return 0; /* skip missing entries, keep going */
-
-    cast_kern(eval);
-    eval->value = *entry_key + i;
-    return 0;
-}
-
 /* ─── fentry program ──────────────────────────────────────────── */
 
 SEC("fentry/attach_cs_ht")
@@ -129,6 +120,7 @@ int BPF_PROG(trace_attach_cs_ht, u32 src_value, u32 dst_value, void *stats)
 
         struct entry_val __arena *eval = get_entry_ptr(entry_key);
 	    if (!eval) {
+		bpf_printk("no entry\n");
 		goto end;
             }
         cast_kern(eval);
