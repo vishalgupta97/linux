@@ -182,7 +182,7 @@ static void bpf_queued_spin_lock_slowpath(struct qspinlock *lock, u32 val)
         while(true) {
             if(!already_told_to_terminate && ktime_get_mono_fast_ns() >  end_time) {
                 tell_bpf_loop_to_terminate();
-                already_told_to_terminate = false;
+                already_told_to_terminate = true;
             }
 
             if(!(READ_ONCE(lock->locked)))
@@ -199,6 +199,7 @@ static void bpf_queued_spin_lock_slowpath(struct qspinlock *lock, u32 val)
 	 * running — it will be cancelled by bpf_spin_unlock via bpf_active_timer.
 	 */
 	clear_pending_set_locked(lock);
+	bpf_notify_lock_kthread(); // Only waiter. Notify kthread.
 	return;
 
 queue:
@@ -214,6 +215,7 @@ queue:
 		node->count--;
 		while (!queued_spin_trylock(lock))
 			cpu_relax();
+		bpf_notify_lock_kthread(); // Don't know the next waiter. Notify kthread.
 		return;
 	}
 
@@ -234,6 +236,7 @@ queue:
 	 */
 	if (queued_spin_trylock(lock)) {
 		__this_cpu_dec(bpf_qnodes[0].mcs.count);
+		bpf_notify_lock_kthread(); // Don't know the next waiter. Notify kthread.
 		return;
 	}
 
@@ -274,11 +277,11 @@ queue:
 	 * enabled) and set ebpf_spinlock_timeout to terminate the owner.
 	 */
 	timeout_ns = (u64)READ_ONCE(sysctl_bpf_spin_lock_timeout) * NSEC_PER_MSEC;
-	lt = this_cpu_ptr(&bpf_waiter_timer);
+	/*lt = this_cpu_ptr(&bpf_waiter_timer);
 	if (timeout_ns > 0) {
 		bpf_lock_timer_start(lt, timeout_ns);
 		this_cpu_write(bpf_active_timer, lt);
-	}
+	}*/
 
 	/*
 	 * Wait for the owner & pending to go away: *,x,y -> *,0,0
@@ -289,20 +292,20 @@ queue:
 	//val = atomic_cond_read_acquire(&lock->val,
 	//			       !(VAL & _Q_LOCKED_PENDING_MASK));
 
-    u64 end_time = ktime_get_mono_fast_ns() + timeout_ns;
-    bool already_told_to_terminate = false;
+    	u64 end_time = ktime_get_mono_fast_ns() + timeout_ns;
+    	bool already_told_to_terminate = false;
 
-    while(true) {
-        if(!already_told_to_terminate && ktime_get_mono_fast_ns() >  end_time) {
-            tell_bpf_loop_to_terminate();
-            already_told_to_terminate = false;
-        }
+    	while(true) {
+        	if(!already_told_to_terminate && ktime_get_mono_fast_ns() >  end_time) {
+            		tell_bpf_loop_to_terminate();
+            		already_told_to_terminate = true;
+        	}
 
-        if(!(READ_ONCE(lock->val.counter) & _Q_LOCKED_PENDING_MASK))
-            break;
+        	if(!(READ_ONCE(lock->val.counter) & _Q_LOCKED_PENDING_MASK))
+            		break;
 
-        cpu_relax();
-    }    
+        	cpu_relax();
+    	}    
 
 	val = READ_ONCE(lock->val.counter);
 
@@ -318,7 +321,10 @@ queue:
 	 */
 	if ((val & _Q_TAIL_MASK) == tail) {
 		if (atomic_try_cmpxchg_relaxed(&lock->val, &val, _Q_LOCKED_VAL))
+		{
+			bpf_notify_lock_kthread(); //No next waiter. Notify kthread.
 			goto release;
+		}
 	}
 
 	set_locked(lock);

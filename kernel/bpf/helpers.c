@@ -448,10 +448,10 @@ void bpf_spin_lock_timeout_handler(void)
 	/* Release all held locks in reverse order */
 	for (i = cnt - 1; i >= 0; i--) {
 		if (locks[i].lock) {
-            //struct bpf_spin_lock -> u32 -> struct qspinlock
+            		//struct bpf_spin_lock -> u32 -> struct qspinlock
 			bpf_qspinlock_unlock((struct qspinlock *)locks[i].lock);
-            // For every lock that is acquired enable preemption.
-            preempt_enable(); 
+            		// For every lock that is acquired enable preemption.
+            		preempt_enable(); 
 			locks[i].lock = NULL;
 		}
 	}
