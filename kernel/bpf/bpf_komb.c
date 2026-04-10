@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0
 // Copyright (c) 2022 Vishal Gupta, Kumar Kartikeya Dwivedi
 
-#include <asm-generic/qspinlock.h>
+#include <asm/qspinlock.h>
 #include <linux/sched.h>
-#include <linux/combiner.h>
 #include <linux/topology.h>
 #include <linux/vmalloc.h>
 
@@ -11,6 +10,10 @@
 #include <linux/kernel.h>
 #include <linux/syscalls.h>
 #include <linux/bpf_komb.h>
+
+#define MAX_NODES 4
+#define NUM_PREFETCH_LINES 6
+#define SIZE_OF_SHADOW_STACK 4096
 
 struct shadow_stack {
 	union {
@@ -31,6 +34,8 @@ struct shadow_stack {
 
 static DEFINE_PER_CPU_SHARED_ALIGNED(struct komb_node, komb_nodes[MAX_NODES]);
 static DEFINE_PER_CPU_SHARED_ALIGNED(struct shadow_stack, local_shadow_stack);
+
+static long komb_batch_size = 16384;
 
 static inline __pure u32 encode_tail(int cpu, int idx)
 {
@@ -164,11 +169,35 @@ next_node_null:
 #pragma GCC push_options
 #pragma GCC optimize("O3")
 __attribute__((noipa)) noinline notrace static void
+komb_context_switch(void *incoming_rsp_ptr, void *outgoing_rsp_ptr)
+{
+	asm volatile("pushq %%rbp\n"
+		     "pushq %%rbx\n"
+		     "pushq %%r12\n"
+		     "pushq %%r13\n"
+		     "pushq %%r14\n"
+		     "pushq %%r15\n"
+		     "movq %%rsp, (%%rsi)\n"
+		     "movq (%%rdi), %%rsp\n"
+		     "popq %%r15\n"
+		     "popq %%r14\n"
+		     "popq %%r13\n"
+		     "popq %%r12\n"
+		     "popq %%rbx\n"
+		     "popq %%rbp\n"
+		     :
+		     :
+		     : "memory");
+}
+#pragma GCC pop_options
+
+
+#pragma GCC push_options
+#pragma GCC optimize("O3")
+__attribute__((noipa)) noinline notrace static void
 execute_cs(struct qspinlock *lock, struct komb_node *curr_node)
 {
 	void *incoming_rsp_ptr, *outgoing_rsp_ptr;
-	struct komb_node *next_node = NULL;
-
 	struct shadow_stack *ptr = this_cpu_ptr(&local_shadow_stack);
 
 	incoming_rsp_ptr = &(curr_node->rsp);
@@ -228,16 +257,12 @@ __always_inline static void run_combiner(struct qspinlock *lock,
 
 #pragma GCC push_options
 #pragma GCC optimize("O3")
-__attribute__((noipa)) noinline notrace static int
-__komb_spin_lock_longjmp(struct qspinlock *lock)
+__attribute__((noipa)) noinline notrace static void
+__komb_spin_lock_slowpath(struct qspinlock *lock)
 {
 	register struct komb_node *curr_node;
 	struct komb_node *prev_node = NULL, *next_node = NULL;
-	struct qspinlock *parent_lock;
-	int old_tail, val, j;
-	int i;
-
-	int tail, idx;
+	int old_tail, val, i, tail, idx;
 
 	curr_node = this_cpu_ptr(&komb_nodes[0]);
 	idx = curr_node->count++;
@@ -263,7 +288,7 @@ __komb_spin_lock_longjmp(struct qspinlock *lock)
 			curr_node->count--;
 			for (i = 0; i < NUM_PREFETCH_LINES; i++)
 				prefetchw(((char *)curr_node->rsp) + (64 * i));
-			return 0;
+			return;
 		}
 	}
 
@@ -281,11 +306,11 @@ __komb_spin_lock_longjmp(struct qspinlock *lock)
 
 	curr_node->count--;
 	run_combiner(lock, next_node);
-	return 0;
+	return;
 
 release:
 	curr_node->count--;
-	return 0;
+	return;
 }
 #pragma GCC pop_options
 
@@ -303,10 +328,9 @@ get_komb_node(void)
 
 #pragma GCC push_options
 #pragma GCC optimize("O3")
-__attribute__((noipa)) noinline notrace void
+__attribute__((noipa)) noinline notrace static void
 komb_spin_lock_slowpath(struct qspinlock *lock)
 {
-	register int ret_val;
 	asm volatile("pushq %%rbp\n"
 		     "pushq %%rbx\n"
 		     "pushq %%r12\n"
@@ -345,7 +369,7 @@ komb_spin_lock_slowpath(struct qspinlock *lock)
 		     "popq %%r12\n"
 		     "popq %%rbx\n"
 		     "popq %%rbp\n"
-		     "retq\n"
+		     //"retq\n" // Check if this is needed
 		     :
 		     :
 		     : "memory");
@@ -452,9 +476,9 @@ komb_spin_unlock(struct qspinlock *lock)
 }
 EXPORT_SYMBOL_GPL(komb_spin_unlock);
 
-void komb_init(void)
+static int komb_init(void)
 {
-	int i, j;
+	int i;
 	for_each_possible_cpu(i) {
 		void *stack_ptr = vzalloc(SIZE_OF_SHADOW_STACK);
 		struct shadow_stack *ptr = per_cpu_ptr(&local_shadow_stack, i);
@@ -470,9 +494,6 @@ void komb_init(void)
 		ptr->local_queue_head = NULL;
 		ptr->local_queue_tail = NULL;
 	}
+	return 0;
 }
-
-void komb_spin_lock_init(struct qspinlock *lock)
-{
-	atomic_set(&lock->val, 0);
-}
+late_initcall(komb_init);
