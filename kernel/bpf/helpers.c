@@ -32,6 +32,7 @@
 #include <linux/hrtimer.h>
 #include <linux/bpf_lock_timer.h>
 #include <linux/bpf_qspinlock.h>
+//#include <linux/bpf_komb.h>
 #include <linux/kthread.h>
 #include <linux/wait.h>
 
@@ -465,6 +466,7 @@ void bpf_spin_lock_timeout_handler(void)
 		if (locks[i].lock) {
             		//struct bpf_spin_lock -> u32 -> struct qspinlock
 			bpf_qspinlock_unlock((struct qspinlock *)locks[i].lock);
+			//komb_spin_unlock((struct qspinlock *)locks[i].lock);
             		// For every lock that is acquired enable preemption.
             		preempt_enable(); 
 			locks[i].lock = NULL;
@@ -568,6 +570,7 @@ noinline void __internal__bpf_spin_lock(struct qspinlock *lock)
 
 	preempt_disable();
 	bpf_qspinlock_lock(lock); // TODO: Change it to irqsave version.
+	//komb_spin_lock(lock);
 
 	/* Track the acquired lock */
 	locks = this_cpu_ptr(held_locks);
@@ -590,7 +593,7 @@ noinline void __internal__bpf_spin_lock(struct qspinlock *lock)
 			 *  - The kthread notified from bpf_qspinlock_lock fast
 			 *    path (uncontended case).
 			 */
-            this_cpu_write(bpf_undo_log_cnt, 0);
+            		this_cpu_write(bpf_undo_log_cnt, 0);
 			WRITE_ONCE(ebpf_spinlock_timeout, 0);
 		}
 	} else {
@@ -625,6 +628,7 @@ noinline void __internal__bpf_spin_unlock(struct qspinlock *lock)
 	bool found = false;
 
 	bpf_qspinlock_unlock(lock); // TODO: Change it to irqsave version
+	//komb_spin_unlock(lock);
 
 	/* Remove lock from tracking (handle OOO unlocking) */
 	locks = this_cpu_ptr(held_locks);
