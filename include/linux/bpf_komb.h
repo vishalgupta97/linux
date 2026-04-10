@@ -63,6 +63,7 @@ struct komb_node {
 #define atomic_cond_read_acquire_sched(v, c) \
 	smp_cond_load_acquire_sched(&(v)->counter, (c))
 
+void komb_init(void);
 int komb_spin_trylock(struct qspinlock *lock);
 void komb_spin_lock(struct qspinlock *lock);
 void komb_spin_unlock(struct qspinlock *lock);

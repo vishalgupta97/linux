@@ -106,6 +106,7 @@
 #include <linux/time_namespace.h>
 #include <linux/unaligned.h>
 #include <net/net_namespace.h>
+#include <linux/bpf_komb.h>
 
 #include <asm/io.h>
 #include <asm/setup.h>
@@ -1205,6 +1206,8 @@ void start_kernel(void)
 	acpi_subsystem_init();
 	arch_post_acpi_subsys_init();
 	kcsan_init();
+
+	komb_init();
 
 	/* Do the rest non-__init'ed, we're now alive */
 	rest_init();
