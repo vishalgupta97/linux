@@ -207,7 +207,7 @@ execute_cs(struct qspinlock *lock, struct komb_node *curr_node)
 }
 #pragma GCC pop_options
 
-__always_inline static void run_combiner(struct qspinlock *lock,
+__always_inline static struct komb_node* run_combiner(struct qspinlock *lock,
 					 struct komb_node *curr_node)
 {
 	struct shadow_stack *ptr;
@@ -217,11 +217,10 @@ __always_inline static void run_combiner(struct qspinlock *lock,
 		set_locked(lock);
 		curr_node->locked = false;
 		smp_mb();
-		return;
+		return NULL;
 	}
 
 	ptr = this_cpu_ptr(&local_shadow_stack);
-	curr_node->rsp = NULL;
 	ptr->counter_val = 0;
 	ptr->next_node_ptr = NULL;
 	ptr->local_queue_head = NULL;
@@ -248,11 +247,10 @@ __always_inline static void run_combiner(struct qspinlock *lock,
 		ptr->local_queue_tail = NULL;
 	}
 
-	set_locked(lock);
-	next_node->locked = false;
-
 	ptr->lock_addr = NULL;
 	ptr->curr_cs_cpu = -1;
+
+	return next_node;
 }
 
 #pragma GCC push_options
@@ -261,7 +259,7 @@ __attribute__((noipa)) noinline notrace static void
 __komb_spin_lock_slowpath(struct qspinlock *lock)
 {
 	register struct komb_node *curr_node;
-	struct komb_node *prev_node = NULL, *next_node = NULL;
+	struct komb_node *prev_node = NULL, *next_node = NULL, *temp_node = NULL;
 	int old_tail, val, i, tail, idx;
 
 	curr_node = this_cpu_ptr(&komb_nodes[0]);
@@ -305,7 +303,12 @@ __komb_spin_lock_slowpath(struct qspinlock *lock)
 	next_node = curr_node->next;
 
 	curr_node->count--;
-	run_combiner(lock, next_node);
+	temp_node = run_combiner(lock, next_node);
+	set_locked(lock);
+	if(temp_node)
+		temp_node->locked = false;
+	else
+		next_node->locked = false;
 	return;
 
 release:
@@ -476,7 +479,7 @@ komb_spin_unlock(struct qspinlock *lock)
 }
 EXPORT_SYMBOL_GPL(komb_spin_unlock);
 
-static int komb_init(void)
+void komb_init(void)
 {
 	int i;
 	for_each_possible_cpu(i) {
@@ -494,6 +497,4 @@ static int komb_init(void)
 		ptr->local_queue_head = NULL;
 		ptr->local_queue_tail = NULL;
 	}
-	return 0;
 }
-late_initcall(komb_init);
