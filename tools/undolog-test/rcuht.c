@@ -714,6 +714,16 @@ static struct rcuhashbash_ops all_ops[] = {
 				.write_unlock_buckets = NULL,
 		},
 		{
+				.reader_type = "table_bpf_komb_undolog",
+				.writer_type = "table_bpf_komb_undolog",
+				.read = NULL,
+				.read_lock_bucket = NULL,
+				.read_unlock_bucket = NULL,
+				.write = attach_cs_ht,
+				.write_lock_buckets = NULL,
+				.write_unlock_buckets = NULL,
+		},
+		{
 				.reader_type = "table_bpf_spinlock_baseline",
 				.writer_type = "table_bpf_spinlock_baseline",
 				.read = NULL,
