@@ -476,7 +476,7 @@ komb_spin_unlock(struct qspinlock *lock)
 }
 EXPORT_SYMBOL_GPL(komb_spin_unlock);
 
-static int komb_init(void)
+void komb_init(void)
 {
 	int i;
 	for_each_possible_cpu(i) {
@@ -494,6 +494,4 @@ static int komb_init(void)
 		ptr->local_queue_head = NULL;
 		ptr->local_queue_tail = NULL;
 	}
-	return 0;
 }
-late_initcall(komb_init);

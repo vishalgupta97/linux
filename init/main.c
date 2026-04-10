@@ -105,6 +105,7 @@
 #include <linux/ptdump.h>
 #include <linux/time_namespace.h>
 #include <net/net_namespace.h>
+#include <linux/bpf_komb.h>
 
 #include <asm/io.h>
 #include <asm/setup.h>
@@ -1129,6 +1130,8 @@ void start_kernel(void)
 	profile_init();
 	call_function_init();
 	WARN(!irqs_disabled(), "Interrupts were enabled early\n");
+
+	komb_init();
 
 	early_boot_irqs_disabled = false;
 	local_irq_enable();
