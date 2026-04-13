@@ -247,9 +247,6 @@ __always_inline static void run_combiner(struct qspinlock *lock,
 		ptr->local_queue_tail = NULL;
 	}
 
-	set_locked(lock);
-	next_node->locked = false;
-
 	ptr->lock_addr = NULL;
 	ptr->curr_cs_cpu = -1;
 }
@@ -305,6 +302,8 @@ __komb_spin_lock_slowpath(struct qspinlock *lock)
 
 	curr_node->count--;
 	run_combiner(lock, next_node);
+	set_locked(lock);
+	next_node->locked = false;
 	return;
 
 release:
