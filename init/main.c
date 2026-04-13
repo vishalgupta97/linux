@@ -1131,8 +1131,6 @@ void start_kernel(void)
 	call_function_init();
 	WARN(!irqs_disabled(), "Interrupts were enabled early\n");
 
-	komb_init();
-
 	early_boot_irqs_disabled = false;
 	local_irq_enable();
 
@@ -1204,6 +1202,8 @@ void start_kernel(void)
 	acpi_subsystem_init();
 	arch_post_acpi_subsys_init();
 	kcsan_init();
+
+	komb_init();
 
 	/* Do the rest non-__init'ed, we're now alive */
 	rest_init();
