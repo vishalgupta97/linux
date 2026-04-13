@@ -221,7 +221,6 @@ __always_inline static void run_combiner(struct qspinlock *lock,
 	}
 
 	ptr = this_cpu_ptr(&local_shadow_stack);
-	curr_node->rsp = NULL;
 	ptr->counter_val = 0;
 	ptr->next_node_ptr = NULL;
 	ptr->local_queue_head = NULL;
