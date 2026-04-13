@@ -1,5 +1,5 @@
 
-export cores=(1 8) #2 4 8 14 28 42 56 70 84 98 112)
+export cores=(8) #2 4 8 14 28 42 56 70 84 98 112)
 export ncores=112
 export root_dir=`pwd`
 export results_dir=${root_dir}/doc/results/srv1vm
