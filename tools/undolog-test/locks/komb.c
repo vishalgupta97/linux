@@ -1213,7 +1213,7 @@ queue:
 	}
 #endif
 }
-EXPORT_SYMBOL_GPL(komb_spin_lock);
+//EXPORT_SYMBOL_GPL(komb_spin_lock);
 
 struct task_struct *komb_get_current(spinlock_t *lock)
 {
@@ -1386,7 +1386,7 @@ komb_spin_unlock(struct qspinlock *lock)
 	LOCK_END_TIMING_PER_CPU_DISABLE(unlock_stack_switch);
 	return;
 }
-EXPORT_SYMBOL_GPL(komb_spin_unlock);
+//EXPORT_SYMBOL_GPL(komb_spin_unlock);
 
 __always_inline int komb_spin_trylock(struct qspinlock *lock)
 {

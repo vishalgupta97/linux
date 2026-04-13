@@ -7,7 +7,7 @@
 #define MAX_BUCKETS            1024
 #define MAX_ENTRIES            65536
 #define MAX_ENTRIES_PER_BUCKET 64
-#define NUM_ENTRIES 8          
+#define NUM_ENTRIES 4          
 
 /* ─── Map key/value types ─────────────────────────────────────── */
 
