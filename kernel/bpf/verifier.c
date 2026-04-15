@@ -11054,6 +11054,29 @@ static int set_loop_callback_state(struct bpf_verifier_env *env,
 	return 0;
 }
 
+static int set_execute_fn_with_lock_callback_state(struct bpf_verifier_env *env,
+						  struct bpf_func_state *caller,
+						  struct bpf_func_state *callee,
+						  int insn_idx)
+{
+	/* bpf_execute_fn_with_lock(struct bpf_spin_lock *lock,
+	 *                         int (*callback_fn)(void *shared_data),
+	 *                         void *shared_data);
+	 * callback_fn(void *shared_data);
+	 */
+	callee->regs[BPF_REG_1] = caller->regs[BPF_REG_3];
+
+	/* unused */
+	__mark_reg_not_init(env, &callee->regs[BPF_REG_2]);
+	__mark_reg_not_init(env, &callee->regs[BPF_REG_3]);
+	__mark_reg_not_init(env, &callee->regs[BPF_REG_4]);
+	__mark_reg_not_init(env, &callee->regs[BPF_REG_5]);
+
+	callee->in_callback_fn = true;
+	callee->callback_ret_range = retval_range(0, 1);
+	return 0;
+}
+
 static int set_timer_callback_state(struct bpf_verifier_env *env,
 				    struct bpf_func_state *caller,
 				    struct bpf_func_state *callee,
@@ -12553,6 +12576,7 @@ enum special_kfunc_type {
 	KF_bpf_session_is_return,
 	KF_bpf_stream_vprintk,
 	KF_bpf_stream_print_stack,
+	KF_bpf_execute_fn_with_lock,
 };
 
 BTF_ID_LIST(special_kfunc_list)
@@ -12633,6 +12657,7 @@ BTF_ID(func, bpf_arena_reserve_pages)
 BTF_ID(func, bpf_session_is_return)
 BTF_ID(func, bpf_stream_vprintk)
 BTF_ID(func, bpf_stream_print_stack)
+BTF_ID(func, bpf_execute_fn_with_lock)
 
 static bool is_task_work_add_kfunc(u32 func_id)
 {
@@ -13095,7 +13120,8 @@ static bool kfunc_spin_allowed(u32 btf_id)
 
 static bool is_sync_callback_calling_kfunc(u32 btf_id)
 {
-	return btf_id == special_kfunc_list[KF_bpf_rbtree_add_impl];
+	return btf_id == special_kfunc_list[KF_bpf_rbtree_add_impl] ||
+	       btf_id == special_kfunc_list[KF_bpf_execute_fn_with_lock];
 }
 
 static bool is_async_callback_calling_kfunc(u32 btf_id)
@@ -14189,6 +14215,16 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	if (meta.func_id == special_kfunc_list[KF_bpf_rbtree_add_impl]) {
 		err = push_callback_call(env, insn, insn_idx, meta.subprogno,
 					 set_rbtree_add_callback_state);
+		if (err) {
+			verbose(env, "kfunc %s#%d failed callback verification\n",
+				func_name, meta.func_id);
+			return err;
+		}
+	}
+
+	if (meta.func_id == special_kfunc_list[KF_bpf_execute_fn_with_lock]) {
+		err = push_callback_call(env, insn, insn_idx, meta.subprogno,
+					 set_execute_fn_with_lock_callback_state);
 		if (err) {
 			verbose(env, "kfunc %s#%d failed callback verification\n",
 				func_name, meta.func_id);

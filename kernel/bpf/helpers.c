@@ -3221,6 +3221,44 @@ __bpf_kfunc void bpf_preempt_enable(void)
 	preempt_enable();
 }
 
+static inline void __bpf_tas_lock(struct bpf_spin_lock *lock)
+{
+	atomic_t *l = (void *)lock;
+
+	BUILD_BUG_ON(sizeof(*l) != sizeof(*lock));
+	preempt_disable();
+	do {
+		atomic_cond_read_relaxed(l, !VAL);
+	} while (atomic_xchg(l, 1));
+}
+
+static inline void __bpf_tas_unlock(struct bpf_spin_lock *lock)
+{
+	atomic_t *l = (void *)lock;
+
+	atomic_set_release(l, 0);
+	preempt_enable();
+}
+
+__bpf_kfunc int bpf_execute_fn_with_lock(struct bpf_spin_lock *lock,
+					int (*callback_fn)(void *shared_data),
+					void *shared_data__nullable)
+{
+	unsigned long flags;
+	int ret;
+
+	if (!lock || !callback_fn)
+		return -EINVAL;
+
+	local_irq_save(flags);
+	__bpf_tas_lock(lock);
+	ret = callback_fn(shared_data__nullable);
+	__bpf_tas_unlock(lock);
+	local_irq_restore(flags);
+
+	return ret;
+}
+
 struct bpf_iter_bits {
 	__u64 __opaque[2];
 } __aligned(8);
@@ -4685,6 +4723,7 @@ BTF_ID_FLAGS(func, bpf_task_work_schedule_resume, KF_IMPLICIT_ARGS)
 BTF_ID_FLAGS(func, bpf_dynptr_from_file)
 BTF_ID_FLAGS(func, bpf_dynptr_file_discard)
 BTF_ID_FLAGS(func, bpf_timer_cancel_async)
+BTF_ID_FLAGS(func, bpf_execute_fn_with_lock)
 BTF_KFUNCS_END(common_btf_ids)
 
 static const struct btf_kfunc_id_set common_kfunc_set = {
