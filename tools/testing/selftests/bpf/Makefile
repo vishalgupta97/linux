@@ -137,7 +137,7 @@ TEST_GEN_PROGS_EXTENDED = \
 	xdping \
 	xskxceiver
 
-TEST_GEN_FILES += $(TEST_KMODS) liburandom_read.so urandom_read sign-file uprobe_multi
+TEST_GEN_FILES += $(TEST_KMODS) liburandom_read.so urandom_read sign-file
 
 ifneq ($(V),1)
 submake_extras := feature_display=0
@@ -761,7 +761,6 @@ TRUNNER_EXTRA_FILES := $(OUTPUT)/urandom_read				\
 		       $(OUTPUT)/liburandom_read.so			\
 		       $(OUTPUT)/xdp_synproxy				\
 		       $(OUTPUT)/sign-file				\
-		       $(OUTPUT)/uprobe_multi				\
 		       $(TEST_KMOD_TARGETS)				\
 		       ima_setup.sh 					\
 		       $(VERIFY_SIG_SETUP)				\
@@ -892,13 +891,6 @@ $(OUTPUT)/veristat.o: $(BPFOBJ)
 $(OUTPUT)/veristat: $(OUTPUT)/veristat.o
 	$(call msg,BINARY,,$@)
 	$(Q)$(CC) $(CFLAGS) $(LDFLAGS) $(filter %.a %.o,$^) $(LDLIBS) -o $@
-
-# Linking uprobe_multi can fail due to relocation overflows on mips.
-$(OUTPUT)/uprobe_multi: CFLAGS += $(if $(filter mips, $(ARCH)),-mxgot)
-$(OUTPUT)/uprobe_multi: uprobe_multi.c uprobe_multi.ld
-	$(call msg,BINARY,,$@)
-	$(Q)$(CC) $(CFLAGS) -Wl,-T,uprobe_multi.ld -O0 $(LDFLAGS) 	\
-		$(filter-out %.ld,$^) $(LDLIBS) -o $@
 
 EXTRA_CLEAN := $(SCRATCH_DIR) $(HOST_SCRATCH_DIR)			\
 	prog_tests/tests.h map_tests/tests.h verifier/tests.h		\
