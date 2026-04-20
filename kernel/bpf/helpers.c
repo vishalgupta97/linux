@@ -465,8 +465,8 @@ void bpf_spin_lock_timeout_handler(void)
 	for (i = cnt - 1; i >= 0; i--) {
 		if (locks[i].lock) {
             		//struct bpf_spin_lock -> u32 -> struct qspinlock
-			//bpf_qspinlock_unlock((struct qspinlock *)locks[i].lock);
-			komb_spin_unlock((struct qspinlock *)locks[i].lock);
+			bpf_qspinlock_unlock((struct qspinlock *)locks[i].lock);
+			//komb_spin_unlock((struct qspinlock *)locks[i].lock);
             		// For every lock that is acquired enable preemption.
             		preempt_enable(); 
 			locks[i].lock = NULL;
@@ -569,8 +569,8 @@ noinline void __internal__bpf_spin_lock(struct qspinlock *lock)
 	int cnt;
 
 	preempt_disable();
-	//bpf_qspinlock_lock(lock); // TODO: Change it to irqsave version.
-	komb_spin_lock(lock);
+	bpf_qspinlock_lock(lock); // TODO: Change it to irqsave version.
+	//komb_spin_lock(lock);
 
 	/* Track the acquired lock */
 	locks = this_cpu_ptr(held_locks);
@@ -627,8 +627,8 @@ noinline void __internal__bpf_spin_unlock(struct qspinlock *lock)
 	int cnt, i;
 	bool found = false;
 
-	//bpf_qspinlock_unlock(lock); // TODO: Change it to irqsave version
-	komb_spin_unlock(lock);
+	bpf_qspinlock_unlock(lock); // TODO: Change it to irqsave version
+	//komb_spin_unlock(lock);
 
 	/* Remove lock from tracking (handle OOO unlocking) */
 	locks = this_cpu_ptr(held_locks);
