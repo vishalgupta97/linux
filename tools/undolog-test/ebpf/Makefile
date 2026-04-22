@@ -2,7 +2,7 @@ CLANG   ?= clang
 BPFTOOL ?= bpftool
 CC      ?= gcc
 
-BPF_CFLAGS := -g -O2 -target bpf -D__TARGET_ARCH_x86 \
+BPF_CFLAGS := -g -O2 -target bpf -D__TARGET_ARCH_x86 -DBPF_NO_KFUNC_PROTOTYPES \
               -I/usr/include/x86_64-linux-gnu \
               -I/usr/include
 

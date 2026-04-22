@@ -1,14 +1,15 @@
 source defaults.sh
 
-locks=(table_bpf_spinlock_baseline) # table_bpf_qspinlock) #table_aqs table_cna)
-binaries=(baseline) #withundologstore) #withundologprefetch) #withundologatomic) #withundolog baseline)
+#locks=(table_bpf_spinlock_baseline)
+locks=(table_bpf_qspinlock)
+binaries=(baseline)
 
 lock_type=spinlock
 
 rw_writes=(100)
 rw_total=100
 buckets=(1024)
-entries_ratios=(4) #1 2 4 6 8)
+entries_ratios=(1 2 4 6 8)
 
 time=${runtime}
 
