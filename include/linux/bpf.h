@@ -1689,6 +1689,7 @@ struct bpf_prog_aux {
 	bool func_proto_unreliable;
 	bool tail_call_reachable;
 	bool xdp_has_frags;
+	bool undo_log_requires_jit;
 	bool exception_cb;
 	bool exception_boundary;
 	bool is_extended; /* true if extended by freplace program */
@@ -3691,12 +3692,25 @@ extern const struct bpf_func_proto bpf_sk_redirect_hash_proto;
 extern const struct bpf_func_proto bpf_sk_redirect_map_proto;
 extern const struct bpf_func_proto bpf_spin_lock_proto;
 extern const struct bpf_func_proto bpf_spin_unlock_proto;
+
+#ifdef CONFIG_BPF_UNDO_LOG
+struct bpf_undo_log_entry {
+	void *addr;	/* write destination */
+	u64   old_value;/* value at addr before the write */
+	u8    size;	/* operand size in bytes: 1, 2, 4, or 8 */
+};
+
+DECLARE_PER_CPU(struct bpf_undo_log_entry[CONFIG_BPF_UNDO_LOG_MAX_ENTRIES],
+		bpf_undo_log);
+DECLARE_PER_CPU(struct bpf_undo_log_entry *, bpf_undo_log_cursor);
+
 /* Internal helper injected by the verifier before writes inside a spinlock
- * critical section.  Records the old value at @addr (size bytes) into the
- * per-CPU undo log so bpf_spin_lock_timeout_handler() can roll back.
+ * critical section. The x86 JIT replaces every call site with inline R12-cursor
+ * code. If this ever executes, JIT inlining failed — the stub WARNs loudly.
  * Not callable from BPF programs directly.
  */
 u64 bpf_undo_log_push(u64 addr, u64 size, u64 r3, u64 r4, u64 r5);
+#endif /* CONFIG_BPF_UNDO_LOG */
 extern const struct bpf_func_proto bpf_get_local_storage_proto;
 extern const struct bpf_func_proto bpf_strtol_proto;
 extern const struct bpf_func_proto bpf_strtoul_proto;

@@ -610,13 +610,6 @@ struct bpf_insn_aux_data {
 #define MAX_USED_MAPS 64 /* max number of maps accessed by one eBPF program */
 #define MAX_USED_BTFS 64 /* max number of BTFs accessed by one BPF program */
 
-/*
- * Number of extra stack bytes reserved per-subprogram for the register spill
- * area injected by do_misc_fixups() around bpf_undo_log_push() calls.
- * Six 64-bit caller-saved registers (R0-R5) × 8 bytes = 48 bytes.
- */
-#define BPF_UNDO_LOG_SPILL_SIZE	48
-
 #define BPF_VERIFIER_TMP_LOG_SIZE	1024
 
 struct bpf_verifier_log {

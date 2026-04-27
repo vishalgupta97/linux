@@ -23525,101 +23525,18 @@ static int do_misc_fixups(struct bpf_verifier_env *env)
 		mark_subprog_exc_cb(env, env->exception_callback_subprog);
 	}
 
-#ifdef CONFIG_BPF_UNDO_LOG
-	/*
-	 * Pre-pass: extend the stack of any subprogram containing
-	 * critical-section writes.  Reserve BPF_UNDO_LOG_SPILL_SIZE bytes
-	 * below the existing BPF stack for R0-R5 spill slots used by the
-	 * undo-log prefix injected in the main loop below.
-	 */
-	{
-		int sp;
-
-		for (sp = 0; sp < env->subprog_cnt; sp++) {
-			const int sp_end = (sp + 1 < env->subprog_cnt)
-					   ? subprogs[sp + 1].start : insn_cnt;
-			int j;
-			bool has_cs_write = false;
-
-			for (j = subprogs[sp].start; j < sp_end; j++) {
-				if (env->insn_aux_data[j].in_critical_section) {
-					has_cs_write = true;
-					break;
-				}
-			}
-			if (!has_cs_write)
-				continue;
-
-			subprogs[sp].stack_depth += BPF_UNDO_LOG_SPILL_SIZE;
-			if (subprogs[sp].stack_depth > MAX_BPF_STACK) {
-				verbose(env,
-					"BPF stack limit exceeded after spinlock undo log reservation (%d > %d)\n",
-					subprogs[sp].stack_depth, MAX_BPF_STACK);
-				return -EINVAL;
-			}
-		}
-		/* Refresh after pre-pass may have increased subprog[0].stack_depth. */
-		stack_depth = subprogs[cur_subprog].stack_depth;
-	}
-#endif // CONFIG_BPF_UNDO_LOG
 
 	for (i = 0; i < insn_cnt;) {
 #ifdef CONFIG_BPF_UNDO_LOG
-		/*
-		 * Undo-log injection: for every write instruction inside a BPF
-		 * spinlock critical section, prepend a register-save block, a
-		 * call to bpf_undo_log_push(), and a register-restore block.
-		 * This records the old value so that bpf_spin_lock_timeout_handler()
-		 * can roll back all writes made before a timeout.
-		 *
-		 * Spill slot offsets (stack already extended by BPF_UNDO_LOG_SPILL_SIZE):
-		 *   R_k  →  FP - (stack_depth - 40 + k*8),  k ∈ {0..5}
-		 */
 		if (env->insn_aux_data[i + delta].in_critical_section) {
 			u8 cls  = BPF_CLASS(insn->code);
 			u8 mode = BPF_MODE(insn->code);
 
 			if ((cls == BPF_STX || cls == BPF_ST) &&
-			    (mode == BPF_MEM         || mode == BPF_ATOMIC       ||
-			     mode == BPF_PROBE_MEM32 || mode == BPF_PROBE_ATOMIC)) {
-				int usd = (int)stack_depth; /* includes spill extension */
-				int k;
-
+			    (mode == BPF_MEM || mode == BPF_ATOMIC)) {
 				cnt = 0;
-				/* --- Save R0–R5 to dedicated spill slots --- */
-				for (k = 0; k <= 5; k++)
-					insn_buf[cnt++] = BPF_STX_MEM(BPF_DW,
-						BPF_REG_FP, k,
-						-(usd - 40 + k * 8));
-				/* --- R1 = effective write address = dst_reg + off --- */
-				if (insn->dst_reg <= BPF_REG_5)
-					/* dst_reg was already spilled; reload from slot */
-					insn_buf[cnt++] = BPF_LDX_MEM(BPF_DW,
-						BPF_REG_1, BPF_REG_FP,
-						-(usd - 40 + insn->dst_reg * 8));
-				else
-					insn_buf[cnt++] = BPF_MOV64_REG(
-						BPF_REG_1, insn->dst_reg);
-				if (insn->off)
-					insn_buf[cnt++] = BPF_ALU64_IMM(
-						BPF_ADD, BPF_REG_1, insn->off);
-				/* --- R2 = write size in bytes (1/2/4/8) --- */
-				insn_buf[cnt++] = BPF_MOV64_IMM(BPF_REG_2,
-					BPF_LDST_BYTES(insn));
-				/* --- Call bpf_undo_log_push(addr, size) --- */
 				insn_buf[cnt++] = BPF_EMIT_CALL(bpf_undo_log_push);
-				/* --- Restore R0–R5 --- */
-				for (k = 0; k <= 5; k++)
-					insn_buf[cnt++] = BPF_LDX_MEM(BPF_DW,
-						k, BPF_REG_FP,
-						-(usd - 40 + k * 8));
-				/* --- Original write instruction --- */
 				insn_buf[cnt++] = *insn;
-
-				if (WARN_ONCE(cnt > INSN_BUF_SIZE,
-					      "BPF undo log: insn_buf overflow cnt=%d\n",
-					      cnt))
-					return -EFAULT;
 
 				new_prog = bpf_patch_insn_data(env, i + delta,
 							       insn_buf, cnt);
@@ -23629,6 +23546,7 @@ static int do_misc_fixups(struct bpf_verifier_env *env)
 				delta    += cnt - 1;
 				env->prog = prog = new_prog;
 				insn      = new_prog->insnsi + i + delta;
+				prog->aux->undo_log_requires_jit = true;
 				goto next_insn;
 			}
 		}
@@ -24555,6 +24473,14 @@ next_insn:
 	ret = sort_kfunc_descs_by_imm_off(env);
 	if (ret)
 		return ret;
+
+#ifdef CONFIG_BPF_UNDO_LOG
+	if (prog->aux->undo_log_requires_jit && prog->aux->arena) {
+		verbose(env,
+			"BPF: arena and spinlock undo logging are mutually exclusive (R12 conflict)\n");
+		return -EOPNOTSUPP;
+	}
+#endif
 
 	return 0;
 }

@@ -298,95 +298,45 @@ int ebpf_spinlock_timeout;
 
 void bpf_throw(u64 cookie);
 
+#ifdef CONFIG_BPF_UNDO_LOG
+DEFINE_PER_CPU(struct bpf_undo_log_entry[CONFIG_BPF_UNDO_LOG_MAX_ENTRIES],
+	       bpf_undo_log);
+EXPORT_PER_CPU_SYMBOL_GPL(bpf_undo_log);
+
+DEFINE_PER_CPU(struct bpf_undo_log_entry *, bpf_undo_log_cursor);
+EXPORT_PER_CPU_SYMBOL_GPL(bpf_undo_log_cursor);
+
+static int __init bpf_undo_log_init(void)
+{
+	int cpu;
+
+	for_each_possible_cpu(cpu)
+		per_cpu(bpf_undo_log_cursor, cpu) = per_cpu_ptr(bpf_undo_log, cpu);
+	return 0;
+}
+core_initcall(bpf_undo_log_init);
+
 /*
- * Per-CPU undo log: records old values of memory locations written inside
- * a bpf_spin_lock critical section so that bpf_spin_lock_timeout_handler()
- * can restore them before releasing the locks.
- *
- * CONFIG_BPF_UNDO_LOG_MAX_ENTRIES is a compile-time tunable (Kconfig).
- * Any BPF program whose critical section exceeds this many write operations
- * on any execution path is rejected by the verifier at load time.
- */
-struct bpf_undo_log_entry {
-	void	*addr;		/* address of the write destination */
-	u64	old_value;	/* value at addr BEFORE the write */
-	u8	size;		/* operand size in bytes: 1, 2, 4, or 8 */
-};
-
-static DEFINE_PER_CPU(struct bpf_undo_log_entry[CONFIG_BPF_UNDO_LOG_MAX_ENTRIES],
-		      bpf_undo_log);
-static DEFINE_PER_CPU(int, bpf_undo_log_cnt);
-
-/**
- * bpf_undo_log_push - record old value of a memory location before a write.
- * @addr: effective address that is about to be written
- * @size: write size in bytes (1, 2, 4, or 8)
- *
- * Called (via injected BPF helper call) immediately before every write
- * instruction inside a bpf_spin_lock critical section.  Reads the current
- * value at @addr and appends (@addr, old_value, @size) to the per-CPU undo
- * log so that bpf_spin_lock_timeout_handler() can restore data on timeout.
- *
- * This function is notrace because it runs inside a spinlock with IRQs
- * disabled.  The verifier guarantees the log never overflows.
+ * Marker stub — the x86 JIT replaces every call site with inline R12-cursor
+ * code. Reaching this body means JIT inlining failed; reject loudly.
  */
 NOTRACE_BPF_CALL_2(bpf_undo_log_push, unsigned long, addr, u64, size)
 {
-	struct bpf_undo_log_entry *log;
-	u64 old_value = 0;
-	int cnt;
-
-	cnt = this_cpu_read(bpf_undo_log_cnt);
-	if (WARN_ONCE(cnt >= CONFIG_BPF_UNDO_LOG_MAX_ENTRIES,
-		      "BPF undo log overflow (cnt=%d max=%d)\n",
-		      cnt, CONFIG_BPF_UNDO_LOG_MAX_ENTRIES))
-		return -ENOSPC;
-
-	switch (size) {
-	case 1:
-		old_value = READ_ONCE(*(u8 *)addr);
-		break;
-	case 2:
-		old_value = READ_ONCE(*(u16 *)addr);
-		break;
-	case 4:
-		old_value = READ_ONCE(*(u32 *)addr);
-		break;
-	case 8:
-		old_value = READ_ONCE(*(u64 *)addr);
-		break;
-	default:
-		WARN_ONCE(1, "bpf_undo_log_push: invalid size %llu\n", size);
-		return -EINVAL;
-	}
-
-	log = this_cpu_ptr(bpf_undo_log);
-	log[cnt].addr      = (void *)addr;
-	log[cnt].old_value = old_value;
-	log[cnt].size      = (u8)size;
-
-	this_cpu_inc(bpf_undo_log_cnt);
-	return 0;
+	WARN_ONCE(1, "bpf_undo_log_push reached: JIT inlining missing\n");
+	return -EOPNOTSUPP;
 }
 EXPORT_SYMBOL_GPL(bpf_undo_log_push);
 
-/*
- * bpf_undo_log_replay - restore all writes recorded in the per-CPU undo log.
- * Replays in reverse order so that writes to the same address are undone
- * correctly (the most recent store is undone first, exposing the original).
- * Must be called while all critical-section locks are still held.
- */
 static void bpf_undo_log_replay(void)
 {
-	struct bpf_undo_log_entry *log;
-	int cnt, i;
-
-	log = this_cpu_ptr(bpf_undo_log);
-	cnt = this_cpu_read(bpf_undo_log_cnt);
+	struct bpf_undo_log_entry *log = this_cpu_ptr(bpf_undo_log);
+	struct bpf_undo_log_entry *cursor = this_cpu_read(bpf_undo_log_cursor);
+	int cnt = cursor - log;
+	int i;
 
 	for (i = cnt - 1; i >= 0; i--) {
 		void *addr = log[i].addr;
-		u64  val  = log[i].old_value;
+		u64 val = log[i].old_value;
 
 		switch (log[i].size) {
 		case 1: WRITE_ONCE(*(u8  *)addr, (u8)val);  break;
@@ -395,9 +345,9 @@ static void bpf_undo_log_replay(void)
 		case 8: WRITE_ONCE(*(u64 *)addr, (u64)val); break;
 		}
 	}
-
-	this_cpu_write(bpf_undo_log_cnt, 0);
+	this_cpu_write(bpf_undo_log_cursor, log);
 }
+#endif /* CONFIG_BPF_UNDO_LOG */
 
 /*
  * hrtimer backend ops for bpf_lock_timer.  Used by both the per-CPU waiter
@@ -593,7 +543,8 @@ noinline void __internal__bpf_spin_lock(struct qspinlock *lock)
 			 *  - The kthread notified from bpf_qspinlock_lock fast
 			 *    path (uncontended case).
 			 */
-            		this_cpu_write(bpf_undo_log_cnt, 0);
+			this_cpu_write(bpf_undo_log_cursor,
+				       this_cpu_ptr(bpf_undo_log));
 			WRITE_ONCE(ebpf_spinlock_timeout, 0);
 		}
 	} else {
@@ -656,7 +607,8 @@ noinline void __internal__bpf_spin_unlock(struct qspinlock *lock)
 		 * from this critical section are not replayed on a future
 		 * timeout of an unrelated section.
 		 */
-		this_cpu_write(bpf_undo_log_cnt, 0);
+		this_cpu_write(bpf_undo_log_cursor,
+			       this_cpu_ptr(bpf_undo_log));
 		/*
 		 * Cancel whichever timer is active for this CPU's lock session.
 		 * This covers both the waiter-started hrtimer (set in

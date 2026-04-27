@@ -127,6 +127,29 @@ static bool is_uimm32(u64 value)
 	return value == (u64)(u32)value;
 }
 
+#ifdef CONFIG_BPF_UNDO_LOG
+static bool bpf_insn_is_undo_log_marker(const struct bpf_insn *insn)
+{
+	if (insn->code != (BPF_JMP | BPF_CALL) || insn->src_reg)
+		return false;
+	return (u8 *)__bpf_call_base + insn->imm == (u8 *)bpf_undo_log_push;
+}
+
+static bool bpf_prog_has_undo_log_markers(const struct bpf_prog *prog)
+{
+	const struct bpf_insn *insn = prog->insnsi;
+	int i;
+
+	for (i = 0; i < prog->len; i++)
+		if (bpf_insn_is_undo_log_marker(&insn[i]))
+			return true;
+	return false;
+}
+#else
+static inline bool bpf_insn_is_undo_log_marker(const struct bpf_insn *insn) { return false; }
+static inline bool bpf_prog_has_undo_log_markers(const struct bpf_prog *p) { return false; }
+#endif /* CONFIG_BPF_UNDO_LOG */
+
 /* mov dst, src */
 #define EMIT_mov(DST, SRC)								 \
 	do {										 \
@@ -271,6 +294,71 @@ static u8 add_3mod(u8 byte, u32 r1, u32 r2, u32 index)
 		byte |= 4;
 	return byte;
 }
+
+#ifdef CONFIG_BPF_UNDO_LOG
+/*
+ * Store src_reg to [R12 + off]. R12 as a memory base always requires a SIB
+ * byte (rm=4 in ModRM, SIB=0x24 for no-index/R12-base), unlike most other
+ * registers.
+ */
+static void emit_stx_r12base(u8 **pprog, u32 size, u32 src_reg, int off)
+{
+	u8 *prog = *pprog;
+	u8 modrm_rm4 = (reg2hex[src_reg] << 3) | 4; /* rm=4 → SIB follows */
+
+	switch (size) {
+	case BPF_B:
+		if (is_ereg_8l(src_reg))
+			EMIT2(add_2mod(0x40, X86_REG_R12, src_reg), 0x88);
+		else
+			EMIT1(0x88);
+		break;
+	case BPF_H:
+		EMIT3(0x66, add_2mod(0x40, X86_REG_R12, src_reg), 0x89);
+		break;
+	case BPF_W:
+		EMIT2(add_2mod(0x40, X86_REG_R12, src_reg), 0x89);
+		break;
+	case BPF_DW:
+		EMIT2(add_2mod(0x48, X86_REG_R12, src_reg), 0x89);
+		break;
+	}
+	if (is_imm8(off))
+		EMIT3(0x40 | modrm_rm4, 0x24, (u8)off);
+	else
+		EMIT2_off32(0x80 | modrm_rm4, 0x24, off);
+	*pprog = prog;
+}
+
+static void emit_undo_log_spill_r12(u8 **pprog, bool active)
+{
+	u8 *prog = *pprog;
+
+	if (!active)
+		return;
+	/* movq %r12, %gs:bpf_undo_log_cursor */
+	EMIT2(0x65, 0x4c);
+	EMIT3(0x89, 0x24, 0x25);
+	EMIT((u32)(unsigned long)&bpf_undo_log_cursor, 4);
+	*pprog = prog;
+}
+
+static void emit_undo_log_reload_r12(u8 **pprog, bool active)
+{
+	u8 *prog = *pprog;
+
+	if (!active)
+		return;
+	/* movq %gs:bpf_undo_log_cursor, %r12 */
+	EMIT2(0x65, 0x4c);
+	EMIT3(0x8b, 0x24, 0x25);
+	EMIT((u32)(unsigned long)&bpf_undo_log_cursor, 4);
+	*pprog = prog;
+}
+#else
+static inline void emit_undo_log_spill_r12(u8 **pprog, bool active) {}
+static inline void emit_undo_log_reload_r12(u8 **pprog, bool active) {}
+#endif /* CONFIG_BPF_UNDO_LOG */
 
 /* Encode 'dst_reg' register into x86-64 opcode 'byte' */
 static u8 add_1reg(u8 byte, u32 dst_reg)
@@ -780,7 +868,8 @@ static void emit_bpf_tail_call_indirect(struct bpf_prog *bpf_prog,
 		pop_r12(&prog);
 	} else {
 		pop_callee_regs(&prog, callee_regs_used);
-		if (bpf_arena_get_kern_vm_start(bpf_prog->aux->arena))
+		if (bpf_arena_get_kern_vm_start(bpf_prog->aux->arena) ||
+		    bpf_prog->aux->undo_log_requires_jit)
 			pop_r12(&prog);
 	}
 
@@ -847,7 +936,8 @@ static void emit_bpf_tail_call_direct(struct bpf_prog *bpf_prog,
 		pop_r12(&prog);
 	} else {
 		pop_callee_regs(&prog, callee_regs_used);
-		if (bpf_arena_get_kern_vm_start(bpf_prog->aux->arena))
+		if (bpf_arena_get_kern_vm_start(bpf_prog->aux->arena) ||
+		    bpf_prog->aux->undo_log_requires_jit)
 			pop_r12(&prog);
 	}
 
@@ -1657,6 +1747,7 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image, u8 *rw_image
 	bool callee_regs_used[4] = {};
 	int insn_cnt = bpf_prog->len;
 	bool seen_exit = false;
+	bool has_undo_log_markers;
 	u8 temp[BPF_MAX_INSN_SIZE + BPF_INSN_SAFETY];
 	void __percpu *priv_frame_ptr = NULL;
 	u64 arena_vm_start, user_vm_start;
@@ -1676,6 +1767,12 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image, u8 *rw_image
 
 	arena_vm_start = bpf_arena_get_kern_vm_start(bpf_prog->aux->arena);
 	user_vm_start = bpf_arena_get_user_vm_start(bpf_prog->aux->arena);
+	has_undo_log_markers = bpf_prog_has_undo_log_markers(bpf_prog);
+
+	if (has_undo_log_markers && arena_vm_start) {
+		pr_err_once("bpf_jit: arena and undo logging cannot share R12\n");
+		return -EOPNOTSUPP;
+	}
 
 	detect_reg_usage(insn, insn_cnt, callee_regs_used);
 
@@ -1696,13 +1793,28 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image, u8 *rw_image
 		push_r12(&prog);
 		push_callee_regs(&prog, all_callee_regs_used);
 	} else {
-		if (arena_vm_start)
+		if (arena_vm_start || has_undo_log_markers)
 			push_r12(&prog);
 		push_callee_regs(&prog, callee_regs_used);
 	}
 	if (arena_vm_start)
 		emit_mov_imm64(&prog, X86_REG_R12,
 			       arena_vm_start >> 32, (u32) arena_vm_start);
+	else if (has_undo_log_markers) {
+		/*
+		 * R12 = this_cpu_ptr(&bpf_undo_log)
+		 *   movabsq $&bpf_undo_log, %r12
+		 *   addq    %gs:this_cpu_off, %r12
+		 */
+		emit_mov_imm64(&prog, X86_REG_R12,
+			       ((u64)(unsigned long)&bpf_undo_log) >> 32,
+			       (u32)(u64)(unsigned long)&bpf_undo_log);
+#ifdef CONFIG_SMP
+		EMIT2(0x65, 0x4c);		/* GS prefix + REX.WR */
+		EMIT3(0x03, 0x24, 0x25);	/* add r12, [disp32] */
+		EMIT((u32)(unsigned long)&this_cpu_off, 4);
+#endif
+	}
 
 	if (priv_frame_ptr)
 		emit_priv_frame_ptr(&prog, priv_frame_ptr);
@@ -1733,6 +1845,46 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image, u8 *rw_image
 			if (dst_reg == BPF_REG_FP)
 				dst_reg = X86_REG_R9;
 		}
+
+#ifdef CONFIG_BPF_UNDO_LOG
+		if (bpf_insn_is_undo_log_marker(insn)) {
+			const struct bpf_insn *next = insn + 1;
+			u32 dst_breg = (priv_frame_ptr && next->dst_reg == BPF_REG_FP)
+					? X86_REG_R9 : next->dst_reg;
+			s32 off = next->off;
+			int size = BPF_LDST_BYTES(next);
+			const int entry_sz = sizeof(struct bpf_undo_log_entry);
+			const int off_addr = offsetof(struct bpf_undo_log_entry, addr);
+			const int off_old  = offsetof(struct bpf_undo_log_entry, old_value);
+			const int off_size = offsetof(struct bpf_undo_log_entry, size);
+
+			/* r11 = dst_reg */
+			emit_mov_reg(&prog, true, AUX_REG, dst_breg);
+			/* r11 += off */
+			if (off) {
+				if (is_imm8(off))
+					EMIT4(0x49, 0x83, 0xC3, (u8)off);
+				else
+					EMIT3_off32(0x49, 0x81, 0xC3, off);
+			}
+			/* [r12 + off_addr] = r11  (store addr) */
+			emit_stx_r12base(&prog, BPF_DW, AUX_REG, off_addr);
+			/* r11 = *(size *)r11  (load old value, zero-extending) */
+			emit_ldx(&prog, BPF_SIZE(next->code), AUX_REG, AUX_REG, 0);
+			/* [r12 + off_old] = r11  (store old_value) */
+			emit_stx_r12base(&prog, BPF_DW, AUX_REG, off_old);
+			/* r11d = size; [r12 + off_size] = r11b */
+			emit_mov_imm32(&prog, false, AUX_REG, size);
+			emit_stx_r12base(&prog, BPF_B, AUX_REG, off_size);
+			/* r12 += entry_sz */
+			if (is_imm8(entry_sz))
+				EMIT4(0x49, 0x83, 0xC4, (u8)entry_sz);
+			else
+				EMIT3_off32(0x49, 0x81, 0xC4, entry_sz);
+
+			goto emit_insn_done;
+		}
+#endif
 
 		switch (insn->code) {
 			/* ALU */
@@ -2453,15 +2605,18 @@ populate_extable:
 				push_r9(&prog);
 				ip += 2;
 			}
+			emit_undo_log_spill_r12(&prog, has_undo_log_markers);
 			ip += x86_call_depth_emit_accounting(&prog, func, ip);
 			if (emit_call(&prog, func, ip))
 				return -EINVAL;
+			emit_undo_log_reload_r12(&prog, has_undo_log_markers);
 			if (priv_frame_ptr)
 				pop_r9(&prog);
 			break;
 		}
 
 		case BPF_JMP | BPF_TAIL_CALL:
+			emit_undo_log_spill_r12(&prog, has_undo_log_markers);
 			if (imm32)
 				emit_bpf_tail_call_direct(bpf_prog,
 							  &bpf_prog->aux->poke_tab[imm32 - 1],
@@ -2476,6 +2631,7 @@ populate_extable:
 							    stack_depth,
 							    image + addrs[i - 1],
 							    ctx);
+			emit_undo_log_reload_r12(&prog, has_undo_log_markers);
 			break;
 
 			/* cond jump */
@@ -2739,7 +2895,7 @@ emit_jmp:
 				pop_r12(&prog);
 			} else {
 				pop_callee_regs(&prog, callee_regs_used);
-				if (arena_vm_start)
+				if (arena_vm_start || has_undo_log_markers)
 					pop_r12(&prog);
 			}
 			EMIT1(0xC9);         /* leave */
@@ -2759,6 +2915,7 @@ emit_jmp:
 			return -EINVAL;
 		}
 
+emit_insn_done:
 		ilen = prog - temp;
 		if (ilen > BPF_MAX_INSN_SIZE) {
 			pr_err("bpf_jit: fatal insn size error\n");

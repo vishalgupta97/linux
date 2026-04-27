@@ -2583,6 +2583,13 @@ struct bpf_prog *bpf_prog_select_runtime(struct bpf_prog *fp, int *err)
 			return fp;
 	}
 
+#ifdef CONFIG_BPF_UNDO_LOG
+	if (fp->aux->undo_log_requires_jit && !fp->jited) {
+		*err = -EOPNOTSUPP;
+		return fp;
+	}
+#endif
+
 finalize:
 	*err = bpf_prog_lock_ro(fp);
 	if (*err)
