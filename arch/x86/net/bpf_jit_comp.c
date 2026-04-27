@@ -2606,6 +2606,8 @@ populate_extable:
 				ip += 2;
 			}
 			emit_undo_log_spill_r12(&prog, has_undo_log_markers);
+			if (has_undo_log_markers)
+				ip += 9; /* spill: GS-seg mov [2] + opcode [3] + disp32 [4] */
 			ip += x86_call_depth_emit_accounting(&prog, func, ip);
 			if (emit_call(&prog, func, ip))
 				return -EINVAL;
