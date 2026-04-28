@@ -868,8 +868,11 @@ static void emit_bpf_tail_call_indirect(struct bpf_prog *bpf_prog,
 		pop_r12(&prog);
 	} else {
 		pop_callee_regs(&prog, callee_regs_used);
-		if (bpf_arena_get_kern_vm_start(bpf_prog->aux->arena) ||
-		    bpf_prog->aux->undo_log_requires_jit)
+		if (bpf_arena_get_kern_vm_start(bpf_prog->aux->arena)
+#ifdef CONFIG_BPF_UNDO_LOG
+		    || bpf_prog->aux->undo_log_requires_jit
+#endif
+		   )
 			pop_r12(&prog);
 	}
 
@@ -936,8 +939,11 @@ static void emit_bpf_tail_call_direct(struct bpf_prog *bpf_prog,
 		pop_r12(&prog);
 	} else {
 		pop_callee_regs(&prog, callee_regs_used);
-		if (bpf_arena_get_kern_vm_start(bpf_prog->aux->arena) ||
-		    bpf_prog->aux->undo_log_requires_jit)
+		if (bpf_arena_get_kern_vm_start(bpf_prog->aux->arena)
+#ifdef CONFIG_BPF_UNDO_LOG
+		    || bpf_prog->aux->undo_log_requires_jit
+#endif
+		   )
 			pop_r12(&prog);
 	}
 
@@ -1800,6 +1806,7 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image, u8 *rw_image
 	if (arena_vm_start)
 		emit_mov_imm64(&prog, X86_REG_R12,
 			       arena_vm_start >> 32, (u32) arena_vm_start);
+#ifdef CONFIG_BPF_UNDO_LOG
 	else if (has_undo_log_markers) {
 		/*
 		 * R12 = this_cpu_ptr(&bpf_undo_log)
@@ -1815,6 +1822,7 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image, u8 *rw_image
 		EMIT((u32)(unsigned long)&this_cpu_off, 4);
 #endif
 	}
+#endif /* CONFIG_BPF_UNDO_LOG */
 
 	if (priv_frame_ptr)
 		emit_priv_frame_ptr(&prog, priv_frame_ptr);

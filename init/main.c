@@ -106,7 +106,9 @@
 #include <linux/time_namespace.h>
 #include <linux/unaligned.h>
 #include <net/net_namespace.h>
+#ifdef CONFIG_BPF_UNDO_LOG
 #include <linux/bpf_komb.h>
+#endif
 
 #include <asm/io.h>
 #include <asm/setup.h>
@@ -1207,7 +1209,9 @@ void start_kernel(void)
 	arch_post_acpi_subsys_init();
 	kcsan_init();
 
+#ifdef CONFIG_BPF_UNDO_LOG
 	komb_init();
+#endif
 
 	/* Do the rest non-__init'ed, we're now alive */
 	rest_init();

@@ -8,9 +8,11 @@
 #include <linux/rcupdate_trace.h>
 #include <linux/errno.h>
 
+#ifdef CONFIG_BPF_UNDO_LOG
 /* Per-CPU spinlock timeout flag and handler from helpers.c */
-extern int ebpf_spinlock_timeout; // Make it global for now
+extern int ebpf_spinlock_timeout;
 extern void bpf_spin_lock_timeout_handler(void);
+#endif
 
 struct bpf_iter_target_info {
 	struct list_head list;
@@ -743,11 +745,13 @@ BPF_CALL_4(bpf_loop, u32, nr_loops, void *, callback_fn, void *, callback_ctx,
 	if (flags)
 		return -EINVAL;
 
-	/* nr_loops limit removed to allow extended loops; timeout guards against runaway */
-
-	//printk("BPF loop called\n");
+#ifndef CONFIG_BPF_UNDO_LOG
+	if (nr_loops > BPF_MAX_LOOPS)
+		return -E2BIG;
+#endif
 
 	for (i = 0; i < nr_loops; i++) {
+#ifdef CONFIG_BPF_UNDO_LOG
 		/* Check if spinlock timeout has been triggered */
 		if (READ_ONCE(ebpf_spinlock_timeout)) {
 			printk(KERN_ALERT "bpf_loop bpf_timeout handler called\n");
@@ -755,6 +759,7 @@ BPF_CALL_4(bpf_loop, u32, nr_loops, void *, callback_fn, void *, callback_ctx,
 			/* bpf_spin_lock_timeout_handler calls bpf_die which terminates program */
 			return -ETIMEDOUT;
 		}
+#endif
 
 		ret = callback((u64)i, (u64)(long)callback_ctx, 0, 0, 0);
 		/* return value: 0 - continue, 1 - stop and return */
@@ -817,6 +822,7 @@ __bpf_kfunc int *bpf_iter_num_next(struct bpf_iter_num* it)
 {
 	struct bpf_iter_num_kern *s = (void *)it;
 
+#ifdef CONFIG_BPF_UNDO_LOG
 	/* Check if spinlock timeout has been triggered */
 	if (READ_ONCE(ebpf_spinlock_timeout)) {
 		printk(KERN_ALERT "bpf_iter_num_next bpf_timeout handler called\n");
@@ -824,6 +830,7 @@ __bpf_kfunc int *bpf_iter_num_next(struct bpf_iter_num* it)
 		/* bpf_spin_lock_timeout_handler calls bpf_die which terminates program */
 		return NULL;
 	}
+#endif
 
 	/* check failed initialization or if we are done (same behavior);
 	 * need to be careful about overflow, so convert to s64 for checks,

@@ -29,12 +29,14 @@
 #include <linux/task_work.h>
 #include <linux/irq_work.h>
 #include <linux/buildid.h>
+#ifdef CONFIG_BPF_UNDO_LOG
 #include <linux/hrtimer.h>
 #include <linux/bpf_lock_timer.h>
 #include <linux/bpf_qspinlock.h>
 #include <linux/bpf_komb.h>
 #include <linux/kthread.h>
 #include <linux/wait.h>
+#endif
 
 #include "../../lib/kstrtox.h"
 
@@ -287,6 +289,10 @@ const struct bpf_func_proto bpf_get_current_comm_proto = {
 	.arg2_type	= ARG_CONST_SIZE,
 };
 
+void bpf_throw(u64 cookie);
+
+#ifdef CONFIG_BPF_UNDO_LOG
+
 struct bpf_lock_entry {
 	struct qspinlock *lock;
 };
@@ -295,10 +301,6 @@ struct bpf_lock_entry {
 static DEFINE_PER_CPU(struct bpf_lock_entry[MAX_HELD_LOCKS], held_locks);
 static DEFINE_PER_CPU(int, held_locks_cnt);
 int ebpf_spinlock_timeout;
-
-void bpf_throw(u64 cookie);
-
-#ifdef CONFIG_BPF_UNDO_LOG
 DEFINE_PER_CPU(struct bpf_undo_log_entry[CONFIG_BPF_UNDO_LOG_MAX_ENTRIES],
 	       bpf_undo_log);
 EXPORT_PER_CPU_SYMBOL_GPL(bpf_undo_log);
@@ -349,6 +351,7 @@ static void bpf_undo_log_replay(void)
 }
 #endif /* CONFIG_BPF_UNDO_LOG */
 
+#ifdef CONFIG_BPF_UNDO_LOG
 /*
  * hrtimer backend ops for bpf_lock_timer.  Used by both the per-CPU waiter
  * timers (bpf_qspinlock.c) and the global kthread timer (below).
@@ -418,7 +421,7 @@ void bpf_spin_lock_timeout_handler(void)
 			bpf_qspinlock_unlock((struct qspinlock *)locks[i].lock);
 			//komb_spin_unlock((struct qspinlock *)locks[i].lock);
             		// For every lock that is acquired enable preemption.
-            		preempt_enable(); 
+            		preempt_enable();
 			locks[i].lock = NULL;
 		}
 	}
@@ -446,6 +449,7 @@ static struct bpf_lock_timer bpf_kthread_timer;
 
 /* Declared in bpf_qspinlock.c / exported via EXPORT_PER_CPU_SYMBOL_GPL */
 DECLARE_PER_CPU(struct bpf_lock_timer *, bpf_active_timer);
+#endif /* CONFIG_BPF_UNDO_LOG */
 
 #if defined(CONFIG_QUEUED_SPINLOCKS) || defined(CONFIG_BPF_ARCH_SPINLOCK)
 
@@ -513,6 +517,7 @@ static inline void __bpf_spin_unlock_irqrestore(struct bpf_spin_lock *lock)
 	local_irq_restore(flags);
 }
 
+#ifdef CONFIG_BPF_UNDO_LOG
 noinline void __internal__bpf_spin_lock(struct qspinlock *lock)
 {
 	struct bpf_lock_entry *locks;
@@ -553,6 +558,7 @@ noinline void __internal__bpf_spin_lock(struct qspinlock *lock)
 	}
 }
 EXPORT_SYMBOL_GPL(__internal__bpf_spin_lock);
+#endif /* CONFIG_BPF_UNDO_LOG */
 
 NOTRACE_BPF_CALL_1(bpf_spin_lock, struct bpf_spin_lock *, lock)
 {
@@ -572,6 +578,7 @@ const struct bpf_func_proto bpf_spin_lock_proto = {
 	.arg1_btf_id = BPF_PTR_POISON,
 };
 
+#ifdef CONFIG_BPF_UNDO_LOG
 noinline void __internal__bpf_spin_unlock(struct qspinlock *lock)
 {
 	struct bpf_lock_entry *locks;
@@ -630,6 +637,7 @@ noinline void __internal__bpf_spin_unlock(struct qspinlock *lock)
 	preempt_enable();
 }
 EXPORT_SYMBOL_GPL(__internal__bpf_spin_unlock);
+#endif /* CONFIG_BPF_UNDO_LOG */
 
 NOTRACE_BPF_CALL_1(bpf_spin_unlock, struct bpf_spin_lock *, lock)
 {
@@ -649,6 +657,7 @@ const struct bpf_func_proto bpf_spin_unlock_proto = {
 	.arg1_btf_id = BPF_PTR_POISON,
 };
 
+#ifdef CONFIG_BPF_UNDO_LOG
 /* ---------------------------------------------------------------------- */
 /* Kthread for uncontended timeout                                          */
 /* ---------------------------------------------------------------------- */
@@ -667,7 +676,7 @@ void bpf_notify_lock_kthread(void)
 		return;
 
 	/* Record kthread's global timer as the active timer for this CPU */
-    bpf_kthread_timer.bpf_cpuid = smp_processor_id(); 
+	bpf_kthread_timer.bpf_cpuid = smp_processor_id();
 	this_cpu_write(bpf_active_timer, &bpf_kthread_timer);
 
 	/* One-way notification: set pending flag and wake the kthread */
@@ -748,6 +757,7 @@ static int __init bpf_lock_kthread_init(void)
 	return 0;
 }
 late_initcall(bpf_lock_kthread_init);
+#endif /* CONFIG_BPF_UNDO_LOG */
 
 void copy_map_value_locked(struct bpf_map *map, void *dst, void *src,
 			   bool lock_src)
@@ -3505,9 +3515,14 @@ static bool bpf_stack_walker(void *cookie, u64 ip, u64 sp, u64 bp)
 	prog = bpf_prog_ksym_find(ip);
 	rcu_read_unlock();
 
-	//Modified to support callbacks. TODO: Check if kernel frames can come in between BPF programs.
+#ifdef CONFIG_BPF_UNDO_LOG
+	/* Modified to support callbacks: allow kernel frames between BPF programs */
 	if (!prog)
 		return true;
+#else
+	if (!prog)
+		return !ctx->cnt;
+#endif
 	ctx->cnt++;
 	if (bpf_is_subprog(prog))
 		return true;

@@ -65,7 +65,9 @@ extern spinlock_t btf_idr_lock;
 extern struct kobject *btf_kobj;
 extern struct bpf_mem_alloc bpf_global_ma, bpf_global_percpu_ma;
 extern bool bpf_global_ma_set;
+#ifdef CONFIG_BPF_UNDO_LOG
 extern int sysctl_bpf_spin_lock_timeout;
+#endif
 
 typedef u64 (*bpf_callback_t)(u64, u64, u64, u64, u64);
 typedef int (*bpf_iter_init_seq_priv_t)(void *private_data,
@@ -1689,7 +1691,9 @@ struct bpf_prog_aux {
 	bool func_proto_unreliable;
 	bool tail_call_reachable;
 	bool xdp_has_frags;
+#ifdef CONFIG_BPF_UNDO_LOG
 	bool undo_log_requires_jit;
+#endif
 	bool exception_cb;
 	bool exception_boundary;
 	bool is_extended; /* true if extended by freplace program */
