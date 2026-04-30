@@ -1,7 +1,7 @@
 source defaults.sh
 
 #locks=(table_bpf_spinlock_baseline)
-locks=(table_bpf_qspinlock)
+locks=(table_bpf_spinlock_undolog)
 binaries=(baseline)
 
 lock_type=spinlock
