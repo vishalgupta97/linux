@@ -7948,6 +7948,17 @@ static int check_mem_access(struct bpf_verifier_env *env, int insn_idx, u32 regn
 		if (!err && value_regno >= 0 && (rdonly_mem || t == BPF_READ))
 			mark_reg_unknown(env, regs, value_regno);
 	} else if (reg->type == PTR_TO_ARENA) {
+		/* Bit 31 of the 32-bit arena offset must be 0: the upper 2 GB
+		 * of the arena window is reserved for the undo-log pages.
+		 * Reject when the minimum possible value is already >= 2 GB
+		 * (guaranteed out-of-bounds), i.e. the pointer is known to
+		 * reach the undo-log region. */
+		if (reg->umin_value >= SZ_2G) {
+			verbose(env,
+				"R%d arena pointer 0x%llx reaches undo-log region (>= 2 GB)\n",
+				regno, reg->umin_value);
+			return -EACCES;
+		}
 		if (t == BPF_READ && value_regno >= 0)
 			mark_reg_unknown(env, regs, value_regno);
 	} else {
@@ -24473,14 +24484,6 @@ next_insn:
 	ret = sort_kfunc_descs_by_imm_off(env);
 	if (ret)
 		return ret;
-
-#ifdef CONFIG_BPF_UNDO_LOG
-	if (prog->aux->undo_log_requires_jit && prog->aux->arena) {
-		verbose(env,
-			"BPF: arena and spinlock undo logging are mutually exclusive (R12 conflict)\n");
-		return -EOPNOTSUPP;
-	}
-#endif
 
 	return 0;
 }

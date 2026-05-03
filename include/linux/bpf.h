@@ -3707,6 +3707,9 @@ struct bpf_undo_log_entry {
 DECLARE_PER_CPU(struct bpf_undo_log_entry[CONFIG_BPF_UNDO_LOG_MAX_ENTRIES],
 		bpf_undo_log);
 DECLARE_PER_CPU(struct bpf_undo_log_entry *, bpf_undo_log_cursor);
+/* Base pointer used to reset the cursor; equals bpf_undo_log for undo-log-only
+ * programs, and the arena-mapped address for combined arena+undo-log programs. */
+DECLARE_PER_CPU(struct bpf_undo_log_entry *, bpf_undo_log_base);
 
 /* Internal helper injected by the verifier before writes inside a spinlock
  * critical section. The x86 JIT replaces every call site with inline R12-cursor

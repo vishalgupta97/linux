@@ -62,6 +62,11 @@ struct bpf_arena {
 	struct irq_work     free_irq;
 	struct work_struct  free_work;
 	struct llist_head   free_spans;
+#ifdef CONFIG_BPF_UNDO_LOG
+	/* One physical page per possible CPU, mapped at kern_vm_start + SZ_2G +
+	 * cpu * PAGE_SIZE.  NULL until bpf_arena_alloc_undo_log_pages() runs. */
+	struct page **undo_log_pages;
+#endif
 };
 
 static void arena_free_worker(struct work_struct *work);
@@ -173,6 +178,94 @@ static int populate_pgtable_except_pte(struct bpf_arena *arena)
 				   KERN_VM_SZ - GUARD_SZ, apply_range_set_cb, NULL);
 }
 
+static int existing_page_cb(pte_t *ptep, unsigned long addr, void *data);
+
+#ifdef CONFIG_BPF_UNDO_LOG
+/*
+ * Pre-allocate one physical page per possible CPU for the undo-log and map
+ * them into the upper 2 GB of the arena kernel VM window:
+ *   kern_vm_start + SZ_2G + cpu * PAGE_SIZE
+ *
+ * The per-CPU bpf_undo_log_base / bpf_undo_log_cursor variables are updated
+ * to point to these mapped pages so the JIT and C helpers share one storage.
+ * Call this after populate_pgtable_except_pte() has set up the page tables.
+ */
+static int bpf_arena_alloc_undo_log_pages(struct bpf_arena *arena)
+{
+	u64 kern_vm_start = bpf_arena_get_kern_vm_start(arena);
+	int num_cpus = num_possible_cpus();
+	struct apply_range_data ard;
+	int cpu, ret;
+
+	arena->undo_log_pages = kcalloc(num_cpus, sizeof(struct page *), GFP_KERNEL);
+	if (!arena->undo_log_pages)
+		return -ENOMEM;
+
+	for (cpu = 0; cpu < num_cpus; cpu++) {
+		unsigned long kaddr = kern_vm_start + SZ_2G +
+				      (unsigned long)cpu * PAGE_SIZE;
+		struct bpf_undo_log_entry *base;
+
+		arena->undo_log_pages[cpu] = alloc_page(GFP_KERNEL | __GFP_ZERO);
+		if (!arena->undo_log_pages[cpu]) {
+			ret = -ENOMEM;
+			goto err_free;
+		}
+
+		ard.pages = &arena->undo_log_pages[cpu];
+		ard.i = 0;
+		ret = apply_to_page_range(&init_mm, kaddr, PAGE_SIZE,
+					  apply_range_set_cb, &ard);
+		if (ret)
+			goto err_free;
+
+		base = (struct bpf_undo_log_entry *)kaddr;
+		per_cpu(bpf_undo_log_base,   cpu) = base;
+		per_cpu(bpf_undo_log_cursor, cpu) = base;
+	}
+	return 0;
+
+err_free:
+	/* Unmap and free already-mapped pages; rest have NULL entries. */
+	while (--cpu >= 0) {
+		unsigned long kaddr = kern_vm_start + SZ_2G +
+				      (unsigned long)cpu * PAGE_SIZE;
+		apply_to_existing_page_range(&init_mm, kaddr, PAGE_SIZE,
+					     existing_page_cb, NULL);
+		per_cpu(bpf_undo_log_base,   cpu) = per_cpu_ptr(bpf_undo_log, cpu);
+		per_cpu(bpf_undo_log_cursor, cpu) = per_cpu_ptr(bpf_undo_log, cpu);
+		arena->undo_log_pages[cpu] = NULL;
+	}
+	kfree(arena->undo_log_pages);
+	arena->undo_log_pages = NULL;
+	return ret;
+}
+
+/*
+ * Reset per-CPU base/cursor to the static kernel arrays before the arena VM
+ * is torn down.  The physical pages themselves are freed by the
+ * apply_to_existing_page_range() call in arena_map_free().
+ */
+static void bpf_arena_free_undo_log_pages(struct bpf_arena *arena)
+{
+	int cpu;
+
+	if (!arena->undo_log_pages)
+		return;
+
+	for (cpu = 0; cpu < num_possible_cpus(); cpu++) {
+		per_cpu(bpf_undo_log_base,   cpu) = per_cpu_ptr(bpf_undo_log, cpu);
+		per_cpu(bpf_undo_log_cursor, cpu) = per_cpu_ptr(bpf_undo_log, cpu);
+	}
+	/* Pages freed by arena_map_free → apply_to_existing_page_range. */
+	kfree(arena->undo_log_pages);
+	arena->undo_log_pages = NULL;
+}
+#else
+static int  bpf_arena_alloc_undo_log_pages(struct bpf_arena *arena) { return 0; }
+static void bpf_arena_free_undo_log_pages(struct bpf_arena *arena) {}
+#endif /* CONFIG_BPF_UNDO_LOG */
+
 static struct bpf_map *arena_map_alloc(union bpf_attr *attr)
 {
 	struct vm_struct *kern_vm;
@@ -196,7 +289,8 @@ static struct bpf_map *arena_map_alloc(union bpf_attr *attr)
 		return ERR_PTR(-EINVAL);
 
 	vm_range = (u64)attr->max_entries * PAGE_SIZE;
-	if (vm_range > SZ_4G)
+	/* Upper 2 GB of the 4 GB window is reserved for undo-log pages. */
+	if (vm_range > SZ_2G)
 		return ERR_PTR(-E2BIG);
 
 	if ((attr->map_extra >> 32) != ((attr->map_extra + vm_range - 1) >> 32))
@@ -230,6 +324,12 @@ static struct bpf_map *arena_map_alloc(union bpf_attr *attr)
 	mutex_init(&arena->lock);
 	raw_res_spin_lock_init(&arena->spinlock);
 	err = populate_pgtable_except_pte(arena);
+	if (err) {
+		range_tree_destroy(&arena->rt);
+		bpf_map_area_free(arena);
+		goto err;
+	}
+	err = bpf_arena_alloc_undo_log_pages(arena);
 	if (err) {
 		range_tree_destroy(&arena->rt);
 		bpf_map_area_free(arena);
@@ -278,6 +378,11 @@ static void arena_map_free(struct bpf_map *map)
 	/* Ensure no pending deferred frees */
 	irq_work_sync(&arena->free_irq);
 	flush_work(&arena->free_work);
+
+	/* Reset per-CPU undo-log pointers to the static kernel arrays before
+	 * the kernel VM window is torn down.  Physical pages are freed below
+	 * by apply_to_existing_page_range() together with arena data pages. */
+	bpf_arena_free_undo_log_pages(arena);
 
 	/*
 	 * free_vm_area() calls remove_vm_area() that calls free_unmap_vmap_area().

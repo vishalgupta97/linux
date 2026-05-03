@@ -308,12 +308,17 @@ EXPORT_PER_CPU_SYMBOL_GPL(bpf_undo_log);
 DEFINE_PER_CPU(struct bpf_undo_log_entry *, bpf_undo_log_cursor);
 EXPORT_PER_CPU_SYMBOL_GPL(bpf_undo_log_cursor);
 
+DEFINE_PER_CPU(struct bpf_undo_log_entry *, bpf_undo_log_base);
+EXPORT_PER_CPU_SYMBOL_GPL(bpf_undo_log_base);
+
 static int __init bpf_undo_log_init(void)
 {
 	int cpu;
 
-	for_each_possible_cpu(cpu)
+	for_each_possible_cpu(cpu) {
 		per_cpu(bpf_undo_log_cursor, cpu) = per_cpu_ptr(bpf_undo_log, cpu);
+		per_cpu(bpf_undo_log_base,   cpu) = per_cpu_ptr(bpf_undo_log, cpu);
+	}
 	return 0;
 }
 core_initcall(bpf_undo_log_init);
@@ -331,23 +336,23 @@ EXPORT_SYMBOL_GPL(bpf_undo_log_push);
 
 static void bpf_undo_log_replay(void)
 {
-	struct bpf_undo_log_entry *log = this_cpu_ptr(bpf_undo_log);
+	struct bpf_undo_log_entry *base   = this_cpu_read(bpf_undo_log_base);
 	struct bpf_undo_log_entry *cursor = this_cpu_read(bpf_undo_log_cursor);
-	int cnt = cursor - log;
+	int cnt = cursor - base;
 	int i;
 
 	for (i = cnt - 1; i >= 0; i--) {
-		void *addr = log[i].addr;
-		u64 val = log[i].old_value;
+		void *addr = base[i].addr;
+		u64 val = base[i].old_value;
 
-		switch (log[i].size) {
+		switch (base[i].size) {
 		case 1: WRITE_ONCE(*(u8  *)addr, (u8)val);  break;
 		case 2: WRITE_ONCE(*(u16 *)addr, (u16)val); break;
 		case 4: WRITE_ONCE(*(u32 *)addr, (u32)val); break;
 		case 8: WRITE_ONCE(*(u64 *)addr, (u64)val); break;
 		}
 	}
-	this_cpu_write(bpf_undo_log_cursor, log);
+	this_cpu_write(bpf_undo_log_cursor, base);
 }
 #endif /* CONFIG_BPF_UNDO_LOG */
 
@@ -549,7 +554,7 @@ noinline void __internal__bpf_spin_lock(struct qspinlock *lock)
 			 *    path (uncontended case).
 			 */
 			this_cpu_write(bpf_undo_log_cursor,
-				       this_cpu_ptr(bpf_undo_log));
+				       this_cpu_read(bpf_undo_log_base));
 			WRITE_ONCE(ebpf_spinlock_timeout, 0);
 		}
 	} else {
@@ -615,7 +620,7 @@ noinline void __internal__bpf_spin_unlock(struct qspinlock *lock)
 		 * timeout of an unrelated section.
 		 */
 		this_cpu_write(bpf_undo_log_cursor,
-			       this_cpu_ptr(bpf_undo_log));
+			       this_cpu_read(bpf_undo_log_base));
 		/*
 		 * Cancel whichever timer is active for this CPU's lock session.
 		 * This covers both the waiter-started hrtimer (set in

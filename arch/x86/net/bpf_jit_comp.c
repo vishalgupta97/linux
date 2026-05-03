@@ -1288,6 +1288,61 @@ static void emit_ldsx_r12(u8 **prog, u32 size, u32 dst_reg, u32 src_reg, int off
 	emit_ldsx_index(prog, size, dst_reg, src_reg, X86_REG_R12, off);
 }
 
+#ifdef CONFIG_BPF_UNDO_LOG
+/*
+ * Combined arena+undo-log push: R12 = vm_start (fixed arena base).
+ * Temporarily borrows R12 for the cursor via push/pop, leaving vm_start intact.
+ *
+ * dst_breg  : x86 register holding the BPF destination base pointer
+ * off       : signed 16-bit offset from that base (the CS write's ->off)
+ * bpf_size  : BPF_B / BPF_H / BPF_W / BPF_DW (for the old-value load width)
+ * byte_size : 1 / 2 / 4 / 8  (stored in entry.size)
+ */
+static void emit_undo_log_push_combined(u8 **pprog, u32 dst_breg, s32 off,
+					u32 bpf_size, int byte_size)
+{
+	u8 *prog = *pprog;
+	const int off_addr = offsetof(struct bpf_undo_log_entry, addr);
+	const int off_old  = offsetof(struct bpf_undo_log_entry, old_value);
+	const int off_size = offsetof(struct bpf_undo_log_entry, size);
+
+	/* r11 = &target  (effective address of the CS write) */
+	emit_mov_reg(&prog, true, AUX_REG, dst_breg);
+	if (off) {
+		if (is_imm8(off))
+			EMIT4(0x49, 0x83, 0xC3, (u8)off);
+		else
+			EMIT3_off32(0x49, 0x81, 0xC3, off);
+	}
+
+	/* push %r12  — save arena vm_start (41 54) */
+	EMIT2(0x41, 0x54);
+	/* movq %gs:bpf_undo_log_cursor, %r12  — load cursor */
+	EMIT2(0x65, 0x4c); EMIT3(0x8b, 0x24, 0x25);
+	EMIT((u32)(unsigned long)&bpf_undo_log_cursor, 4);
+
+	/* [r12 + off_addr] = r11  (entry.addr) */
+	emit_stx_r12base(&prog, BPF_DW, AUX_REG, off_addr);
+	/* r11 = *(bpf_size *)(r11 + 0)  (load old value, zero-extending) */
+	emit_ldx(&prog, bpf_size, AUX_REG, AUX_REG, 0);
+	/* [r12 + off_old] = r11  (entry.old_value) */
+	emit_stx_r12base(&prog, BPF_DW, AUX_REG, off_old);
+	/* r11d = byte_size; [r12 + off_size] = r11b  (entry.size) */
+	emit_mov_imm32(&prog, false, AUX_REG, byte_size);
+	emit_stx_r12base(&prog, BPF_B, AUX_REG, off_size);
+	/* add r12, sizeof(entry)  — advance cursor */
+	EMIT4(0x49, 0x83, 0xC4, (u8)sizeof(struct bpf_undo_log_entry));
+
+	/* movq %r12, %gs:bpf_undo_log_cursor  — store updated cursor */
+	EMIT2(0x65, 0x4c); EMIT3(0x89, 0x24, 0x25);
+	EMIT((u32)(unsigned long)&bpf_undo_log_cursor, 4);
+	/* pop %r12  — restore arena vm_start (41 5c) */
+	EMIT2(0x41, 0x5c);
+
+	*pprog = prog;
+}
+#endif /* CONFIG_BPF_UNDO_LOG */
+
 /* STX: *(u8*)(dst_reg + off) = src_reg */
 static void emit_stx(u8 **pprog, u32 size, u32 dst_reg, u32 src_reg, int off)
 {
@@ -1775,11 +1830,6 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image, u8 *rw_image
 	user_vm_start = bpf_arena_get_user_vm_start(bpf_prog->aux->arena);
 	has_undo_log_markers = bpf_prog_has_undo_log_markers(bpf_prog);
 
-	if (has_undo_log_markers && arena_vm_start) {
-		pr_err_once("bpf_jit: arena and undo logging cannot share R12\n");
-		return -EOPNOTSUPP;
-	}
-
 	detect_reg_usage(insn, insn_cnt, callee_regs_used);
 
 	emit_prologue(&prog, image, stack_depth,
@@ -1861,35 +1911,36 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image, u8 *rw_image
 					? X86_REG_R9 : next->dst_reg;
 			s32 off = next->off;
 			int size = BPF_LDST_BYTES(next);
-			const int entry_sz = sizeof(struct bpf_undo_log_entry);
-			const int off_addr = offsetof(struct bpf_undo_log_entry, addr);
-			const int off_old  = offsetof(struct bpf_undo_log_entry, old_value);
-			const int off_size = offsetof(struct bpf_undo_log_entry, size);
 
-			/* r11 = dst_reg */
-			emit_mov_reg(&prog, true, AUX_REG, dst_breg);
-			/* r11 += off */
-			if (off) {
-				if (is_imm8(off))
-					EMIT4(0x49, 0x83, 0xC3, (u8)off);
+			if (arena_vm_start) {
+				/* Combined arena+undo-log: R12 = vm_start (fixed).
+				 * Use push/pop R12 to borrow it as cursor temporarily. */
+				emit_undo_log_push_combined(&prog, dst_breg, off,
+							    BPF_SIZE(next->code), size);
+			} else {
+				/* Undo-log only: R12 is the advancing cursor. */
+				const int entry_sz = sizeof(struct bpf_undo_log_entry);
+				const int off_addr = offsetof(struct bpf_undo_log_entry, addr);
+				const int off_old  = offsetof(struct bpf_undo_log_entry, old_value);
+				const int off_size = offsetof(struct bpf_undo_log_entry, size);
+
+				emit_mov_reg(&prog, true, AUX_REG, dst_breg);
+				if (off) {
+					if (is_imm8(off))
+						EMIT4(0x49, 0x83, 0xC3, (u8)off);
+					else
+						EMIT3_off32(0x49, 0x81, 0xC3, off);
+				}
+				emit_stx_r12base(&prog, BPF_DW, AUX_REG, off_addr);
+				emit_ldx(&prog, BPF_SIZE(next->code), AUX_REG, AUX_REG, 0);
+				emit_stx_r12base(&prog, BPF_DW, AUX_REG, off_old);
+				emit_mov_imm32(&prog, false, AUX_REG, size);
+				emit_stx_r12base(&prog, BPF_B, AUX_REG, off_size);
+				if (is_imm8(entry_sz))
+					EMIT4(0x49, 0x83, 0xC4, (u8)entry_sz);
 				else
-					EMIT3_off32(0x49, 0x81, 0xC3, off);
+					EMIT3_off32(0x49, 0x81, 0xC4, entry_sz);
 			}
-			/* [r12 + off_addr] = r11  (store addr) */
-			emit_stx_r12base(&prog, BPF_DW, AUX_REG, off_addr);
-			/* r11 = *(size *)r11  (load old value, zero-extending) */
-			emit_ldx(&prog, BPF_SIZE(next->code), AUX_REG, AUX_REG, 0);
-			/* [r12 + off_old] = r11  (store old_value) */
-			emit_stx_r12base(&prog, BPF_DW, AUX_REG, off_old);
-			/* r11d = size; [r12 + off_size] = r11b */
-			emit_mov_imm32(&prog, false, AUX_REG, size);
-			emit_stx_r12base(&prog, BPF_B, AUX_REG, off_size);
-			/* r12 += entry_sz */
-			if (is_imm8(entry_sz))
-				EMIT4(0x49, 0x83, 0xC4, (u8)entry_sz);
-			else
-				EMIT3_off32(0x49, 0x81, 0xC4, entry_sz);
-
 			goto emit_insn_done;
 		}
 #endif
@@ -2613,13 +2664,18 @@ populate_extable:
 				push_r9(&prog);
 				ip += 2;
 			}
-			emit_undo_log_spill_r12(&prog, has_undo_log_markers);
-			if (has_undo_log_markers)
+			/* For undo-log-only programs R12 is the cursor and must be
+			 * synced with bpf_undo_log_cursor before/after each call
+			 * (helpers like bpf_spin_lock reset the per-CPU cursor).
+			 * For combined arena+undo programs R12 = vm_start is a
+			 * constant callee-saved value — no sync needed. */
+			emit_undo_log_spill_r12(&prog, has_undo_log_markers && !arena_vm_start);
+			if (has_undo_log_markers && !arena_vm_start)
 				ip += 9; /* spill: GS-seg mov [2] + opcode [3] + disp32 [4] */
 			ip += x86_call_depth_emit_accounting(&prog, func, ip);
 			if (emit_call(&prog, func, ip))
 				return -EINVAL;
-			emit_undo_log_reload_r12(&prog, has_undo_log_markers);
+			emit_undo_log_reload_r12(&prog, has_undo_log_markers && !arena_vm_start);
 			if (priv_frame_ptr)
 				pop_r9(&prog);
 			break;

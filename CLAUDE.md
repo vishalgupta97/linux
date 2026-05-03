@@ -12,10 +12,10 @@ The primary research goal: guarantee atomicity-on-abort for BPF spinlock critica
 
 ```bash
 # Build the kernel image (use the project config)
-make KCONFIG_CONFIG=bpftest-config -j$(nproc) bzImage
+make KCONFIG_CONFIG=bpftest-config -j100 bzImage
 
 # Build BPF selftests (from kernel root)
-make -C tools/testing/selftests/bpf
+make -j100 -C tools/testing/selftests/bpf test_progs
 
 # Run a single BPF selftest
 ./tools/testing/selftests/bpf/test_progs -t spin_lock_timeout
