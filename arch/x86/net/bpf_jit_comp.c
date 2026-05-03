@@ -1297,9 +1297,11 @@ static void emit_ldsx_r12(u8 **prog, u32 size, u32 dst_reg, u32 src_reg, int off
  * off       : signed 16-bit offset from that base (the CS write's ->off)
  * bpf_size  : BPF_B / BPF_H / BPF_W / BPF_DW (for the old-value load width)
  * byte_size : 1 / 2 / 4 / 8  (stored in entry.size)
+ * is_arena  : true if the store uses PROBE_MEM32 addressing (dst_breg is a
+ *             32-bit arena offset; kernel VA = dst_breg + R12 + off)
  */
 static void emit_undo_log_push_combined(u8 **pprog, u32 dst_breg, s32 off,
-					u32 bpf_size, int byte_size)
+					u32 bpf_size, int byte_size, bool is_arena)
 {
 	u8 *prog = *pprog;
 	const int off_addr = offsetof(struct bpf_undo_log_entry, addr);
@@ -1314,6 +1316,13 @@ static void emit_undo_log_push_combined(u8 **pprog, u32 dst_breg, s32 off,
 		else
 			EMIT3_off32(0x49, 0x81, 0xC3, off);
 	}
+	/*
+	 * Arena stores use [dst_reg + R12 + off] addressing, where dst_reg holds
+	 * a 32-bit arena offset and R12 = kern_vm_start.  Add R12 now (before the
+	 * push clobbers it) so r11 becomes the real kernel VA.
+	 */
+	if (is_arena)
+		EMIT3(0x4D, 0x01, 0xE3);	/* add r11, r12 */
 
 	/* push %r12  — save arena vm_start (41 54) */
 	EMIT2(0x41, 0x54);
@@ -1915,8 +1924,11 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image, u8 *rw_image
 			if (arena_vm_start) {
 				/* Combined arena+undo-log: R12 = vm_start (fixed).
 				 * Use push/pop R12 to borrow it as cursor temporarily. */
+				bool is_arena = (BPF_MODE(next->code) == BPF_PROBE_MEM32);
+
 				emit_undo_log_push_combined(&prog, dst_breg, off,
-							    BPF_SIZE(next->code), size);
+							    BPF_SIZE(next->code), size,
+							    is_arena);
 			} else {
 				/* Undo-log only: R12 is the advancing cursor. */
 				const int entry_sz = sizeof(struct bpf_undo_log_entry);
