@@ -127,6 +127,7 @@ TEST_KMOD_TARGETS = $(addprefix $(OUTPUT)/,$(TEST_KMODS))
 # Compile but not part of 'make run_tests'
 TEST_GEN_PROGS_EXTENDED = \
 	bench \
+	bench_spinlock \
 	flow_dissector_load \
 	test_cpp \
 	test_lirc_mode2_user \
@@ -856,6 +857,33 @@ $(OUTPUT)/bench_htab_mem.o: $(OUTPUT)/htab_mem_bench.skel.h
 $(OUTPUT)/bench_bpf_crypto.o: $(OUTPUT)/crypto_bench.skel.h
 $(OUTPUT)/bench_sockmap.o: $(OUTPUT)/bench_sockmap_prog.skel.h
 $(OUTPUT)/bench_lpm_trie_map.o: $(OUTPUT)/lpm_trie_bench.skel.h $(OUTPUT)/lpm_trie_map.skel.h
+$(OUTPUT)/bench_spinlock_overhead.o: benchs/bench_spinlock_overhead.c \
+	progs/bench_spinlock_shared.h \
+	$(OUTPUT)/bench_undo_log_list.skel.h \
+	$(OUTPUT)/bench_undo_log_ring.skel.h \
+	$(OUTPUT)/bench_undo_log_trie.skel.h \
+	$(OUTPUT)/bench_undo_log_rbtree.skel.h \
+	$(OUTPUT)/bench_undo_log_graph.skel.h \
+	$(OUTPUT)/bench_arena_list.skel.h \
+	$(OUTPUT)/bench_arena_ring.skel.h \
+	$(OUTPUT)/bench_arena_trie.skel.h \
+	$(OUTPUT)/bench_arena_rbtree.skel.h \
+	$(OUTPUT)/bench_arena_graph.skel.h \
+	$(BPFOBJ)
+	$(call msg,CC,,$@)
+	$(Q)$(CC) $(CFLAGS) -O2 -c benchs/bench_spinlock_overhead.c \
+		-I$(OUTPUT) -Iprogs $(LDLIBS) -o $@
+$(OUTPUT)/bench_spinlock: LDLIBS += -lm
+$(OUTPUT)/bench_spinlock: $(OUTPUT)/bench_spinlock_overhead.o \
+		 $(BPFOBJ)
+	$(call msg,BINARY,,$@)
+	$(Q)$(CC) $(CFLAGS) $(LDFLAGS) $(filter %.a %.o,$^) $(LDLIBS) -o $@
+
+$(OUTPUT)/bench_spinlock_kmod.ko: $(wildcard bench_kmod/*.[ch] bench_kmod/Makefile)
+	$(Q)$(MAKE) -C bench_kmod KDIR=$(abspath ../../../../..)
+	$(Q)cp bench_kmod/bench_spinlock_kmod.ko $@
+TEST_GEN_FILES += $(OUTPUT)/bench_spinlock_kmod.ko
+
 $(OUTPUT)/bench.o: bench.h testing_helpers.h $(BPFOBJ)
 $(OUTPUT)/bench: LDLIBS += -lm
 $(OUTPUT)/bench: $(OUTPUT)/bench.o \
