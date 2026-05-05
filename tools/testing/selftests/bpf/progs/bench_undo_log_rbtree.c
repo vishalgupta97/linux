@@ -47,17 +47,23 @@ int BPF_PROG(rbtree_init, __u32 pool_size)
 #ifdef __BPF_FEATURE_ADDR_SPACE_CAST
 	__u32 i;
 
-	/* node 0 = nil sentinel */
-	rb_pool[0].left = rb_pool[0].right = rb_pool[0].parent = 0;
-	rb_pool[0].color = BENCH_RB_BLACK;
-	rb_pool[0].key = rb_pool[0].val = 0;
-	rb_root = 0;
 	rb_alloc_idx = 1;
-	bpf_for(i, 1, BENCH_MAX_POOL) {
-		rb_pool[i].left = rb_pool[i].right = rb_pool[i].parent = 0;
-		rb_pool[i].color = BENCH_RB_BLACK;
-		rb_pool[i].key = rb_pool[i].val = 0;
+	/* Access each node via an explicit __arena * → * cast so LLVM emits
+	 * a single addr_space_cast for the element pointer rather than
+	 * generating separate ld_imm64 loads (without the cast) for zero-value
+	 * field writes.  rb_root is set after the loop so no arena-scalar
+	 * write precedes the loop's arena-array access. */
+	bpf_for(i, 0, BENCH_MAX_POOL) {
+		struct bench_rb_node *node = (struct bench_rb_node *)(rb_pool + i);
+
+		node->left = 0;
+		node->right = 0;
+		node->parent = 0;
+		node->color = BENCH_RB_BLACK;
+		node->key = 0;
+		node->val = 0;
 	}
+	rb_root = 0;
 #endif
 	return 0;
 }
