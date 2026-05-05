@@ -35,32 +35,23 @@ fi
 
 # Header printed once by the first bench_spinlock invocation
 HEADER_PRINTED=0
-THREADS=$(nproc)
 
 run_bench() {
-	local pool="$1"
-	local extra_args="${2:-}"
+	local thread="$1"
+	local pool="$2"
 
 	"$BENCH" \
-		--threads "$THREADS" \
+		--threads "$thread" \
 		--pool "$pool" \
 		--warmup-ms 5000 \
-		--bench-ms 15000 \
-		$extra_args
+		--bench-ms 15000
 }
 
 {
-	# First run: print header + all DS/variants, low contention
-	run_bench 256
-
-	# High contention: pool size = 1 (all threads fight for 1 element)
-	run_bench 1 --variant kmod
-	run_bench 1 --variant undo_log
-	run_bench 1 --variant arena
-
-	# Sweep pool sizes (no header repeat — awk filters it out)
-	for pool in 8 32 128; do
-		run_bench "$pool"
+	for thread in 1 2 4 8 16 28 56 84 112; do
+		for pool in 1 8 32 128; do
+			run_bench $thread $pool
+		done
 	done
 } | awk 'NR==1 || !/^variant/' > "$OUTPUT"
 
