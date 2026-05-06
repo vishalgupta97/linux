@@ -48,7 +48,7 @@ run_bench() {
 }
 
 {
-	for thread in 1 2 4 8 16 28 56 84 112; do
+	for thread in 1 2 4 8 16 32 64 80 96 112 128; do
 		for pool in 1 8 32 128; do
 			run_bench $thread $pool
 		done
