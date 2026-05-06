@@ -4,7 +4,8 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 import numpy as np
 
-CSV = "notimeout-srv1.csv"
+CSV = "notimeout-srv10.csv"
+OUT = "throughput-srv10.png"
 
 df = pd.read_csv(CSV)
 
@@ -71,6 +72,5 @@ fig.legend(handles=handles, loc="upper center", ncol=2, fontsize=10,
 fig.suptitle("Throughput: undo_log vs kmod (no timeout)", fontsize=13, y=1.04)
 fig.tight_layout()
 
-out = "throughput.png"
-fig.savefig(out, dpi=150, bbox_inches="tight")
-print(f"Saved {out}")
+fig.savefig(OUT, dpi=150, bbox_inches="tight")
+print(f"Saved {OUT}")
