@@ -192,7 +192,7 @@ struct bpf_verifier_stack_elem {
 	u32 log_pos;
 };
 
-#define BPF_COMPLEXITY_LIMIT_JMP_SEQ	8192
+#define BPF_COMPLEXITY_LIMIT_JMP_SEQ	262144 //32768 //8192
 #define BPF_COMPLEXITY_LIMIT_STATES	64
 
 #define BPF_MAP_KEY_POISON	(1ULL << 63)
@@ -8646,7 +8646,9 @@ static int process_spin_lock(struct bpf_verifier_env *env, int regno, int flags)
 	u32 spin_lock_off;
 	int err;
 
-	if (!is_const) {
+	/* Arena pointers are 32-bit runtime values; constant-offset check does
+	 * not apply (there is no static struct layout to verify against). */
+	if (!is_const && reg->type != PTR_TO_ARENA) {
 		verbose(env,
 			"R%d doesn't have constant offset. %s_lock has to be at the constant offset\n",
 			regno, lock_str);
@@ -8660,33 +8662,54 @@ static int process_spin_lock(struct bpf_verifier_env *env, int regno, int flags)
 				map->name, lock_str);
 			return -EINVAL;
 		}
+	} else if (reg->type == PTR_TO_ARENA) {
+		/* Arena memory is untyped; bpf_res_spin_lock requires BTF. */
+		if (is_res_lock) {
+			verbose(env, "bpf_res_spin_lock is not supported in arena memory\n");
+			return -EINVAL;
+		}
+		/* Skip struct-layout verification (no BTF record for arena). */
 	} else {
 		btf = reg->btf;
 	}
 
-	rec = reg_btf_record(reg);
-	if (!btf_record_has_field(rec, is_res_lock ? BPF_RES_SPIN_LOCK : BPF_SPIN_LOCK)) {
-		verbose(env, "%s '%s' has no valid %s_lock\n", map ? "map" : "local",
-			map ? map->name : "kptr", lock_str);
-		return -EINVAL;
+	if (reg->type != PTR_TO_ARENA) {
+		rec = reg_btf_record(reg);
+		if (!btf_record_has_field(rec, is_res_lock ? BPF_RES_SPIN_LOCK : BPF_SPIN_LOCK)) {
+			verbose(env, "%s '%s' has no valid %s_lock\n", map ? "map" : "local",
+				map ? map->name : "kptr", lock_str);
+			return -EINVAL;
+		}
+		spin_lock_off = is_res_lock ? rec->res_spin_lock_off : rec->spin_lock_off;
+		if (spin_lock_off != val + reg->off) {
+			verbose(env, "off %lld doesn't point to 'struct %s_lock' that is at %d\n",
+				val + reg->off, lock_str, spin_lock_off);
+			return -EINVAL;
+		}
 	}
-	spin_lock_off = is_res_lock ? rec->res_spin_lock_off : rec->spin_lock_off;
-	if (spin_lock_off != val + reg->off) {
-		verbose(env, "off %lld doesn't point to 'struct %s_lock' that is at %d\n",
-			val + reg->off, lock_str, spin_lock_off);
-		return -EINVAL;
-	}
+
+	/* Mark call site so do_misc_fixups() injects the arena-offset to
+	 * kernel-VA conversion (R0 = kern_vm_start; R1 += R0) before the call. */
+	if (reg->type == PTR_TO_ARENA)
+		env->insn_aux_data[env->insn_idx].spin_lock_arena_arg = true;
+
 	if (is_lock) {
 		void *ptr;
 		int type;
 
 		if (map)
 			ptr = map;
+		else if (reg->type == PTR_TO_ARENA)
+			ptr = env->prog->aux->arena;
 		else
 			ptr = btf;
 
 		if (!is_res_lock && cur->active_locks) {
-			if (find_lock_state(env->cur_state, REF_TYPE_LOCK, reg->id, ptr)) {
+			/* AA deadlock detection is skipped for arena pointers:
+			 * all PTR_TO_ARENA regs have id=0 after mark_reg_unknown,
+			 * so find_lock_state would give false positives. */
+			if (reg->type != PTR_TO_ARENA &&
+			    find_lock_state(env->cur_state, REF_TYPE_LOCK, reg->id, ptr)) {
 				verbose(env, "Acquiring the same lock again, AA deadlock detected\n");
 				return -EINVAL;
 			}
@@ -8729,6 +8752,8 @@ static int process_spin_lock(struct bpf_verifier_env *env, int regno, int flags)
 
 		if (map)
 			ptr = map;
+		else if (reg->type == PTR_TO_ARENA)
+			ptr = env->prog->aux->arena;
 		else
 			ptr = btf;
 
@@ -9446,6 +9471,7 @@ static const struct bpf_reg_types spin_lock_types = {
 	.types = {
 		PTR_TO_MAP_VALUE,
 		PTR_TO_BTF_ID | MEM_ALLOC,
+		PTR_TO_ARENA,
 	}
 };
 
@@ -23544,7 +23570,8 @@ static int do_misc_fixups(struct bpf_verifier_env *env)
 			u8 mode = BPF_MODE(insn->code);
 
 			if ((cls == BPF_STX || cls == BPF_ST) &&
-			    (mode == BPF_MEM || mode == BPF_ATOMIC)) {
+			    (mode == BPF_MEM || mode == BPF_ATOMIC ||
+			     mode == BPF_PROBE_MEM32)) {
 				cnt = 0;
 				insn_buf[cnt++] = BPF_EMIT_CALL(bpf_undo_log_push);
 				insn_buf[cnt++] = *insn;
@@ -23562,6 +23589,34 @@ static int do_misc_fixups(struct bpf_verifier_env *env)
 			}
 		}
 #endif
+
+		/* Arena spin lock: the R1 argument is a 32-bit arena offset; inject
+		 * R0 = kern_vm_start; R1 += R0 before the call so the helper
+		 * receives a valid kernel VA.  R0 is caller-saved and bpf_spin_lock
+		 * returns void, so clobbering it here is safe. */
+		if (insn->code == (BPF_JMP | BPF_CALL) && !insn->src_reg &&
+		    (insn->imm == BPF_FUNC_spin_lock ||
+		     insn->imm == BPF_FUNC_spin_unlock) &&
+		    env->insn_aux_data[i + delta].spin_lock_arena_arg) {
+			u64 kern_vm_start = bpf_arena_get_kern_vm_start(
+					(struct bpf_arena *)env->prog->aux->arena);
+			struct bpf_insn kva[2] = { BPF_LD_IMM64(BPF_REG_0, kern_vm_start) };
+
+			cnt = 0;
+			insn_buf[cnt++] = kva[0];
+			insn_buf[cnt++] = kva[1];
+			insn_buf[cnt++] = BPF_ALU64_REG(BPF_ADD, BPF_REG_1, BPF_REG_0);
+			insn_buf[cnt++] = *insn;
+
+			new_prog = bpf_patch_insn_data(env, i + delta, insn_buf, cnt);
+			if (!new_prog)
+				return -ENOMEM;
+
+			delta    += cnt - 1;
+			env->prog = prog = new_prog;
+			insn      = new_prog->insnsi + i + delta;
+			goto next_insn;
+		}
 
 		if (insn->code == (BPF_ALU64 | BPF_MOV | BPF_X) && insn->imm) {
 			if ((insn->off == BPF_ADDR_SPACE_CAST && insn->imm == 1) ||

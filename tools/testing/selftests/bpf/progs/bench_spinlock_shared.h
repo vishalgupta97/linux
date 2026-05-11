@@ -77,6 +77,7 @@ struct bench_list_node {
 };
 
 struct bench_ring_slot {
+	struct bpf_spin_lock lock;
 	__u64 data;
 	__u32 valid;
 };

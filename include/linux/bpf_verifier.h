@@ -585,6 +585,9 @@ struct bpf_insn_aux_data {
 	 * inject undo-log prefix code before the write.
 	 */
 	bool in_critical_section;
+	/* R1 of this bpf_spin_{lock,unlock} call is PTR_TO_ARENA; do_misc_fixups()
+	 * must inject the arena-offset to kernel-VA conversion before the call. */
+	bool spin_lock_arena_arg;
 
 	/* below fields are initialized once */
 	unsigned int orig_idx; /* original instruction index */

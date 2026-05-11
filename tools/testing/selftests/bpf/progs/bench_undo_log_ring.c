@@ -18,19 +18,13 @@ struct {
 	__uint(type, BPF_MAP_TYPE_ARENA);
 	__uint(map_flags, BPF_F_MMAPABLE);
 	__uint(max_entries, 4);
-#ifdef __TARGET_ARCH_arm64
-	__ulong(map_extra, 0x1ull << 32);
-#else
 	__ulong(map_extra, 0x1ull << 44);
-#endif
 } arena SEC(".maps");
 
-#ifdef __BPF_FEATURE_ADDR_SPACE_CAST
 struct bench_ring_slot __arena ring_pool[BENCH_RING_SLOTS];
 volatile long ring_head;
-#endif
 
-struct ring_lock_entry {
+/*struct ring_lock_entry {
 	struct bpf_spin_lock lock;
 };
 
@@ -39,45 +33,43 @@ struct {
 	__uint(max_entries, BENCH_RING_SLOTS);
 	__type(key, __u32);
 	__type(value, struct ring_lock_entry);
-} ring_locks SEC(".maps");
+} ring_locks SEC(".maps");*/
 
 SEC("fentry/bench_undo_ring_init")
 int BPF_PROG(ring_init, __u32 num_slots)
 {
-#ifdef __BPF_FEATURE_ADDR_SPACE_CAST
 	__u32 i;
 
 	ring_head = 0;
 	bpf_for(i, 0, BENCH_RING_SLOTS) {
 		ring_pool[i].data  = 0;
 		ring_pool[i].valid = 0;
+		ring_pool[i].lock.val = 0;
 	}
-#endif
 	return 0;
 }
 
 SEC("fentry/bench_undo_ring_enqueue")
 int BPF_PROG(ring_enqueue, __u64 val)
 {
-#ifdef __BPF_FEATURE_ADDR_SPACE_CAST
-	struct ring_lock_entry *lk;
+	//struct ring_lock_entry *lk;
 	__u32 slot;
 
 	/* Claim a slot atomically outside the lock */
 	slot = (__u32)(__sync_fetch_and_add(&ring_head, 1) % BENCH_RING_SLOTS);
 
-	lk = bpf_map_lookup_elem(&ring_locks, &slot);
+	/*lk = bpf_map_lookup_elem(&ring_locks, &slot);
 	if (!lk)
-		return 0;
-
-	bpf_spin_lock(&lk->lock);
+		return 0;*/
+	
+	struct bpf_spin_lock *lk = (struct bpf_spin_lock*)&ring_pool[slot].lock;
+	bpf_spin_lock(lk);
 
 	/* 2 arena writes → 2 undo-log entries */
 	ring_pool[slot].data  = val;
 	ring_pool[slot].valid = 1;
 
-	bpf_spin_unlock(&lk->lock);
-#endif
+	bpf_spin_unlock(lk);
 	return 0;
 }
 
