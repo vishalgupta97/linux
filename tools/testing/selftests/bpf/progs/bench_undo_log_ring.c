@@ -18,17 +18,11 @@ struct {
 	__uint(type, BPF_MAP_TYPE_ARENA);
 	__uint(map_flags, BPF_F_MMAPABLE);
 	__uint(max_entries, 4);
-#ifdef __TARGET_ARCH_arm64
-	__ulong(map_extra, 0x1ull << 32);
-#else
 	__ulong(map_extra, 0x1ull << 44);
-#endif
 } arena SEC(".maps");
 
-#ifdef __BPF_FEATURE_ADDR_SPACE_CAST
 struct bench_ring_slot __arena ring_pool[BENCH_RING_SLOTS];
 volatile long ring_head;
-#endif
 
 struct ring_lock_entry {
 	struct bpf_spin_lock lock;
@@ -44,7 +38,6 @@ struct {
 SEC("fentry/bench_undo_ring_init")
 int BPF_PROG(ring_init, __u32 num_slots)
 {
-#ifdef __BPF_FEATURE_ADDR_SPACE_CAST
 	__u32 i;
 
 	ring_head = 0;
@@ -52,14 +45,12 @@ int BPF_PROG(ring_init, __u32 num_slots)
 		ring_pool[i].data  = 0;
 		ring_pool[i].valid = 0;
 	}
-#endif
 	return 0;
 }
 
 SEC("fentry/bench_undo_ring_enqueue")
 int BPF_PROG(ring_enqueue, __u64 val)
 {
-#ifdef __BPF_FEATURE_ADDR_SPACE_CAST
 	struct ring_lock_entry *lk;
 	__u32 slot;
 
@@ -77,7 +68,6 @@ int BPF_PROG(ring_enqueue, __u64 val)
 	ring_pool[slot].valid = 1;
 
 	bpf_spin_unlock(&lk->lock);
-#endif
 	return 0;
 }
 

@@ -18,18 +18,12 @@ struct {
 	__uint(type, BPF_MAP_TYPE_ARENA);
 	__uint(map_flags, BPF_F_MMAPABLE);
 	__uint(max_entries, 8);
-#ifdef __TARGET_ARCH_arm64
-	__ulong(map_extra, 0x1ull << 32);
-#else
 	__ulong(map_extra, 0x1ull << 44);
-#endif
 } arena SEC(".maps");
 
-#ifdef __BPF_FEATURE_ADDR_SPACE_CAST
 struct bench_graph_node __arena graph_nodes[BENCH_MAX_POOL];
 struct bench_graph_edge __arena graph_edges[BENCH_MAX_POOL];
 volatile long graph_edge_alloc;
-#endif
 
 struct graph_global_lock {
 	struct bpf_spin_lock lock;
@@ -45,7 +39,6 @@ struct {
 SEC("fentry/bench_undo_graph_init")
 int BPF_PROG(graph_init, __u32 num_nodes, __u32 num_edges)
 {
-#ifdef __BPF_FEATURE_ADDR_SPACE_CAST
 	__u32 i;
 
 	graph_edge_alloc = 0;
@@ -59,14 +52,12 @@ int BPF_PROG(graph_init, __u32 num_nodes, __u32 num_edges)
 		graph_edges[i].next_out = (__u32)~0;
 		graph_edges[i].weight   = 0;
 	}
-#endif
 	return 0;
 }
 
 SEC("fentry/bench_undo_graph_add_edge")
 int BPF_PROG(graph_add_edge, __u32 src, __u32 dst, __u64 weight)
 {
-#ifdef __BPF_FEATURE_ADDR_SPACE_CAST
 	struct graph_global_lock *g;
 	__u32 key0 = 0;
 	__u32 e;
@@ -92,7 +83,6 @@ int BPF_PROG(graph_add_edge, __u32 src, __u32 dst, __u64 weight)
 	graph_nodes[src].first_edge = e;
 out:
 	bpf_spin_unlock(&g->lock);
-#endif
 	return 0;
 }
 
