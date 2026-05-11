@@ -17,18 +17,12 @@ struct {
 	__uint(type, BPF_MAP_TYPE_ARENA);
 	__uint(map_flags, BPF_F_MMAPABLE);
 	__uint(max_entries, 8);
-#ifdef __TARGET_ARCH_arm64
-	__ulong(map_extra, 0x1ull << 32);
-#else
 	__ulong(map_extra, 0x1ull << 44);
-#endif
 } arena SEC(".maps");
 
-#ifdef __BPF_FEATURE_ADDR_SPACE_CAST
 struct bench_rb_node __arena rb_pool[BENCH_MAX_POOL];
 __u32 __arena rb_root;
 volatile long rb_alloc_idx;
-#endif
 
 struct rb_global_lock {
 	struct bpf_spin_lock lock;
@@ -44,7 +38,6 @@ struct {
 SEC("fentry/bench_undo_rbtree_init")
 int BPF_PROG(rbtree_init, __u32 pool_size)
 {
-#ifdef __BPF_FEATURE_ADDR_SPACE_CAST
 	__u32 i;
 
 	rb_alloc_idx = 1;
@@ -64,11 +57,8 @@ int BPF_PROG(rbtree_init, __u32 pool_size)
 		node->val = 0;
 	}
 	rb_root = 0;
-#endif
 	return 0;
 }
-
-#ifdef __BPF_FEATURE_ADDR_SPACE_CAST
 
 static __always_inline void rb_rotate_left(__u32 x)
 {
@@ -111,7 +101,7 @@ static __always_inline void rb_insert_fixup(__u32 z)
 	__u32 y;
 	int depth;
 
-	bpf_for(depth, 0, 64) {
+	bpf_for(depth, 0, 64) { //TODO: Fix this
 		__u32 p, g;
 
 		if (!rb_pool[rb_pool[z].parent].color)
@@ -162,12 +152,9 @@ static __always_inline void rb_insert_fixup(__u32 z)
 	rb_pool[rb_root].color = BENCH_RB_BLACK;
 }
 
-#endif /* __BPF_FEATURE_ADDR_SPACE_CAST */
-
 SEC("fentry/bench_undo_rbtree_insert")
 int BPF_PROG(rbtree_insert, __u64 key, __u64 val)
 {
-#ifdef __BPF_FEATURE_ADDR_SPACE_CAST
 	struct rb_global_lock *g;
 	__u32 key0 = 0;
 	__u32 z, p, x;
@@ -217,7 +204,6 @@ int BPF_PROG(rbtree_insert, __u64 key, __u64 val)
 	rb_insert_fixup(z); /* up to ~24 more arena writes */
 out:
 	bpf_spin_unlock(&g->lock);
-#endif
 	return 0;
 }
 

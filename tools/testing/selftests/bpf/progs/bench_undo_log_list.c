@@ -21,17 +21,11 @@ struct {
 	__uint(type, BPF_MAP_TYPE_ARENA);
 	__uint(map_flags, BPF_F_MMAPABLE);
 	__uint(max_entries, 4); /* pages — 16 KB is plenty for 256 nodes */
-#ifdef __TARGET_ARCH_arm64
-	__ulong(map_extra, 0x1ull << 32);
-#else
 	__ulong(map_extra, 0x1ull << 44);
-#endif
 } arena SEC(".maps");
 
-#ifdef __BPF_FEATURE_ADDR_SPACE_CAST
 struct bench_list_node __arena list_pool[BENCH_MAX_POOL];
 __u32 __arena list_head_idx;
-#endif
 
 /* ---- Parallel lock map: one bpf_spin_lock per pool slot ---- */
 struct list_lock_entry {
@@ -49,7 +43,6 @@ struct {
 SEC("fentry/bench_undo_list_init")
 int BPF_PROG(list_init, __u32 pool_size)
 {
-#ifdef __BPF_FEATURE_ADDR_SPACE_CAST
 	__u32 i;
 
 	bpf_for(i, 0, BENCH_MAX_POOL) {
@@ -57,7 +50,6 @@ int BPF_PROG(list_init, __u32 pool_size)
 		list_pool[i].data = 0;
 	}
 	list_head_idx = (__u32)~0;
-#endif
 	return 0;
 }
 
@@ -65,7 +57,6 @@ int BPF_PROG(list_init, __u32 pool_size)
 SEC("fentry/bench_undo_list_insert")
 int BPF_PROG(list_insert, __u32 new_idx, __u32 head_lock_idx)
 {
-#ifdef __BPF_FEATURE_ADDR_SPACE_CAST
 	struct list_lock_entry *hl, *nl;
 
 	if (new_idx >= BENCH_MAX_POOL)
@@ -86,7 +77,6 @@ int BPF_PROG(list_insert, __u32 new_idx, __u32 head_lock_idx)
 
 	bpf_spin_unlock(&nl->lock);
 	bpf_spin_unlock(&hl->lock);
-#endif
 	return 0;
 }
 

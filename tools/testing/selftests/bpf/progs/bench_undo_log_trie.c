@@ -18,18 +18,12 @@ struct {
 	__uint(type, BPF_MAP_TYPE_ARENA);
 	__uint(map_flags, BPF_F_MMAPABLE);
 	__uint(max_entries, 8);
-#ifdef __TARGET_ARCH_arm64
-	__ulong(map_extra, 0x1ull << 32);
-#else
 	__ulong(map_extra, 0x1ull << 44);
-#endif
 } arena SEC(".maps");
 
-#ifdef __BPF_FEATURE_ADDR_SPACE_CAST
 struct bench_trie_node __arena trie_pool[BENCH_MAX_POOL];
 __u32 __arena trie_root;
 volatile long trie_alloc_idx;
-#endif
 
 struct trie_global_lock {
 	struct bpf_spin_lock lock;
@@ -45,7 +39,6 @@ struct {
 SEC("fentry/bench_undo_trie_init")
 int BPF_PROG(trie_init, __u32 pool_size)
 {
-#ifdef __BPF_FEATURE_ADDR_SPACE_CAST
 	__u32 i;
 
 	trie_root = 0;
@@ -56,14 +49,12 @@ int BPF_PROG(trie_init, __u32 pool_size)
 		trie_pool[i].key_bit   = 0;
 		trie_pool[i].val       = 0;
 	}
-#endif
 	return 0;
 }
 
 SEC("fentry/bench_undo_trie_insert")
 int BPF_PROG(trie_insert, __u64 key, __u64 val)
 {
-#ifdef __BPF_FEATURE_ADDR_SPACE_CAST
 	struct trie_global_lock *g;
 	__u32 key0 = 0;
 	__u32 cur, parent, new_node;
@@ -105,7 +96,6 @@ int BPF_PROG(trie_insert, __u64 key, __u64 val)
 	}
 out:
 	bpf_spin_unlock(&g->lock);
-#endif
 	return 0;
 }
 
