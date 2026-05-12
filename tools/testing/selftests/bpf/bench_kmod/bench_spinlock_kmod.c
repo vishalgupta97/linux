@@ -47,6 +47,11 @@
 #define BENCH_VARIANT_ARENA     1
 #define BENCH_VARIANT_KMOD      2
 
+#define BENCH_OP_INSERT  0
+#define BENCH_OP_LOOKUP  1
+#define BENCH_OP_UPDATE  2
+#define BENCH_OP_DELETE  3
+
 #define BENCH_IOC_MAGIC    'B'
 
 struct bench_params {
@@ -54,6 +59,8 @@ struct bench_params {
 	__u32 variant;
 	__u32 num_threads;
 	__u32 pool_size;
+	__u32 init_size;
+	__u32 op_type;
 	__u32 warmup_ms;
 	__u32 bench_ms;
 };
@@ -188,390 +195,25 @@ static spinlock_t kmod_graph_lock;
 /* kmod data structure implementations                                 */
 /* ------------------------------------------------------------------ */
 
-noinline void bench_kmod_list_init(u32 pool_size)
-{
-	u32 i;
+/* ---- list ---- */
 
-	if (!kmod_list_pool)
-		return;
-	for (i = 0; i < pool_size; i++) {
-		spin_lock_init(&kmod_list_pool[i].lock);
-		kmod_list_pool[i].next_idx = (u32)~0;
-		kmod_list_pool[i].data = 0;
-	}
-	kmod_list_head_idx = (u32)~0;
-}
+#include "list.h"
 
-noinline void bench_kmod_list_insert(u32 new_idx, u32 head_lock_idx)
-{
-	if (new_idx >= KMOD_MAX_POOL)
-		return;
+/* ---- ring ---- */
 
-	spin_lock(&kmod_list_pool[head_lock_idx].lock);
-	spin_lock(&kmod_list_pool[new_idx].lock);
+#include "ring.h"
 
-	kmod_list_pool[new_idx].next_idx = kmod_list_head_idx;
-	kmod_list_pool[new_idx].data     = ktime_get_mono_fast_ns();
-	kmod_list_head_idx               = new_idx;
+/* ---- trie ---- */
 
-	spin_unlock(&kmod_list_pool[new_idx].lock);
-	spin_unlock(&kmod_list_pool[head_lock_idx].lock);
+#include "trie.h"
 
-	this_cpu_inc(bench_cpu_stats.ops);
-}
+/* ---- rbtree ---- */
 
-noinline void bench_kmod_ring_init(u32 num_slots)
-{
-	u32 i;
+#include "rbtree.h"
 
-	if (!kmod_ring_pool)
-		return;
-	kmod_ring_size = num_slots;
-	atomic_set(&kmod_ring_head, 0);
-	for (i = 0; i < num_slots; i++) {
-		spin_lock_init(&kmod_ring_pool[i].lock);
-		kmod_ring_pool[i].valid = 0;
-		kmod_ring_pool[i].data  = 0;
-	}
-}
+/* ---- graph ---- */
 
-noinline void bench_kmod_ring_enqueue(u64 val)
-{
-	u32 slot;
-
-	if (!kmod_ring_pool || !kmod_ring_size)
-		return;
-	slot = (u32)(atomic_fetch_add(1, &kmod_ring_head) % kmod_ring_size);
-
-	spin_lock(&kmod_ring_pool[slot].lock);
-	kmod_ring_pool[slot].data  = val;
-	kmod_ring_pool[slot].valid = 1;
-	spin_unlock(&kmod_ring_pool[slot].lock);
-
-	this_cpu_inc(bench_cpu_stats.ops);
-}
-
-noinline void bench_kmod_trie_init(u32 pool_size)
-{
-	if (!kmod_trie_pool)
-		return;
-	memset(kmod_trie_pool, 0, pool_size * sizeof(*kmod_trie_pool));
-	kmod_trie_root = 0;
-	atomic_set(&kmod_trie_alloc, 1);
-	spin_lock_init(&kmod_trie_lock);
-}
-
-/* Binary trie insert on 64-bit key, one bit per level from MSB */
-noinline void bench_kmod_trie_insert(u64 key, u64 val)
-{
-	u32 cur, parent, bit, new_node;
-	int dir;
-
-	spin_lock(&kmod_trie_lock);
-	cur = kmod_trie_root;
-	parent = 0;
-	dir = 0;
-
-	for (bit = 63; ; bit--) {
-		int b = (key >> bit) & 1;
-
-		if (!cur) {
-			new_node = (u32)atomic_fetch_add(1, &kmod_trie_alloc);
-			if (new_node >= KMOD_MAX_POOL)
-				goto out;
-			kmod_trie_pool[new_node].child[0] = 0;
-			kmod_trie_pool[new_node].child[1] = 0;
-			kmod_trie_pool[new_node].key_bit   = bit;
-			kmod_trie_pool[new_node].val       = val;
-			if (parent)
-				kmod_trie_pool[parent].child[dir] = new_node;
-			else
-				kmod_trie_root = new_node;
-			break;
-		}
-		parent = cur;
-		dir = b;
-		cur = kmod_trie_pool[cur].child[b];
-		if (!bit)
-			break;
-	}
-out:
-	spin_unlock(&kmod_trie_lock);
-	this_cpu_inc(bench_cpu_stats.ops);
-}
-
-noinline void bench_kmod_rbtree_init(u32 pool_size)
-{
-	if (!kmod_rb_pool)
-		return;
-	memset(kmod_rb_pool, 0, pool_size * sizeof(*kmod_rb_pool));
-	/* node 0 = nil sentinel (black) */
-	kmod_rb_pool[0].color = KMOD_RB_BLACK;
-	kmod_rb_pool[0].left = kmod_rb_pool[0].right = kmod_rb_pool[0].parent = 0;
-	kmod_rb_root = 0;
-	atomic_set(&kmod_rb_alloc, 1);
-	spin_lock_init(&kmod_rb_lock);
-}
-
-static void kmod_rb_rotate_left(u32 x)
-{
-	u32 y = kmod_rb_pool[x].right;
-
-	kmod_rb_pool[x].right = kmod_rb_pool[y].left;
-	if (kmod_rb_pool[y].left)
-		kmod_rb_pool[kmod_rb_pool[y].left].parent = x;
-	kmod_rb_pool[y].parent = kmod_rb_pool[x].parent;
-	if (!kmod_rb_pool[x].parent)
-		kmod_rb_root = y;
-	else if (x == kmod_rb_pool[kmod_rb_pool[x].parent].left)
-		kmod_rb_pool[kmod_rb_pool[x].parent].left = y;
-	else
-		kmod_rb_pool[kmod_rb_pool[x].parent].right = y;
-	kmod_rb_pool[y].left = x;
-	kmod_rb_pool[x].parent = y;
-}
-
-static void kmod_rb_rotate_right(u32 x)
-{
-	u32 y = kmod_rb_pool[x].left;
-
-	kmod_rb_pool[x].left = kmod_rb_pool[y].right;
-	if (kmod_rb_pool[y].right)
-		kmod_rb_pool[kmod_rb_pool[y].right].parent = x;
-	kmod_rb_pool[y].parent = kmod_rb_pool[x].parent;
-	if (!kmod_rb_pool[x].parent)
-		kmod_rb_root = y;
-	else if (x == kmod_rb_pool[kmod_rb_pool[x].parent].right)
-		kmod_rb_pool[kmod_rb_pool[x].parent].right = y;
-	else
-		kmod_rb_pool[kmod_rb_pool[x].parent].left = y;
-	kmod_rb_pool[y].right = x;
-	kmod_rb_pool[x].parent = y;
-}
-
-static void kmod_rb_insert_fixup(u32 z)
-{
-	u32 y;
-	int depth = 0;
-
-	while (kmod_rb_pool[kmod_rb_pool[z].parent].color == KMOD_RB_RED &&
-	       depth++ < 64) {
-		u32 p = kmod_rb_pool[z].parent;
-		u32 g = kmod_rb_pool[p].parent;
-
-		if (p == kmod_rb_pool[g].left) {
-			y = kmod_rb_pool[g].right;
-			if (kmod_rb_pool[y].color == KMOD_RB_RED) {
-				kmod_rb_pool[p].color = KMOD_RB_BLACK;
-				kmod_rb_pool[y].color = KMOD_RB_BLACK;
-				kmod_rb_pool[g].color = KMOD_RB_RED;
-				z = g;
-			} else {
-				if (z == kmod_rb_pool[p].right) {
-					z = p;
-					kmod_rb_rotate_left(z);
-					p = kmod_rb_pool[z].parent;
-					g = kmod_rb_pool[p].parent;
-				}
-				kmod_rb_pool[p].color = KMOD_RB_BLACK;
-				kmod_rb_pool[g].color = KMOD_RB_RED;
-				kmod_rb_rotate_right(g);
-			}
-		} else {
-			y = kmod_rb_pool[g].left;
-			if (kmod_rb_pool[y].color == KMOD_RB_RED) {
-				kmod_rb_pool[p].color = KMOD_RB_BLACK;
-				kmod_rb_pool[y].color = KMOD_RB_BLACK;
-				kmod_rb_pool[g].color = KMOD_RB_RED;
-				z = g;
-			} else {
-				if (z == kmod_rb_pool[p].left) {
-					z = p;
-					kmod_rb_rotate_right(z);
-					p = kmod_rb_pool[z].parent;
-					g = kmod_rb_pool[p].parent;
-				}
-				kmod_rb_pool[p].color = KMOD_RB_BLACK;
-				kmod_rb_pool[g].color = KMOD_RB_RED;
-				kmod_rb_rotate_left(g);
-			}
-		}
-	}
-	kmod_rb_pool[kmod_rb_root].color = KMOD_RB_BLACK;
-}
-
-noinline void bench_kmod_rbtree_insert(u64 key, u64 val)
-{
-	u32 z, p, x;
-
-	spin_lock(&kmod_rb_lock);
-	z = (u32)atomic_fetch_add(1, &kmod_rb_alloc);
-	if (z >= KMOD_MAX_POOL)
-		goto out;
-
-	kmod_rb_pool[z].key    = key;
-	kmod_rb_pool[z].val    = val;
-	kmod_rb_pool[z].color  = KMOD_RB_RED;
-	kmod_rb_pool[z].left   = 0;
-	kmod_rb_pool[z].right  = 0;
-	kmod_rb_pool[z].parent = 0;
-
-	p = 0;
-	x = kmod_rb_root;
-	while (x) {
-		p = x;
-		if (key < kmod_rb_pool[x].key)
-			x = kmod_rb_pool[x].left;
-		else
-			x = kmod_rb_pool[x].right;
-	}
-	kmod_rb_pool[z].parent = p;
-	if (!p) {
-		kmod_rb_root = z;
-	} else if (key < kmod_rb_pool[p].key) {
-		kmod_rb_pool[p].left = z;
-	} else {
-		kmod_rb_pool[p].right = z;
-	}
-	kmod_rb_insert_fixup(z);
-out:
-	spin_unlock(&kmod_rb_lock);
-	this_cpu_inc(bench_cpu_stats.ops);
-}
-
-noinline void bench_kmod_graph_init(u32 num_nodes, u32 num_edges)
-{
-	u32 i;
-
-	if (!kmod_graph_nodes || !kmod_graph_edges)
-		return;
-	kmod_graph_num_nodes = num_nodes;
-	for (i = 0; i < num_nodes; i++) {
-		kmod_graph_nodes[i].first_edge = (u32)~0;
-		kmod_graph_nodes[i].data = 0;
-	}
-	atomic_set(&kmod_graph_edge_alloc, 0);
-	spin_lock_init(&kmod_graph_lock);
-}
-
-noinline void bench_kmod_graph_add_edge(u32 src, u32 dst, u64 weight)
-{
-	u32 e;
-
-	if (!kmod_graph_nodes || !kmod_graph_edges)
-		return;
-
-	spin_lock(&kmod_graph_lock);
-	e = (u32)atomic_fetch_add(1, &kmod_graph_edge_alloc);
-	if (e >= KMOD_MAX_POOL || src >= kmod_graph_num_nodes)
-		goto out;
-
-	kmod_graph_edges[e].src      = src;
-	kmod_graph_edges[e].dst      = dst;
-	kmod_graph_edges[e].weight   = weight;
-	kmod_graph_edges[e].next_out = kmod_graph_nodes[src].first_edge;
-	kmod_graph_nodes[src].first_edge = e;
-out:
-	spin_unlock(&kmod_graph_lock);
-	this_cpu_inc(bench_cpu_stats.ops);
-}
-
-/* ------------------------------------------------------------------ */
-/* Stub functions for BPF fentry variants                              */
-/* BPF programs attach to these; the body just counts the op.         */
-/* ------------------------------------------------------------------ */
-
-/* ---- undo_log stubs ---- */
-noinline void bench_undo_list_init(u32 pool_size) { }
-EXPORT_SYMBOL_GPL(bench_undo_list_init);
-
-noinline void bench_undo_list_insert(u32 new_idx, u32 head_lock_idx)
-{
-	this_cpu_inc(bench_cpu_stats.ops);
-}
-EXPORT_SYMBOL_GPL(bench_undo_list_insert);
-
-noinline void bench_undo_ring_init(u32 num_slots) { }
-EXPORT_SYMBOL_GPL(bench_undo_ring_init);
-
-noinline void bench_undo_ring_enqueue(u64 val)
-{
-	this_cpu_inc(bench_cpu_stats.ops);
-}
-EXPORT_SYMBOL_GPL(bench_undo_ring_enqueue);
-
-noinline void bench_undo_trie_init(u32 pool_size) { }
-EXPORT_SYMBOL_GPL(bench_undo_trie_init);
-
-noinline void bench_undo_trie_insert(u64 key, u64 val)
-{
-	this_cpu_inc(bench_cpu_stats.ops);
-}
-EXPORT_SYMBOL_GPL(bench_undo_trie_insert);
-
-noinline void bench_undo_rbtree_init(u32 pool_size) { }
-EXPORT_SYMBOL_GPL(bench_undo_rbtree_init);
-
-noinline void bench_undo_rbtree_insert(u64 key, u64 val)
-{
-	this_cpu_inc(bench_cpu_stats.ops);
-}
-EXPORT_SYMBOL_GPL(bench_undo_rbtree_insert);
-
-noinline void bench_undo_graph_init(u32 num_nodes, u32 num_edges) { }
-EXPORT_SYMBOL_GPL(bench_undo_graph_init);
-
-noinline void bench_undo_graph_add_edge(u32 src, u32 dst, u64 weight)
-{
-	this_cpu_inc(bench_cpu_stats.ops);
-}
-EXPORT_SYMBOL_GPL(bench_undo_graph_add_edge);
-
-/* ---- arena stubs ---- */
-noinline void bench_arena_list_init(u32 pool_size) { }
-EXPORT_SYMBOL_GPL(bench_arena_list_init);
-
-noinline void bench_arena_list_insert(u32 new_idx, u32 head_lock_idx)
-{
-	this_cpu_inc(bench_cpu_stats.ops);
-}
-EXPORT_SYMBOL_GPL(bench_arena_list_insert);
-
-noinline void bench_arena_ring_init(u32 num_slots) { }
-EXPORT_SYMBOL_GPL(bench_arena_ring_init);
-
-noinline void bench_arena_ring_enqueue(u64 val)
-{
-	this_cpu_inc(bench_cpu_stats.ops);
-}
-EXPORT_SYMBOL_GPL(bench_arena_ring_enqueue);
-
-noinline void bench_arena_trie_init(u32 pool_size) { }
-EXPORT_SYMBOL_GPL(bench_arena_trie_init);
-
-noinline void bench_arena_trie_insert(u64 key, u64 val)
-{
-	this_cpu_inc(bench_cpu_stats.ops);
-}
-EXPORT_SYMBOL_GPL(bench_arena_trie_insert);
-
-noinline void bench_arena_rbtree_init(u32 pool_size) { }
-EXPORT_SYMBOL_GPL(bench_arena_rbtree_init);
-
-noinline void bench_arena_rbtree_insert(u64 key, u64 val)
-{
-	this_cpu_inc(bench_cpu_stats.ops);
-}
-EXPORT_SYMBOL_GPL(bench_arena_rbtree_insert);
-
-noinline void bench_arena_graph_init(u32 num_nodes, u32 num_edges) { }
-EXPORT_SYMBOL_GPL(bench_arena_graph_init);
-
-noinline void bench_arena_graph_add_edge(u32 src, u32 dst, u64 weight)
-{
-	this_cpu_inc(bench_cpu_stats.ops);
-}
-EXPORT_SYMBOL_GPL(bench_arena_graph_add_edge);
+#include "graph.h"
 
 /* ------------------------------------------------------------------ */
 /* call_init / call_op dispatchers                                     */
@@ -610,44 +252,153 @@ static void call_init(int variant, int ds_type, u32 pool_size)
 	}
 }
 
-static void call_op(int variant, int ds_type, u64 iter, u32 pool_size)
+static void call_op(int variant, int ds_type, int op_type, u64 iter, u32 pool_size)
 {
-	u32 idx  = (u32)(iter % (pool_size > 1 ? pool_size - 1 : 1)) + 1;
-	u32 src  = (u32)(iter % pool_size);
-	u32 dst  = (u32)((iter + 1) % pool_size);
+	u32 idx = (u32)(iter % (pool_size > 1 ? pool_size - 1 : 1)) + 1;
+	u32 src = (u32)(iter % pool_size);
+	u32 dst = (u32)((iter + 1) % pool_size);
 	/* Multiplicative hash for key variety without modulo cost */
-	u64 key  = iter * 2654435761ULL;
-	u64 val  = ktime_get_mono_fast_ns();
+	u64 key = iter * 2654435761ULL;
+	u64 val = ktime_get_mono_fast_ns();
 
-	switch (variant) {
-	case BENCH_VARIANT_UNDO_LOG:
-		switch (ds_type) {
-		case BENCH_DS_LIST:   bench_undo_list_insert(idx, 0);        break;
-		case BENCH_DS_RING:   bench_undo_ring_enqueue(val);          break;
-		case BENCH_DS_TRIE:   bench_undo_trie_insert(key, val);      break;
-		case BENCH_DS_RBTREE: bench_undo_rbtree_insert(key, val);    break;
-		case BENCH_DS_GRAPH:  bench_undo_graph_add_edge(src, dst, val); break;
+	switch (op_type) {
+	case BENCH_OP_INSERT:
+		switch (variant) {
+		case BENCH_VARIANT_UNDO_LOG:
+			switch (ds_type) {
+			case BENCH_DS_LIST:   bench_undo_list_insert(idx, 0);           break;
+			case BENCH_DS_RING:   bench_undo_ring_enqueue(val);             break;
+			case BENCH_DS_TRIE:   bench_undo_trie_insert(key, val);         break;
+			case BENCH_DS_RBTREE: bench_undo_rbtree_insert(key, val);       break;
+			case BENCH_DS_GRAPH:  bench_undo_graph_add_edge(src, dst, val); break;
+			}
+			break;
+		case BENCH_VARIANT_ARENA:
+			switch (ds_type) {
+			case BENCH_DS_LIST:   bench_arena_list_insert(idx, 0);           break;
+			case BENCH_DS_RING:   bench_arena_ring_enqueue(val);             break;
+			case BENCH_DS_TRIE:   bench_arena_trie_insert(key, val);         break;
+			case BENCH_DS_RBTREE: bench_arena_rbtree_insert(key, val);       break;
+			case BENCH_DS_GRAPH:  bench_arena_graph_add_edge(src, dst, val); break;
+			}
+			break;
+		case BENCH_VARIANT_KMOD:
+			switch (ds_type) {
+			case BENCH_DS_LIST:   bench_kmod_list_insert(idx, 0);           break;
+			case BENCH_DS_RING:   bench_kmod_ring_enqueue(val);             break;
+			case BENCH_DS_TRIE:   bench_kmod_trie_insert(key, val);         break;
+			case BENCH_DS_RBTREE: bench_kmod_rbtree_insert(key, val);       break;
+			case BENCH_DS_GRAPH:  bench_kmod_graph_add_edge(src, dst, val); break;
+			}
+			break;
 		}
 		break;
-	case BENCH_VARIANT_ARENA:
-		switch (ds_type) {
-		case BENCH_DS_LIST:   bench_arena_list_insert(idx, 0);       break;
-		case BENCH_DS_RING:   bench_arena_ring_enqueue(val);         break;
-		case BENCH_DS_TRIE:   bench_arena_trie_insert(key, val);     break;
-		case BENCH_DS_RBTREE: bench_arena_rbtree_insert(key, val);   break;
-		case BENCH_DS_GRAPH:  bench_arena_graph_add_edge(src, dst, val); break;
+
+	case BENCH_OP_LOOKUP:
+		switch (variant) {
+		case BENCH_VARIANT_UNDO_LOG:
+			switch (ds_type) {
+			case BENCH_DS_LIST:   bench_undo_list_lookup(idx);           break;
+			case BENCH_DS_RING:   bench_undo_ring_lookup(idx);           break;
+			case BENCH_DS_TRIE:   bench_undo_trie_lookup(key);           break;
+			case BENCH_DS_RBTREE: bench_undo_rbtree_lookup(key);         break;
+			case BENCH_DS_GRAPH:  bench_undo_graph_lookup(src, dst);     break;
+			}
+			break;
+		case BENCH_VARIANT_ARENA:
+			switch (ds_type) {
+			case BENCH_DS_LIST:   bench_arena_list_lookup(idx);          break;
+			case BENCH_DS_RING:   bench_arena_ring_lookup(idx);          break;
+			case BENCH_DS_TRIE:   bench_arena_trie_lookup(key);          break;
+			case BENCH_DS_RBTREE: bench_arena_rbtree_lookup(key);        break;
+			case BENCH_DS_GRAPH:  bench_arena_graph_lookup(src, dst);    break;
+			}
+			break;
+		case BENCH_VARIANT_KMOD:
+			switch (ds_type) {
+			case BENCH_DS_LIST:   bench_kmod_list_lookup(idx);           break;
+			case BENCH_DS_RING:   bench_kmod_ring_lookup(idx);           break;
+			case BENCH_DS_TRIE:   bench_kmod_trie_lookup(key);           break;
+			case BENCH_DS_RBTREE: bench_kmod_rbtree_lookup(key);         break;
+			case BENCH_DS_GRAPH:  bench_kmod_graph_lookup(src, dst);     break;
+			}
+			break;
 		}
 		break;
-	case BENCH_VARIANT_KMOD:
-		switch (ds_type) {
-		case BENCH_DS_LIST:   bench_kmod_list_insert(idx, 0);        break;
-		case BENCH_DS_RING:   bench_kmod_ring_enqueue(val);          break;
-		case BENCH_DS_TRIE:   bench_kmod_trie_insert(key, val);      break;
-		case BENCH_DS_RBTREE: bench_kmod_rbtree_insert(key, val);    break;
-		case BENCH_DS_GRAPH:  bench_kmod_graph_add_edge(src, dst, val); break;
+
+	case BENCH_OP_UPDATE:
+		switch (variant) {
+		case BENCH_VARIANT_UNDO_LOG:
+			switch (ds_type) {
+			case BENCH_DS_LIST:   bench_undo_list_update(idx, val);          break;
+			case BENCH_DS_RING:   bench_undo_ring_update(idx, val);          break;
+			case BENCH_DS_TRIE:   bench_undo_trie_update(key, val);          break;
+			case BENCH_DS_RBTREE: bench_undo_rbtree_update(key, val);        break;
+			case BENCH_DS_GRAPH:  bench_undo_graph_update(src, dst, val);    break;
+			}
+			break;
+		case BENCH_VARIANT_ARENA:
+			switch (ds_type) {
+			case BENCH_DS_LIST:   bench_arena_list_update(idx, val);         break;
+			case BENCH_DS_RING:   bench_arena_ring_update(idx, val);         break;
+			case BENCH_DS_TRIE:   bench_arena_trie_update(key, val);         break;
+			case BENCH_DS_RBTREE: bench_arena_rbtree_update(key, val);       break;
+			case BENCH_DS_GRAPH:  bench_arena_graph_update(src, dst, val);   break;
+			}
+			break;
+		case BENCH_VARIANT_KMOD:
+			switch (ds_type) {
+			case BENCH_DS_LIST:   bench_kmod_list_update(idx, val);          break;
+			case BENCH_DS_RING:   bench_kmod_ring_update(idx, val);          break;
+			case BENCH_DS_TRIE:   bench_kmod_trie_update(key, val);          break;
+			case BENCH_DS_RBTREE: bench_kmod_rbtree_update(key, val);        break;
+			case BENCH_DS_GRAPH:  bench_kmod_graph_update(src, dst, val);    break;
+			}
+			break;
+		}
+		break;
+
+	case BENCH_OP_DELETE:
+		switch (variant) {
+		case BENCH_VARIANT_UNDO_LOG:
+			switch (ds_type) {
+			case BENCH_DS_LIST:   bench_undo_list_delete();              break;
+			case BENCH_DS_RING:   bench_undo_ring_dequeue(idx);         break;
+			case BENCH_DS_TRIE:   bench_undo_trie_delete(key);          break;
+			case BENCH_DS_RBTREE: bench_undo_rbtree_delete(key);        break;
+			case BENCH_DS_GRAPH:  bench_undo_graph_delete(src, dst);    break;
+			}
+			break;
+		case BENCH_VARIANT_ARENA:
+			switch (ds_type) {
+			case BENCH_DS_LIST:   bench_arena_list_delete();             break;
+			case BENCH_DS_RING:   bench_arena_ring_dequeue(idx);        break;
+			case BENCH_DS_TRIE:   bench_arena_trie_delete(key);         break;
+			case BENCH_DS_RBTREE: bench_arena_rbtree_delete(key);       break;
+			case BENCH_DS_GRAPH:  bench_arena_graph_delete(src, dst);   break;
+			}
+			break;
+		case BENCH_VARIANT_KMOD:
+			switch (ds_type) {
+			case BENCH_DS_LIST:   bench_kmod_list_delete();              break;
+			case BENCH_DS_RING:   bench_kmod_ring_dequeue(idx);         break;
+			case BENCH_DS_TRIE:   bench_kmod_trie_delete(key);          break;
+			case BENCH_DS_RBTREE: bench_kmod_rbtree_delete(key);        break;
+			case BENCH_DS_GRAPH:  bench_kmod_graph_delete(src, dst);    break;
+			}
+			break;
 		}
 		break;
 	}
+}
+
+/* Pre-populate the data structure with init_size insert operations. */
+static void call_prefill(int variant, int ds_type, u32 init_size, u32 pool_size)
+{
+	u64 i;
+
+	for (i = 0; i < init_size; i++)
+		call_op(variant, ds_type, BENCH_OP_INSERT, i, pool_size);
 }
 
 /* ------------------------------------------------------------------ */
@@ -658,6 +409,7 @@ struct bench_worker_ctx {
 	int cpu;
 	int variant;
 	int ds_type;
+	int op_type;
 	u32 pool_size;
 	u32 warmup_ms;
 	u32 bench_ms;
@@ -683,7 +435,7 @@ static int bench_worker(void *arg)
 	/* Warmup: run ops but discard stats */
 	t0 = ktime_get();
 	while (ktime_ms_delta(ktime_get(), t0) < ctx->warmup_ms) {
-		call_op(ctx->variant, ctx->ds_type, iter, pool_size);
+		call_op(ctx->variant, ctx->ds_type, ctx->op_type, iter, pool_size);
 		iter++;
 	}
 
@@ -696,7 +448,7 @@ static int bench_worker(void *arg)
 	while (ktime_ms_delta(ktime_get(), t0) < ctx->bench_ms) {
 		u64 t_start = ktime_get_mono_fast_ns();
 
-		call_op(ctx->variant, ctx->ds_type, iter, pool_size);
+		call_op(ctx->variant, ctx->ds_type, ctx->op_type, iter, pool_size);
 
 		u64 lat = ktime_get_mono_fast_ns() - t_start;
 		iter++;
@@ -767,12 +519,18 @@ static int run_benchmark(int variant)
 	/* Call init on the main thread (BPF fentry fires here) */
 	call_init(variant, bench_cfg.ds_type, bench_cfg.pool_size);
 
+	/* Pre-populate with init_size elements so lookup/update/delete find data */
+	if (bench_cfg.init_size)
+		call_prefill(variant, bench_cfg.ds_type,
+			     bench_cfg.init_size, bench_cfg.pool_size);
+
 	cpu = cpumask_first(cpu_online_mask);
 	for (i = 0; i < n; i++) {
 		init_completion(&ctxs[i].done);
 		ctxs[i].cpu       = cpu;
 		ctxs[i].variant   = variant;
 		ctxs[i].ds_type   = bench_cfg.ds_type;
+		ctxs[i].op_type   = bench_cfg.op_type;
 		ctxs[i].pool_size = bench_cfg.pool_size;
 		ctxs[i].warmup_ms = bench_cfg.warmup_ms;
 		ctxs[i].bench_ms  = bench_cfg.bench_ms;
@@ -881,9 +639,13 @@ static long bench_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
 			return -EFAULT;
 		if (p.ds_type > BENCH_DS_GRAPH || p.variant > BENCH_VARIANT_KMOD)
 			return -EINVAL;
+		if (p.op_type > BENCH_OP_DELETE)
+			return -EINVAL;
 		if (!p.num_threads || p.num_threads > BENCH_MAX_CPUS)
 			return -EINVAL;
 		if (!p.pool_size || p.pool_size > KMOD_MAX_POOL)
+			return -EINVAL;
+		if (p.init_size > p.pool_size)
 			return -EINVAL;
 		bench_cfg = p;
 		if (!bench_cfg.warmup_ms) bench_cfg.warmup_ms = 5000;

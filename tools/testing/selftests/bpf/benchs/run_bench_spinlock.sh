@@ -39,10 +39,14 @@ HEADER_PRINTED=0
 run_bench() {
 	local thread="$1"
 	local pool="$2"
+	local op="$3"
+	local init_size="$4"
 
 	"$BENCH" \
 		--threads "$thread" \
 		--pool "$pool" \
+		--op "$op" \
+		--init-size "$init_size" \
 		--warmup-ms 5000 \
 		--bench-ms 15000
 }
@@ -50,7 +54,16 @@ run_bench() {
 {
 	for thread in 1 2 4 8 16 32 64 80 96 112 128; do
 		for pool in 1 8 32 128; do
-			run_bench $thread $pool
+			for op in insert lookup update delete; do
+				# For insert, no prefill; for read/write/delete ops
+				# prefill to full pool capacity.
+				if [ "$op" = "insert" ]; then
+					init_size=0
+				else
+					init_size=$pool
+				fi
+				run_bench "$thread" "$pool" "$op" "$init_size"
+			done
 		done
 	done
 } | awk 'NR==1 || !/^variant/' > "$OUTPUT"

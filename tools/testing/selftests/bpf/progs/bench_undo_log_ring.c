@@ -71,4 +71,57 @@ int BPF_PROG(ring_enqueue, __u64 val)
 	return 0;
 }
 
+/* Read data from slot if valid. 0 undo-log writes. */
+SEC("fentry/bench_undo_ring_lookup")
+int BPF_PROG(ring_lookup, __u32 slot)
+{
+	struct ring_lock_entry *lk;
+	int ret = -1;
+
+	slot %= BENCH_RING_SLOTS;
+	lk = bpf_map_lookup_elem(&ring_locks, &slot);
+	if (!lk)
+		return ret;
+
+	bpf_spin_lock(&lk->lock);
+	if (ring_pool[slot].valid)
+		ret = ring_pool[slot].data;
+	bpf_spin_unlock(&lk->lock);
+	return ret;
+}
+
+/* Overwrite slot data. 1 undo-log write. */
+SEC("fentry/bench_undo_ring_update")
+int BPF_PROG(ring_update, __u32 slot, __u64 val)
+{
+	struct ring_lock_entry *lk;
+
+	slot %= BENCH_RING_SLOTS;
+	lk = bpf_map_lookup_elem(&ring_locks, &slot);
+	if (!lk)
+		return 0;
+
+	bpf_spin_lock(&lk->lock);
+	ring_pool[slot].data = val;	/* 1 undo-log entry */
+	bpf_spin_unlock(&lk->lock);
+	return 0;
+}
+
+/* Mark slot invalid (dequeue). 1 undo-log write. */
+SEC("fentry/bench_undo_ring_dequeue")
+int BPF_PROG(ring_dequeue_op, __u32 slot)
+{
+	struct ring_lock_entry *lk;
+
+	slot %= BENCH_RING_SLOTS;
+	lk = bpf_map_lookup_elem(&ring_locks, &slot);
+	if (!lk)
+		return 0;
+
+	bpf_spin_lock(&lk->lock);
+	ring_pool[slot].valid = 0;	/* 1 undo-log entry */
+	bpf_spin_unlock(&lk->lock);
+	return 0;
+}
+
 char _license[] SEC("license") = "GPL";

@@ -69,6 +69,60 @@ int BPF_PROG(ring_enqueue, __u64 val)
 	return 0;
 }
 
+SEC("fentry/bench_arena_ring_lookup")
+int BPF_PROG(ring_lookup, __u32 slot)
+{
+	unsigned long flags;
+	int ret;
+
+	slot %= BENCH_RING_SLOTS;
+	ret = arena_spin_lock_irqsave(&arena_ring_pool[slot].lock, flags);
+	if (ret) {
+		if (ret == -EOPNOTSUPP)
+			test_skip = 3;
+		return ret;
+	}
+	/* read-only: no writes */
+	arena_spin_unlock_irqrestore(&arena_ring_pool[slot].lock, flags);
+	return 0;
+}
+
+SEC("fentry/bench_arena_ring_update")
+int BPF_PROG(ring_update, __u32 slot, __u64 val)
+{
+	unsigned long flags;
+	int ret;
+
+	slot %= BENCH_RING_SLOTS;
+	ret = arena_spin_lock_irqsave(&arena_ring_pool[slot].lock, flags);
+	if (ret) {
+		if (ret == -EOPNOTSUPP)
+			test_skip = 3;
+		return ret;
+	}
+	arena_ring_pool[slot].data = val;
+	arena_spin_unlock_irqrestore(&arena_ring_pool[slot].lock, flags);
+	return 0;
+}
+
+SEC("fentry/bench_arena_ring_dequeue")
+int BPF_PROG(ring_dequeue_op, __u32 slot)
+{
+	unsigned long flags;
+	int ret;
+
+	slot %= BENCH_RING_SLOTS;
+	ret = arena_spin_lock_irqsave(&arena_ring_pool[slot].lock, flags);
+	if (ret) {
+		if (ret == -EOPNOTSUPP)
+			test_skip = 3;
+		return ret;
+	}
+	arena_ring_pool[slot].valid = 0;
+	arena_spin_unlock_irqrestore(&arena_ring_pool[slot].lock, flags);
+	return 0;
+}
+
 #else
 int test_skip = 2;
 
@@ -77,6 +131,15 @@ int BPF_PROG(ring_init, __u32 num_slots) { return 0; }
 
 SEC("fentry/bench_arena_ring_enqueue")
 int BPF_PROG(ring_enqueue, __u64 val) { return -2; }
+
+SEC("fentry/bench_arena_ring_lookup")
+int BPF_PROG(ring_lookup, __u32 slot) { return -2; }
+
+SEC("fentry/bench_arena_ring_update")
+int BPF_PROG(ring_update, __u32 slot, __u64 val) { return -2; }
+
+SEC("fentry/bench_arena_ring_dequeue")
+int BPF_PROG(ring_dequeue_op, __u32 slot) { return -2; }
 #endif
 
 char _license[] SEC("license") = "GPL";

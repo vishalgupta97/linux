@@ -28,6 +28,11 @@
 #define BENCH_VARIANT_ARENA     1
 #define BENCH_VARIANT_KMOD      2
 
+#define BENCH_OP_INSERT  0
+#define BENCH_OP_LOOKUP  1
+#define BENCH_OP_UPDATE  2
+#define BENCH_OP_DELETE  3
+
 #define BENCH_IOC_MAGIC    'B'
 #define BENCH_MAX_CPUS     256
 #define BENCH_LATENCY_SAMPLES 8192
@@ -38,6 +43,8 @@ struct bench_params {
 	__u32 variant;
 	__u32 num_threads;
 	__u32 pool_size;
+	__u32 init_size;   /* elements pre-inserted before measurement; 0 = no prefill */
+	__u32 op_type;     /* BENCH_OP_* */
 	__u32 warmup_ms;
 	__u32 bench_ms;
 };
@@ -112,7 +119,7 @@ struct bench_graph_edge {
 /* ------------------------------------------------------------------ */
 
 #define BENCH_CSV_HEADER \
-	"variant,ds,threads,pool_size,total_ops,ops_per_sec," \
+	"variant,ds,op,threads,pool_size,init_size,total_ops,ops_per_sec," \
 	"avg_lat_ns,p50_lat_ns,p95_lat_ns,p99_lat_ns\n"
 
 #if !defined(__BPF__)
@@ -128,6 +135,13 @@ static const char * const bench_variant_names[] = {
 	[BENCH_VARIANT_UNDO_LOG] = "undo_log",
 	[BENCH_VARIANT_ARENA]    = "arena",
 	[BENCH_VARIANT_KMOD]     = "kmod",
+};
+
+static const char * const bench_op_names[] = {
+	[BENCH_OP_INSERT] = "insert",
+	[BENCH_OP_LOOKUP] = "lookup",
+	[BENCH_OP_UPDATE] = "update",
+	[BENCH_OP_DELETE] = "delete",
 };
 #endif /* !__BPF__ */
 

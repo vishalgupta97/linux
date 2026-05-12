@@ -80,4 +80,78 @@ int BPF_PROG(list_insert, __u32 new_idx, __u32 head_lock_idx)
 	return 0;
 }
 
+/* Traverse from head, read data at position (idx % pool_size). 0 undo-log writes. */
+SEC("fentry/bench_undo_list_lookup")
+int BPF_PROG(list_lookup, __u32 idx)
+{
+	struct list_lock_entry *hl;
+	__u32 key0 = 0;
+	__u32 cur;
+	int i;
+
+	hl = bpf_map_lookup_elem(&list_locks, &key0);
+	if (!hl)
+		return 0;
+
+	bpf_spin_lock(&hl->lock);
+	cur = list_head_idx;
+	bpf_for(i, 0, BENCH_MAX_POOL) {
+		if (cur == (__u32)~0)
+			break;
+		if ((__u32)i == idx % BENCH_MAX_POOL)
+			break;
+		cur = list_pool[cur].next_idx;
+	}
+	bpf_spin_unlock(&hl->lock);
+	return 0;
+}
+
+/* Traverse to position (idx % pool_size) and write data. 1 undo-log write. */
+SEC("fentry/bench_undo_list_update")
+int BPF_PROG(list_update, __u32 idx, __u64 val)
+{
+	struct list_lock_entry *hl;
+	__u32 key0 = 0;
+	__u32 cur;
+	int i;
+
+	hl = bpf_map_lookup_elem(&list_locks, &key0);
+	if (!hl)
+		return 0;
+
+	bpf_spin_lock(&hl->lock);
+	cur = list_head_idx;
+	bpf_for(i, 0, BENCH_MAX_POOL) {
+		if (cur == (__u32)~0)
+			break;
+		if ((__u32)i == idx % BENCH_MAX_POOL) {
+			list_pool[cur].data = val;	/* 1 undo-log entry */
+			break;
+		}
+		cur = list_pool[cur].next_idx;
+	}
+	bpf_spin_unlock(&hl->lock);
+	return 0;
+}
+
+/* Remove the head node. 1 undo-log write. No-op when list is empty. */
+SEC("fentry/bench_undo_list_delete")
+int BPF_PROG(list_delete_op)
+{
+	struct list_lock_entry *hl;
+	__u32 key0 = 0;
+	__u32 head;
+
+	hl = bpf_map_lookup_elem(&list_locks, &key0);
+	if (!hl)
+		return 0;
+
+	bpf_spin_lock(&hl->lock);
+	head = list_head_idx;
+	if (head != (__u32)~0)
+		list_head_idx = list_pool[head].next_idx;	/* 1 undo-log entry */
+	bpf_spin_unlock(&hl->lock);
+	return 0;
+}
+
 char _license[] SEC("license") = "GPL";

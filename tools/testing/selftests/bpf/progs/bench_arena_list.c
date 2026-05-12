@@ -76,6 +76,80 @@ int BPF_PROG(list_insert, __u32 new_idx, __u32 head_lock_idx)
 	return 0;
 }
 
+SEC("fentry/bench_arena_list_lookup")
+int BPF_PROG(list_lookup, __u32 idx)
+{
+	unsigned long flags;
+	int ret;
+	__u32 cur;
+	int i;
+
+	ret = arena_spin_lock_irqsave(&arena_list_pool[0].lock, flags);
+	if (ret) {
+		if (ret == -EOPNOTSUPP)
+			test_skip = 3;
+		return ret;
+	}
+	cur = arena_list_head_idx;
+	bpf_for(i, 0, BENCH_MAX_POOL) {
+		if (cur == (__u32)~0)
+			break;
+		if ((__u32)i == idx % BENCH_MAX_POOL)
+			break;
+		cur = arena_list_pool[cur].next_idx;
+	}
+	arena_spin_unlock_irqrestore(&arena_list_pool[0].lock, flags);
+	return 0;
+}
+
+SEC("fentry/bench_arena_list_update")
+int BPF_PROG(list_update, __u32 idx, __u64 val)
+{
+	unsigned long flags;
+	int ret;
+	__u32 cur;
+	int i;
+
+	ret = arena_spin_lock_irqsave(&arena_list_pool[0].lock, flags);
+	if (ret) {
+		if (ret == -EOPNOTSUPP)
+			test_skip = 3;
+		return ret;
+	}
+	cur = arena_list_head_idx;
+	bpf_for(i, 0, BENCH_MAX_POOL) {
+		if (cur == (__u32)~0)
+			break;
+		if ((__u32)i == idx % BENCH_MAX_POOL) {
+			arena_list_pool[cur].data = val;
+			break;
+		}
+		cur = arena_list_pool[cur].next_idx;
+	}
+	arena_spin_unlock_irqrestore(&arena_list_pool[0].lock, flags);
+	return 0;
+}
+
+SEC("fentry/bench_arena_list_delete")
+int BPF_PROG(list_delete_op)
+{
+	unsigned long flags;
+	int ret;
+	__u32 head;
+
+	ret = arena_spin_lock_irqsave(&arena_list_pool[0].lock, flags);
+	if (ret) {
+		if (ret == -EOPNOTSUPP)
+			test_skip = 3;
+		return ret;
+	}
+	head = arena_list_head_idx;
+	if (head != (__u32)~0)
+		arena_list_head_idx = arena_list_pool[head].next_idx;
+	arena_spin_unlock_irqrestore(&arena_list_pool[0].lock, flags);
+	return 0;
+}
+
 #else
 int test_skip = 2;
 
@@ -84,6 +158,15 @@ int BPF_PROG(list_init, __u32 pool_size) { return 0; }
 
 SEC("fentry/bench_arena_list_insert")
 int BPF_PROG(list_insert, __u32 new_idx, __u32 head_lock_idx) { return -2; }
+
+SEC("fentry/bench_arena_list_lookup")
+int BPF_PROG(list_lookup, __u32 idx) { return -2; }
+
+SEC("fentry/bench_arena_list_update")
+int BPF_PROG(list_update, __u32 idx, __u64 val) { return -2; }
+
+SEC("fentry/bench_arena_list_delete")
+int BPF_PROG(list_delete_op) { return -2; }
 #endif
 
 char _license[] SEC("license") = "GPL";

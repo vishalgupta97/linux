@@ -91,6 +91,99 @@ out:
 	return 0;
 }
 
+SEC("fentry/bench_arena_trie_lookup")
+int BPF_PROG(trie_lookup, __u64 key)
+{
+	unsigned long flags;
+	int ret, depth;
+	__u32 cur;
+
+	ret = arena_spin_lock_irqsave(&arena_trie_lock, flags);
+	if (ret) {
+		if (ret == -EOPNOTSUPP)
+			test_skip = 3;
+		return ret;
+	}
+	cur = arena_trie_root;
+	bpf_for(depth, 0, 64) {
+		int bit = (int)((key >> (63 - depth)) & 1);
+
+		if (!cur)
+			break;
+		if (!arena_trie_pool[cur].child[0] && !arena_trie_pool[cur].child[1])
+			break;
+		cur = arena_trie_pool[cur].child[bit];
+	}
+	arena_spin_unlock_irqrestore(&arena_trie_lock, flags);
+	return 0;
+}
+
+SEC("fentry/bench_arena_trie_update")
+int BPF_PROG(trie_update, __u64 key, __u64 val)
+{
+	unsigned long flags;
+	int ret, depth;
+	__u32 cur;
+
+	ret = arena_spin_lock_irqsave(&arena_trie_lock, flags);
+	if (ret) {
+		if (ret == -EOPNOTSUPP)
+			test_skip = 3;
+		return ret;
+	}
+	cur = arena_trie_root;
+	bpf_for(depth, 0, 64) {
+		int bit = (int)((key >> (63 - depth)) & 1);
+
+		if (!cur)
+			break;
+		if (!arena_trie_pool[cur].child[0] && !arena_trie_pool[cur].child[1]) {
+			arena_trie_pool[cur].val = val;
+			break;
+		}
+		cur = arena_trie_pool[cur].child[bit];
+	}
+	arena_spin_unlock_irqrestore(&arena_trie_lock, flags);
+	return 0;
+}
+
+SEC("fentry/bench_arena_trie_delete")
+int BPF_PROG(trie_delete_op, __u64 key)
+{
+	unsigned long flags;
+	int ret, depth, dir = 0;
+	__u32 cur, parent;
+
+	ret = arena_spin_lock_irqsave(&arena_trie_lock, flags);
+	if (ret) {
+		if (ret == -EOPNOTSUPP)
+			test_skip = 3;
+		return ret;
+	}
+	cur    = arena_trie_root;
+	parent = 0;
+	bpf_for(depth, 0, 64) {
+		int bit = (int)((key >> (63 - depth)) & 1);
+
+		if (!cur)
+			break;
+		if (!arena_trie_pool[cur].child[0] && !arena_trie_pool[cur].child[1]) {
+			arena_trie_pool[cur].key_bit = 0;
+			arena_trie_pool[cur].val     = 0;
+			if (parent)
+				arena_trie_pool[parent].child[dir] = 0;
+			else
+				arena_trie_root = 0;
+			break;
+		}
+		parent = cur;
+		dir    = bit;
+		cur    = arena_trie_pool[cur].child[bit];
+	}
+	arena_spin_unlock_irqrestore(&arena_trie_lock, flags);
+	return 0;
+}
+
 #else
 int test_skip = 2;
 
@@ -99,6 +192,15 @@ int BPF_PROG(trie_init, __u32 pool_size) { return 0; }
 
 SEC("fentry/bench_arena_trie_insert")
 int BPF_PROG(trie_insert, __u64 key, __u64 val) { return -2; }
+
+SEC("fentry/bench_arena_trie_lookup")
+int BPF_PROG(trie_lookup, __u64 key) { return -2; }
+
+SEC("fentry/bench_arena_trie_update")
+int BPF_PROG(trie_update, __u64 key, __u64 val) { return -2; }
+
+SEC("fentry/bench_arena_trie_delete")
+int BPF_PROG(trie_delete_op, __u64 key) { return -2; }
 #endif
 
 char _license[] SEC("license") = "GPL";

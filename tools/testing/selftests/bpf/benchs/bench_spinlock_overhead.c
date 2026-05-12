@@ -10,12 +10,14 @@
  *   bench_spinlock [OPTIONS]
  *
  * Options:
- *   --ds <list|ring|trie|rbtree|graph|all>   (default: all)
- *   --variant <undo_log|arena|kmod|all>      (default: all)
- *   --threads <N>                            (default: nproc)
- *   --pool <N>                               (default: 256)
- *   --warmup-ms <N>                          (default: 5000)
- *   --bench-ms <N>                           (default: 15000)
+ *   --ds <list|ring|trie|rbtree|graph|all>          (default: all)
+ *   --variant <undo_log|arena|kmod|all>             (default: all)
+ *   --op <insert|lookup|update|delete|all>          (default: all)
+ *   --threads <N>                                   (default: nproc)
+ *   --pool <N>                                      (default: 256)
+ *   --init-size <N>  elements pre-populated before  (default: 0 = no prefill)
+ *   --warmup-ms <N>                                 (default: 5000)
+ *   --bench-ms <N>                                  (default: 15000)
  */
 
 #define _GNU_SOURCE
@@ -66,14 +68,18 @@ struct bench_arena_ring_slot { struct __qspinlock lock; __u64 data; __u32 valid;
 static struct {
 	int ds_mask;       /* bitmask of BENCH_DS_* values */
 	int variant_mask;  /* bitmask of BENCH_VARIANT_* values */
+	int op_mask;       /* bitmask of BENCH_OP_* values */
 	__u32 num_threads;
 	__u32 pool_size;
+	__u32 init_size;   /* 0 = no prefill */
 	__u32 warmup_ms;
 	__u32 bench_ms;
 } cfg = {
 	.ds_mask      = (1 << 5) - 1,   /* all DS */
 	.variant_mask = (1 << 3) - 1,   /* all variants */
+	.op_mask      = (1 << 4) - 1,   /* all ops */
 	.pool_size    = 256,
+	.init_size    = 0,
 	.warmup_ms    = 5000,
 	.bench_ms     = 15000,
 };
@@ -178,8 +184,8 @@ static void write_sysctl(const char *path, int val)
 /* Result printing                                                     */
 /* ------------------------------------------------------------------ */
 
-static void print_csv_row(int variant, int ds,
-			  __u32 threads, __u32 pool,
+static void print_csv_row(int variant, int ds, int op,
+			  __u32 threads, __u32 pool, __u32 init_size,
 			  __u32 bench_ms,
 			  const struct bench_all_results *r)
 {
@@ -188,11 +194,13 @@ static void print_csv_row(int variant, int ds,
 		? (double)r->total_lat_sum_ns / (double)r->total_ops
 		: 0.0;
 
-	printf("%s,%s,%u,%u,%llu,%.0f,%.1f,%llu,%llu,%llu\n",
+	printf("%s,%s,%s,%u,%u,%u,%llu,%.0f,%.1f,%llu,%llu,%llu\n",
 	       bench_variant_names[variant],
 	       bench_ds_names[ds],
+	       bench_op_names[op],
 	       threads,
 	       pool,
+	       init_size,
 	       (unsigned long long)r->total_ops,
 	       ops_per_sec,
 	       avg_lat_ns,
@@ -201,8 +209,9 @@ static void print_csv_row(int variant, int ds,
 	       (unsigned long long)r->p99_lat_ns);
 }
 
-static int collect_and_print(int fd, int variant, int ds,
-			     __u32 threads, __u32 pool, __u32 bench_ms)
+static int collect_and_print(int fd, int variant, int ds, int op,
+			     __u32 threads, __u32 pool, __u32 init_size,
+			     __u32 bench_ms)
 {
 	struct bench_all_results res = {};
 
@@ -210,7 +219,7 @@ static int collect_and_print(int fd, int variant, int ds,
 		fprintf(stderr, "GET_RESULTS failed: %s\n", strerror(errno));
 		return -1;
 	}
-	print_csv_row(variant, ds, threads, pool, bench_ms, &res);
+	print_csv_row(variant, ds, op, threads, pool, init_size, bench_ms, &res);
 	return 0;
 }
 
@@ -218,44 +227,46 @@ static int collect_and_print(int fd, int variant, int ds,
 /* Run one (variant, ds) combination                                   */
 /* ------------------------------------------------------------------ */
 
-static void run_one(int fd, int variant, int ds,
+static void run_one(int fd, int variant, int ds, int op,
 		    struct bench_params *base_p)
 {
 	struct bench_params p = *base_p;
 	int skip = 0;
 	int ret  = 0;
 
-	p.variant = (__u32)variant;
-	p.ds_type = (__u32)ds;
+	p.variant  = (__u32)variant;
+	p.ds_type  = (__u32)ds;
+	p.op_type  = (__u32)op;
+	p.init_size = base_p->init_size;
 
 	switch (variant) {
 	case BENCH_VARIANT_UNDO_LOG:
 		switch (ds) {
 		case BENCH_DS_LIST:
-			ret = RUN_UNDO_LOG_BENCH(list,   BENCH_DS_LIST,   fd, base_p); break;
+			ret = RUN_UNDO_LOG_BENCH(list,   BENCH_DS_LIST,   fd, &p); break;
 		case BENCH_DS_RING:
-			ret = RUN_UNDO_LOG_BENCH(ring,   BENCH_DS_RING,   fd, base_p); break;
+			ret = RUN_UNDO_LOG_BENCH(ring,   BENCH_DS_RING,   fd, &p); break;
 		case BENCH_DS_TRIE:
-			ret = RUN_UNDO_LOG_BENCH(trie,   BENCH_DS_TRIE,   fd, base_p); break;
+			ret = RUN_UNDO_LOG_BENCH(trie,   BENCH_DS_TRIE,   fd, &p); break;
 		case BENCH_DS_RBTREE:
-			ret = RUN_UNDO_LOG_BENCH(rbtree, BENCH_DS_RBTREE, fd, base_p); break;
+			ret = RUN_UNDO_LOG_BENCH(rbtree, BENCH_DS_RBTREE, fd, &p); break;
 		case BENCH_DS_GRAPH:
-			ret = RUN_UNDO_LOG_BENCH(graph,  BENCH_DS_GRAPH,  fd, base_p); break;
+			ret = RUN_UNDO_LOG_BENCH(graph,  BENCH_DS_GRAPH,  fd, &p); break;
 		}
 		break;
 
 	case BENCH_VARIANT_ARENA:
 		switch (ds) {
 		case BENCH_DS_LIST:
-			ret = RUN_ARENA_BENCH(list,   BENCH_DS_LIST,   fd, base_p, &skip); break;
+			ret = RUN_ARENA_BENCH(list,   BENCH_DS_LIST,   fd, &p, &skip); break;
 		case BENCH_DS_RING:
-			ret = RUN_ARENA_BENCH(ring,   BENCH_DS_RING,   fd, base_p, &skip); break;
+			ret = RUN_ARENA_BENCH(ring,   BENCH_DS_RING,   fd, &p, &skip); break;
 		case BENCH_DS_TRIE:
-			ret = RUN_ARENA_BENCH(trie,   BENCH_DS_TRIE,   fd, base_p, &skip); break;
+			ret = RUN_ARENA_BENCH(trie,   BENCH_DS_TRIE,   fd, &p, &skip); break;
 		case BENCH_DS_RBTREE:
-			ret = RUN_ARENA_BENCH(rbtree, BENCH_DS_RBTREE, fd, base_p, &skip); break;
+			ret = RUN_ARENA_BENCH(rbtree, BENCH_DS_RBTREE, fd, &p, &skip); break;
 		case BENCH_DS_GRAPH:
-			ret = RUN_ARENA_BENCH(graph,  BENCH_DS_GRAPH,  fd, base_p, &skip); break;
+			ret = RUN_ARENA_BENCH(graph,  BENCH_DS_GRAPH,  fd, &p, &skip); break;
 		}
 		if (ret == -2) {
 			fprintf(stderr, "SKIP: arena/%s — test_skip=%d (%s)\n",
@@ -279,9 +290,9 @@ static void run_one(int fd, int variant, int ds,
 	}
 
 	if (!ret)
-		collect_and_print(fd, variant, ds,
+		collect_and_print(fd, variant, ds, op,
 				  base_p->num_threads, base_p->pool_size,
-				  base_p->bench_ms);
+				  base_p->init_size, base_p->bench_ms);
 }
 
 /* ------------------------------------------------------------------ */
@@ -291,8 +302,10 @@ static void run_one(int fd, int variant, int ds,
 static struct option long_opts[] = {
 	{ "ds",         required_argument, NULL, 'd' },
 	{ "variant",    required_argument, NULL, 'v' },
+	{ "op",         required_argument, NULL, 'o' },
 	{ "threads",    required_argument, NULL, 't' },
 	{ "pool",       required_argument, NULL, 'p' },
+	{ "init-size",  required_argument, NULL, 'i' },
 	{ "warmup-ms",  required_argument, NULL, 'w' },
 	{ "bench-ms",   required_argument, NULL, 'b' },
 	{ "help",       no_argument,       NULL, 'h' },
@@ -303,12 +316,14 @@ static void usage(const char *prog)
 {
 	fprintf(stderr,
 		"Usage: %s [OPTIONS]\n"
-		"  --ds <list|ring|trie|rbtree|graph|all>  (default: all)\n"
-		"  --variant <undo_log|arena|kmod|all>     (default: all)\n"
-		"  --threads <N>    (default: nproc)\n"
-		"  --pool <N>       (default: 256)\n"
-		"  --warmup-ms <N>  (default: 5000)\n"
-		"  --bench-ms <N>   (default: 15000)\n",
+		"  --ds <list|ring|trie|rbtree|graph|all>          (default: all)\n"
+		"  --variant <undo_log|arena|kmod|all>             (default: all)\n"
+		"  --op <insert|lookup|update|delete|all>          (default: all)\n"
+		"  --threads <N>       (default: nproc)\n"
+		"  --pool <N>          (default: 256)\n"
+		"  --init-size <N>     elements pre-inserted       (default: 0)\n"
+		"  --warmup-ms <N>     (default: 5000)\n"
+		"  --bench-ms <N>      (default: 15000)\n",
 		prog);
 }
 
@@ -353,8 +368,25 @@ int main(int argc, char **argv)
 				return 1;
 			}
 			break;
+		case 'o':
+			if (!strcmp(optarg, "all")) {
+				cfg.op_mask = (1 << 4) - 1;
+			} else if (!strcmp(optarg, "insert")) {
+				cfg.op_mask = 1 << BENCH_OP_INSERT;
+			} else if (!strcmp(optarg, "lookup")) {
+				cfg.op_mask = 1 << BENCH_OP_LOOKUP;
+			} else if (!strcmp(optarg, "update")) {
+				cfg.op_mask = 1 << BENCH_OP_UPDATE;
+			} else if (!strcmp(optarg, "delete")) {
+				cfg.op_mask = 1 << BENCH_OP_DELETE;
+			} else {
+				fprintf(stderr, "unknown op: %s\n", optarg);
+				return 1;
+			}
+			break;
 		case 't': cfg.num_threads = (__u32)atoi(optarg); break;
 		case 'p': cfg.pool_size   = (__u32)atoi(optarg); break;
+		case 'i': cfg.init_size   = (__u32)atoi(optarg); break;
 		case 'w': cfg.warmup_ms   = (__u32)atoi(optarg); break;
 		case 'b': cfg.bench_ms    = (__u32)atoi(optarg); break;
 		case 'h': usage(argv[0]); return 0;
@@ -377,23 +409,30 @@ int main(int argc, char **argv)
 	/* Build the base params struct */
 	base_p.num_threads = cfg.num_threads;
 	base_p.pool_size   = cfg.pool_size;
+	base_p.init_size   = cfg.init_size;
 	base_p.warmup_ms   = cfg.warmup_ms;
 	base_p.bench_ms    = cfg.bench_ms;
 
 	/* Print CSV header */
 	fputs(BENCH_CSV_HEADER, stdout);
 
-	/* Run all requested (variant, ds) combinations */
+	/* Run all requested (variant, ds, op) combinations */
 	for (int v = 0; v < 3; v++) {
 		if (!(cfg.variant_mask & (1 << v)))
 			continue;
 		for (int d = 0; d < 5; d++) {
 			if (!(cfg.ds_mask & (1 << d)))
 				continue;
-			fprintf(stderr, "Running %s/%s ...\n",
-				bench_variant_names[v], bench_ds_names[d]);
-			run_one(fd, v, d, &base_p);
-			fflush(stdout);
+			for (int o = 0; o < 4; o++) {
+				if (!(cfg.op_mask & (1 << o)))
+					continue;
+				fprintf(stderr, "Running %s/%s/%s ...\n",
+					bench_variant_names[v],
+					bench_ds_names[d],
+					bench_op_names[o]);
+				run_one(fd, v, d, o, &base_p);
+				fflush(stdout);
+			}
 		}
 	}
 

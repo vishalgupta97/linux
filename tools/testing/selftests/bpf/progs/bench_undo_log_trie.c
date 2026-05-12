@@ -99,4 +99,100 @@ out:
 	return 0;
 }
 
+/* Follow bits of key from MSB; return val at leaf. 0 undo-log writes. */
+SEC("fentry/bench_undo_trie_lookup")
+int BPF_PROG(trie_lookup, __u64 key)
+{
+	struct trie_global_lock *g;
+	__u32 key0 = 0;
+	__u32 cur;
+	int depth;
+
+	g = bpf_map_lookup_elem(&trie_lock, &key0);
+	if (!g)
+		return 0;
+
+	bpf_spin_lock(&g->lock);
+	cur = trie_root;
+	bpf_for(depth, 0, 64) {
+		int bit = (int)((key >> (63 - depth)) & 1);
+
+		if (!cur)
+			break;
+		if (!trie_pool[cur].child[0] && !trie_pool[cur].child[1])
+			break;
+		cur = trie_pool[cur].child[bit];
+	}
+	bpf_spin_unlock(&g->lock);
+	return 0;
+}
+
+/* Same traversal; write val at leaf. 1 undo-log write. */
+SEC("fentry/bench_undo_trie_update")
+int BPF_PROG(trie_update, __u64 key, __u64 val)
+{
+	struct trie_global_lock *g;
+	__u32 key0 = 0;
+	__u32 cur;
+	int depth;
+
+	g = bpf_map_lookup_elem(&trie_lock, &key0);
+	if (!g)
+		return 0;
+
+	bpf_spin_lock(&g->lock);
+	cur = trie_root;
+	bpf_for(depth, 0, 64) {
+		int bit = (int)((key >> (63 - depth)) & 1);
+
+		if (!cur)
+			break;
+		if (!trie_pool[cur].child[0] && !trie_pool[cur].child[1]) {
+			trie_pool[cur].val = val;	/* 1 undo-log entry */
+			break;
+		}
+		cur = trie_pool[cur].child[bit];
+	}
+	bpf_spin_unlock(&g->lock);
+	return 0;
+}
+
+/* Find the leaf and zero it + unlink from parent. 2–3 undo-log writes. */
+SEC("fentry/bench_undo_trie_delete")
+int BPF_PROG(trie_delete_op, __u64 key)
+{
+	struct trie_global_lock *g;
+	__u32 key0 = 0;
+	__u32 cur, parent;
+	int dir = 0, depth;
+
+	g = bpf_map_lookup_elem(&trie_lock, &key0);
+	if (!g)
+		return 0;
+
+	bpf_spin_lock(&g->lock);
+	cur    = trie_root;
+	parent = 0;
+	bpf_for(depth, 0, 64) {
+		int bit = (int)((key >> (63 - depth)) & 1);
+
+		if (!cur)
+			break;
+		if (!trie_pool[cur].child[0] && !trie_pool[cur].child[1]) {
+			trie_pool[cur].key_bit = 0;	/* 1 undo-log entry */
+			trie_pool[cur].val     = 0;	/* 1 undo-log entry */
+			if (parent)
+				trie_pool[parent].child[dir] = 0;	/* 1 undo-log */
+			else
+				trie_root = 0;			/* 1 undo-log */
+			break;
+		}
+		parent = cur;
+		dir    = bit;
+		cur    = trie_pool[cur].child[bit];
+	}
+	bpf_spin_unlock(&g->lock);
+	return 0;
+}
+
 char _license[] SEC("license") = "GPL";

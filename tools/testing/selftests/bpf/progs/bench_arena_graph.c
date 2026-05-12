@@ -79,6 +79,99 @@ out:
 	return 0;
 }
 
+SEC("fentry/bench_arena_graph_lookup")
+int BPF_PROG(graph_lookup, __u32 src, __u32 dst)
+{
+	unsigned long flags;
+	int ret, depth;
+	__u32 e;
+
+	if (src >= BENCH_MAX_POOL)
+		return 0;
+
+	ret = arena_spin_lock_irqsave(&arena_graph_lock, flags);
+	if (ret) {
+		if (ret == -EOPNOTSUPP)
+			test_skip = 3;
+		return ret;
+	}
+	e = arena_graph_nodes[src].first_edge;
+	bpf_for(depth, 0, BENCH_MAX_POOL) {
+		if (e >= BENCH_MAX_POOL)
+			break;
+		if (arena_graph_edges[e].dst == dst)
+			break;
+		e = arena_graph_edges[e].next_out;
+	}
+	arena_spin_unlock_irqrestore(&arena_graph_lock, flags);
+	return 0;
+}
+
+SEC("fentry/bench_arena_graph_update")
+int BPF_PROG(graph_update, __u32 src, __u32 dst, __u64 weight)
+{
+	unsigned long flags;
+	int ret, depth;
+	__u32 e;
+
+	if (src >= BENCH_MAX_POOL)
+		return 0;
+
+	ret = arena_spin_lock_irqsave(&arena_graph_lock, flags);
+	if (ret) {
+		if (ret == -EOPNOTSUPP)
+			test_skip = 3;
+		return ret;
+	}
+	e = arena_graph_nodes[src].first_edge;
+	bpf_for(depth, 0, BENCH_MAX_POOL) {
+		if (e >= BENCH_MAX_POOL)
+			break;
+		if (arena_graph_edges[e].dst == dst) {
+			arena_graph_edges[e].weight = weight;
+			break;
+		}
+		e = arena_graph_edges[e].next_out;
+	}
+	arena_spin_unlock_irqrestore(&arena_graph_lock, flags);
+	return 0;
+}
+
+SEC("fentry/bench_arena_graph_delete")
+int BPF_PROG(graph_delete_op, __u32 src, __u32 dst)
+{
+	unsigned long flags;
+	int ret, depth;
+	__u32 e, prev;
+
+	if (src >= BENCH_MAX_POOL)
+		return 0;
+
+	ret = arena_spin_lock_irqsave(&arena_graph_lock, flags);
+	if (ret) {
+		if (ret == -EOPNOTSUPP)
+			test_skip = 3;
+		return ret;
+	}
+	e    = arena_graph_nodes[src].first_edge;
+	prev = (__u32)~0;
+	bpf_for(depth, 0, BENCH_MAX_POOL) {
+		if (e >= BENCH_MAX_POOL)
+			break;
+		if (arena_graph_edges[e].dst == dst) {
+			if (prev == (__u32)~0)
+				arena_graph_nodes[src].first_edge = arena_graph_edges[e].next_out;
+			else
+				arena_graph_edges[prev].next_out  = arena_graph_edges[e].next_out;
+			break;
+		}
+		prev = e;
+		e    = arena_graph_edges[e].next_out;
+	}
+	arena_spin_unlock_irqrestore(&arena_graph_lock, flags);
+	return 0;
+}
+
 #else
 int test_skip = 2;
 
@@ -87,6 +180,15 @@ int BPF_PROG(graph_init, __u32 num_nodes, __u32 num_edges) { return 0; }
 
 SEC("fentry/bench_arena_graph_add_edge")
 int BPF_PROG(graph_add_edge, __u32 src, __u32 dst, __u64 weight) { return -2; }
+
+SEC("fentry/bench_arena_graph_lookup")
+int BPF_PROG(graph_lookup, __u32 src, __u32 dst) { return -2; }
+
+SEC("fentry/bench_arena_graph_update")
+int BPF_PROG(graph_update, __u32 src, __u32 dst, __u64 weight) { return -2; }
+
+SEC("fentry/bench_arena_graph_delete")
+int BPF_PROG(graph_delete_op, __u32 src, __u32 dst) { return -2; }
 #endif
 
 char _license[] SEC("license") = "GPL";

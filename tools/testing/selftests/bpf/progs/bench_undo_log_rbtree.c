@@ -207,4 +207,91 @@ out:
 	return 0;
 }
 
+/* BST search for key; return val if found. 0 undo-log writes. */
+SEC("fentry/bench_undo_rbtree_lookup")
+int BPF_PROG(rbtree_lookup, __u64 key)
+{
+	struct rb_global_lock *g;
+	__u32 key0 = 0;
+	__u32 cur;
+	int _d;
+
+	g = bpf_map_lookup_elem(&rb_lock, &key0);
+	if (!g)
+		return 0;
+
+	bpf_spin_lock(&g->lock);
+	cur = rb_root;
+	bpf_for(_d, 0, BENCH_MAX_POOL) {
+		if (!cur)
+			break;
+		if (key == rb_pool[cur].key)
+			break;
+		cur = (key < rb_pool[cur].key) ? rb_pool[cur].left : rb_pool[cur].right;
+	}
+	bpf_spin_unlock(&g->lock);
+	return 0;
+}
+
+/* BST search; overwrite val at the matching node. 1 undo-log write. */
+SEC("fentry/bench_undo_rbtree_update")
+int BPF_PROG(rbtree_update, __u64 key, __u64 val)
+{
+	struct rb_global_lock *g;
+	__u32 key0 = 0;
+	__u32 cur;
+	int _d;
+
+	g = bpf_map_lookup_elem(&rb_lock, &key0);
+	if (!g)
+		return 0;
+
+	bpf_spin_lock(&g->lock);
+	cur = rb_root;
+	bpf_for(_d, 0, BENCH_MAX_POOL) {
+		if (!cur)
+			break;
+		if (key == rb_pool[cur].key) {
+			rb_pool[cur].val = val;		/* 1 undo-log entry */
+			break;
+		}
+		cur = (key < rb_pool[cur].key) ? rb_pool[cur].left : rb_pool[cur].right;
+	}
+	bpf_spin_unlock(&g->lock);
+	return 0;
+}
+
+/*
+ * Lazy delete: find the node and zero key + val + color.
+ * 3 undo-log writes (avoids full Cormen fixup complexity in BPF verifier).
+ */
+SEC("fentry/bench_undo_rbtree_delete")
+int BPF_PROG(rbtree_delete_op, __u64 key)
+{
+	struct rb_global_lock *g;
+	__u32 key0 = 0;
+	__u32 cur;
+	int _d;
+
+	g = bpf_map_lookup_elem(&rb_lock, &key0);
+	if (!g)
+		return 0;
+
+	bpf_spin_lock(&g->lock);
+	cur = rb_root;
+	bpf_for(_d, 0, BENCH_MAX_POOL) {
+		if (!cur)
+			break;
+		if (key == rb_pool[cur].key) {
+			rb_pool[cur].key   = 0;		/* 1 undo-log entry */
+			rb_pool[cur].val   = 0;		/* 1 undo-log entry */
+			rb_pool[cur].color = BENCH_RB_BLACK;	/* 1 undo-log entry */
+			break;
+		}
+		cur = (key < rb_pool[cur].key) ? rb_pool[cur].left : rb_pool[cur].right;
+	}
+	bpf_spin_unlock(&g->lock);
+	return 0;
+}
+
 char _license[] SEC("license") = "GPL";

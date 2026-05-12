@@ -190,6 +190,91 @@ out:
 	return 0;
 }
 
+SEC("fentry/bench_arena_rbtree_lookup")
+int BPF_PROG(rbtree_lookup, __u64 key)
+{
+	unsigned long flags;
+	int ret, _d;
+	__u32 cur;
+
+	ret = arena_spin_lock_irqsave(&arena_rb_lock, flags);
+	if (ret) {
+		if (ret == -EOPNOTSUPP)
+			test_skip = 3;
+		return ret;
+	}
+	cur = arena_rb_root;
+	bpf_for(_d, 0, BENCH_MAX_POOL) {
+		if (!cur)
+			break;
+		if (key == arena_rb_pool[cur].key)
+			break;
+		cur = (key < arena_rb_pool[cur].key)
+			? arena_rb_pool[cur].left : arena_rb_pool[cur].right;
+	}
+	arena_spin_unlock_irqrestore(&arena_rb_lock, flags);
+	return 0;
+}
+
+SEC("fentry/bench_arena_rbtree_update")
+int BPF_PROG(rbtree_update, __u64 key, __u64 val)
+{
+	unsigned long flags;
+	int ret, _d;
+	__u32 cur;
+
+	ret = arena_spin_lock_irqsave(&arena_rb_lock, flags);
+	if (ret) {
+		if (ret == -EOPNOTSUPP)
+			test_skip = 3;
+		return ret;
+	}
+	cur = arena_rb_root;
+	bpf_for(_d, 0, BENCH_MAX_POOL) {
+		if (!cur)
+			break;
+		if (key == arena_rb_pool[cur].key) {
+			arena_rb_pool[cur].val = val;
+			break;
+		}
+		cur = (key < arena_rb_pool[cur].key)
+			? arena_rb_pool[cur].left : arena_rb_pool[cur].right;
+	}
+	arena_spin_unlock_irqrestore(&arena_rb_lock, flags);
+	return 0;
+}
+
+/* Lazy delete: find node, zero key/val/color. 3 writes. */
+SEC("fentry/bench_arena_rbtree_delete")
+int BPF_PROG(rbtree_delete_op, __u64 key)
+{
+	unsigned long flags;
+	int ret, _d;
+	__u32 cur;
+
+	ret = arena_spin_lock_irqsave(&arena_rb_lock, flags);
+	if (ret) {
+		if (ret == -EOPNOTSUPP)
+			test_skip = 3;
+		return ret;
+	}
+	cur = arena_rb_root;
+	bpf_for(_d, 0, BENCH_MAX_POOL) {
+		if (!cur)
+			break;
+		if (key == arena_rb_pool[cur].key) {
+			arena_rb_pool[cur].key   = 0;
+			arena_rb_pool[cur].val   = 0;
+			arena_rb_pool[cur].color = BENCH_RB_BLACK;
+			break;
+		}
+		cur = (key < arena_rb_pool[cur].key)
+			? arena_rb_pool[cur].left : arena_rb_pool[cur].right;
+	}
+	arena_spin_unlock_irqrestore(&arena_rb_lock, flags);
+	return 0;
+}
+
 #else
 int test_skip = 2;
 
@@ -198,6 +283,15 @@ int BPF_PROG(rbtree_init, __u32 pool_size) { return 0; }
 
 SEC("fentry/bench_arena_rbtree_insert")
 int BPF_PROG(rbtree_insert, __u64 key, __u64 val) { return -2; }
+
+SEC("fentry/bench_arena_rbtree_lookup")
+int BPF_PROG(rbtree_lookup, __u64 key) { return -2; }
+
+SEC("fentry/bench_arena_rbtree_update")
+int BPF_PROG(rbtree_update, __u64 key, __u64 val) { return -2; }
+
+SEC("fentry/bench_arena_rbtree_delete")
+int BPF_PROG(rbtree_delete_op, __u64 key) { return -2; }
 #endif
 
 char _license[] SEC("license") = "GPL";

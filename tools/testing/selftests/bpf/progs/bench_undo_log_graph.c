@@ -86,4 +86,100 @@ out:
 	return 0;
 }
 
+/* Traverse adjacency list of src; return weight if dst found. 0 undo-log writes. */
+SEC("fentry/bench_undo_graph_lookup")
+int BPF_PROG(graph_lookup, __u32 src, __u32 dst)
+{
+	struct graph_global_lock *g;
+	__u32 key0 = 0;
+	__u32 e;
+	int depth;
+
+	if (src >= BENCH_MAX_POOL)
+		return 0;
+
+	g = bpf_map_lookup_elem(&graph_lock, &key0);
+	if (!g)
+		return 0;
+
+	bpf_spin_lock(&g->lock);
+	e = graph_nodes[src].first_edge;
+	bpf_for(depth, 0, BENCH_MAX_POOL) {
+		if (e >= BENCH_MAX_POOL)
+			break;
+		if (graph_edges[e].dst == dst)
+			break;
+		e = graph_edges[e].next_out;
+	}
+	bpf_spin_unlock(&g->lock);
+	return 0;
+}
+
+/* Find edge (src, dst); update its weight. 1 undo-log write. */
+SEC("fentry/bench_undo_graph_update")
+int BPF_PROG(graph_update, __u32 src, __u32 dst, __u64 weight)
+{
+	struct graph_global_lock *g;
+	__u32 key0 = 0;
+	__u32 e;
+	int depth;
+
+	if (src >= BENCH_MAX_POOL)
+		return 0;
+
+	g = bpf_map_lookup_elem(&graph_lock, &key0);
+	if (!g)
+		return 0;
+
+	bpf_spin_lock(&g->lock);
+	e = graph_nodes[src].first_edge;
+	bpf_for(depth, 0, BENCH_MAX_POOL) {
+		if (e >= BENCH_MAX_POOL)
+			break;
+		if (graph_edges[e].dst == dst) {
+			graph_edges[e].weight = weight;		/* 1 undo-log entry */
+			break;
+		}
+		e = graph_edges[e].next_out;
+	}
+	bpf_spin_unlock(&g->lock);
+	return 0;
+}
+
+/* Unlink edge (src, dst) from src's adjacency list. 1–2 undo-log writes. */
+SEC("fentry/bench_undo_graph_delete")
+int BPF_PROG(graph_delete_op, __u32 src, __u32 dst)
+{
+	struct graph_global_lock *g;
+	__u32 key0 = 0;
+	__u32 e, prev;
+	int depth;
+
+	if (src >= BENCH_MAX_POOL)
+		return 0;
+
+	g = bpf_map_lookup_elem(&graph_lock, &key0);
+	if (!g)
+		return 0;
+
+	bpf_spin_lock(&g->lock);
+	e    = graph_nodes[src].first_edge;
+	prev = (__u32)~0;
+	bpf_for(depth, 0, BENCH_MAX_POOL) {
+		if (e >= BENCH_MAX_POOL)
+			break;
+		if (graph_edges[e].dst == dst) {
+			if (prev == (__u32)~0)
+				graph_nodes[src].first_edge = graph_edges[e].next_out; /* 1 undo-log */
+			else
+				graph_edges[prev].next_out  = graph_edges[e].next_out; /* 1 undo-log */
+			break;
+		}
+		prev = e;
+		e    = graph_edges[e].next_out;
+	}
+	bpf_spin_unlock(&g->lock);
+	return 0;
+}
+
 char _license[] SEC("license") = "GPL";
