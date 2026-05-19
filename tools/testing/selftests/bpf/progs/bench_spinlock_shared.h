@@ -27,11 +27,28 @@
 #define BENCH_VARIANT_UNDO_LOG  0
 #define BENCH_VARIANT_ARENA     1
 #define BENCH_VARIANT_KMOD      2
+#define BENCH_VARIANT_KMOD_BPF  3
 
 #define BENCH_OP_INSERT  0
 #define BENCH_OP_LOOKUP  1
 #define BENCH_OP_UPDATE  2
 #define BENCH_OP_DELETE  3
+
+/*
+ * Tag for kernel module function parameters that BPF fentry programs are
+ * allowed to write to.  The verifier looks for a BTF_KIND_DECL_TAG
+ * "writable_bpf" on the function parameter (component_idx matching arg pos)
+ * and sets MEM_WRITE on the corresponding register, enabling undo-log
+ * injection for writes to those pointers inside a bpf_spin_lock CS.
+ *
+ * btf_decl_tag on a parameter is emitted as DWARF DW_TAG_LLVM_annotation
+ * by Clang native builds, then converted to BTF DECL_TAG by pahole.
+ */
+#ifdef __KERNEL__
+#define __writable_bpf __attribute__((btf_decl_tag("writable_bpf")))
+#else
+#define __writable_bpf
+#endif
 
 #define BENCH_IOC_MAGIC    'B'
 #define BENCH_MAX_CPUS     256
@@ -135,6 +152,7 @@ static const char * const bench_variant_names[] = {
 	[BENCH_VARIANT_UNDO_LOG] = "undo_log",
 	[BENCH_VARIANT_ARENA]    = "arena",
 	[BENCH_VARIANT_KMOD]     = "kmod",
+	[BENCH_VARIANT_KMOD_BPF] = "kmod_bpf",
 };
 
 static const char * const bench_op_names[] = {

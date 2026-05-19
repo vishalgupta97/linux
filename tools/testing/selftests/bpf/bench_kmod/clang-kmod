@@ -1,0 +1,31 @@
+#!/bin/bash
+# Clang wrapper for kernel module builds.
+#
+# The kernel's arch/x86/Makefile and scripts/Makefile.* inject several
+# GCC-specific flags that Clang does not recognise.  When building this
+# module with CC=clang against a tree configured for GCC those flags cause
+# fatal -Werror,-Wunknown-warning-option errors.  Filter them before
+# forwarding the rest of the arguments to the real clang binary.
+args=()
+for arg in "$@"; do
+    case "$arg" in
+        # x86 stack-boundary (GCC only)
+        -mpreferred-stack-boundary=*)   ;;
+        # function alignment (GCC spelling)
+        -fmin-function-alignment=*)     ;;
+        # stack-frame size warning (GCC only)
+        -fconserve-stack)               ;;
+        # ftrace mcount recording (GCC only)
+        -mrecord-mcount)                ;;
+        # bounds sanitizer variant not in Clang
+        -fsanitize=bounds-strict)       ;;
+        # GCC-specific warning flags not understood by Clang
+        -Wno-alloc-size-larger-than)    ;;
+        -Wimplicit-fallthrough=*)       ;;
+        -Wno-maybe-uninitialized)       ;;
+        -Wno-unused-but-set-variable)   ;;
+        -Wno-unused-const-variable)     ;;
+        *)  args+=("$arg") ;;
+    esac
+done
+exec clang "${args[@]}"

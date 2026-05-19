@@ -7443,7 +7443,8 @@ static int check_ptr_to_btf_access(struct bpf_verifier_env *env,
 		 * program allocated objects (which always have ref_obj_id > 0),
 		 * but not for untrusted PTR_TO_BTF_ID | MEM_ALLOC.
 		 */
-		if (atype != BPF_READ && !type_is_ptr_alloc_obj(reg->type)) {
+		if (atype != BPF_READ && !type_is_ptr_alloc_obj(reg->type) &&
+		    !(reg->type & MEM_WRITE)) {
 			verbose(env, "only read is supported\n");
 			return -EACCES;
 		}

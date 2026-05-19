@@ -46,6 +46,7 @@
 #define BENCH_VARIANT_UNDO_LOG  0
 #define BENCH_VARIANT_ARENA     1
 #define BENCH_VARIANT_KMOD      2
+#define BENCH_VARIANT_KMOD_BPF  3
 
 #define BENCH_OP_INSERT  0
 #define BENCH_OP_LOOKUP  1
@@ -192,6 +193,21 @@ static u32 kmod_graph_num_nodes;
 static spinlock_t kmod_graph_lock;
 
 /* ------------------------------------------------------------------ */
+/* kmod_bpf variant: plain node pools without embedded spinlock_t     */
+/* Kernel module allocates these; BPF programs access via __writable_bpf pointers */
+/* ------------------------------------------------------------------ */
+
+struct bench_list_node  *kmod_bpf_list_pool;
+struct bench_ring_slot  *kmod_bpf_ring_pool;
+struct bench_trie_node  *kmod_bpf_trie_pool;
+struct bench_rb_node    *kmod_bpf_rb_pool;
+struct bench_graph_node *kmod_bpf_graph_nodes;
+struct bench_graph_edge *kmod_bpf_graph_edges;
+static atomic_t kmod_bpf_trie_alloc;
+static atomic_t kmod_bpf_rb_alloc;
+static atomic_t kmod_bpf_graph_edge_alloc;
+
+/* ------------------------------------------------------------------ */
 /* kmod data structure implementations                                 */
 /* ------------------------------------------------------------------ */
 
@@ -214,6 +230,268 @@ static spinlock_t kmod_graph_lock;
 /* ---- graph ---- */
 
 #include "graph.h"
+
+/* ---- kmod_bpf variant stubs ---- */
+/*
+ * Include declarations (struct types, pool externs, __writable_bpf).
+ * Function bodies are defined below so Clang emits BTF_FUNC_GLOBAL for each,
+ * which is required for BPF fentry attachment.
+ */
+#include "bench_kmod_bpf.h"
+
+/* ------------------------------------------------------------------ */
+/* List                                                                */
+/* ------------------------------------------------------------------ */
+
+noinline void bench_kmod_bpf_list_init(u32 pool_size)
+{
+	u32 i;
+
+	if (!kmod_bpf_list_pool)
+		return;
+	for (i = 0; i < pool_size; i++) {
+		kmod_bpf_list_pool[i].next_idx = (u32)~0;
+		kmod_bpf_list_pool[i].data = 0;
+	}
+}
+EXPORT_SYMBOL_GPL(bench_kmod_bpf_list_init);
+
+noinline void bench_kmod_bpf_list_insert(u32 new_idx,
+	bench_list_node_bpf_writable * new_node,
+	u32 head_lock_idx)
+{
+	this_cpu_inc(bench_cpu_stats.ops);
+}
+EXPORT_SYMBOL_GPL(bench_kmod_bpf_list_insert);
+
+noinline u64 bench_kmod_bpf_list_lookup(u32 idx,
+	bench_list_node_bpf_writable * node)
+{
+	this_cpu_inc(bench_cpu_stats.ops);
+	return node ? node->data : 0;
+}
+EXPORT_SYMBOL_GPL(bench_kmod_bpf_list_lookup);
+
+noinline void bench_kmod_bpf_list_update(u32 idx,
+	bench_list_node_bpf_writable * node,
+	u64 val)
+{
+	this_cpu_inc(bench_cpu_stats.ops);
+}
+EXPORT_SYMBOL_GPL(bench_kmod_bpf_list_update);
+
+noinline void bench_kmod_bpf_list_delete(u32 head_idx,
+	bench_list_node_bpf_writable * head_node)
+{
+	this_cpu_inc(bench_cpu_stats.ops);
+}
+EXPORT_SYMBOL_GPL(bench_kmod_bpf_list_delete);
+
+/* ------------------------------------------------------------------ */
+/* Ring                                                                */
+/* ------------------------------------------------------------------ */
+
+noinline void bench_kmod_bpf_ring_init(u32 num_slots)
+{
+	u32 i;
+
+	if (!kmod_bpf_ring_pool)
+		return;
+	for (i = 0; i < num_slots && i < BENCH_RING_SLOTS; i++) {
+		kmod_bpf_ring_pool[i].data  = 0;
+		kmod_bpf_ring_pool[i].valid = 0;
+	}
+}
+EXPORT_SYMBOL_GPL(bench_kmod_bpf_ring_init);
+
+noinline void bench_kmod_bpf_ring_enqueue(u32 slot,
+	bench_ring_slot_bpf_writable * sp,
+	u64 val)
+{
+	this_cpu_inc(bench_cpu_stats.ops);
+}
+EXPORT_SYMBOL_GPL(bench_kmod_bpf_ring_enqueue);
+
+noinline u64 bench_kmod_bpf_ring_lookup(u32 slot,
+	bench_ring_slot_bpf_writable * sp)
+{
+	this_cpu_inc(bench_cpu_stats.ops);
+	return sp ? sp->data : 0;
+}
+EXPORT_SYMBOL_GPL(bench_kmod_bpf_ring_lookup);
+
+noinline void bench_kmod_bpf_ring_update(u32 slot,
+	bench_ring_slot_bpf_writable * sp,
+	u64 val)
+{
+	this_cpu_inc(bench_cpu_stats.ops);
+}
+EXPORT_SYMBOL_GPL(bench_kmod_bpf_ring_update);
+
+noinline void bench_kmod_bpf_ring_dequeue(u32 slot,
+	bench_ring_slot_bpf_writable * sp)
+{
+	this_cpu_inc(bench_cpu_stats.ops);
+}
+EXPORT_SYMBOL_GPL(bench_kmod_bpf_ring_dequeue);
+
+/* ------------------------------------------------------------------ */
+/* Trie                                                                */
+/* ------------------------------------------------------------------ */
+
+noinline void bench_kmod_bpf_trie_init(u32 pool_size)
+{
+	u32 i;
+
+	if (!kmod_bpf_trie_pool)
+		return;
+	for (i = 0; i < pool_size; i++) {
+		kmod_bpf_trie_pool[i].child[0] = 0;
+		kmod_bpf_trie_pool[i].child[1] = 0;
+		kmod_bpf_trie_pool[i].key_bit  = 0;
+		kmod_bpf_trie_pool[i].val      = 0;
+	}
+}
+EXPORT_SYMBOL_GPL(bench_kmod_bpf_trie_init);
+
+noinline void bench_kmod_bpf_trie_insert(u32 new_idx,
+	bench_trie_node_bpf_writable * node,
+	u64 key, u64 val)
+{
+	this_cpu_inc(bench_cpu_stats.ops);
+}
+EXPORT_SYMBOL_GPL(bench_kmod_bpf_trie_insert);
+
+noinline u64 bench_kmod_bpf_trie_lookup(u64 key,
+	bench_trie_node_bpf_writable * node)
+{
+	this_cpu_inc(bench_cpu_stats.ops);
+	return node ? node->val : 0;
+}
+EXPORT_SYMBOL_GPL(bench_kmod_bpf_trie_lookup);
+
+noinline void bench_kmod_bpf_trie_update(u64 key,
+	bench_trie_node_bpf_writable * node,
+	u64 val)
+{
+	this_cpu_inc(bench_cpu_stats.ops);
+}
+EXPORT_SYMBOL_GPL(bench_kmod_bpf_trie_update);
+
+noinline void bench_kmod_bpf_trie_delete(u64 key,
+	bench_trie_node_bpf_writable * node)
+{
+	this_cpu_inc(bench_cpu_stats.ops);
+}
+EXPORT_SYMBOL_GPL(bench_kmod_bpf_trie_delete);
+
+/* ------------------------------------------------------------------ */
+/* RBTree                                                              */
+/* ------------------------------------------------------------------ */
+
+noinline void bench_kmod_bpf_rbtree_init(u32 pool_size)
+{
+	u32 i;
+
+	if (!kmod_bpf_rb_pool)
+		return;
+	for (i = 0; i < pool_size; i++) {
+		kmod_bpf_rb_pool[i].left   = 0;
+		kmod_bpf_rb_pool[i].right  = 0;
+		kmod_bpf_rb_pool[i].parent = 0;
+		kmod_bpf_rb_pool[i].color  = BENCH_RB_BLACK;
+		kmod_bpf_rb_pool[i].key    = 0;
+		kmod_bpf_rb_pool[i].val    = 0;
+	}
+}
+EXPORT_SYMBOL_GPL(bench_kmod_bpf_rbtree_init);
+
+noinline void bench_kmod_bpf_rbtree_insert(u32 new_idx,
+	bench_rb_node_bpf_writable * node,
+	u64 key, u64 val)
+{
+	this_cpu_inc(bench_cpu_stats.ops);
+}
+EXPORT_SYMBOL_GPL(bench_kmod_bpf_rbtree_insert);
+
+noinline u64 bench_kmod_bpf_rbtree_lookup(u64 key,
+	bench_rb_node_bpf_writable * node)
+{
+	this_cpu_inc(bench_cpu_stats.ops);
+	return node ? node->val : 0;
+}
+EXPORT_SYMBOL_GPL(bench_kmod_bpf_rbtree_lookup);
+
+noinline void bench_kmod_bpf_rbtree_update(u64 key,
+	bench_rb_node_bpf_writable * node,
+	u64 val)
+{
+	this_cpu_inc(bench_cpu_stats.ops);
+}
+EXPORT_SYMBOL_GPL(bench_kmod_bpf_rbtree_update);
+
+noinline void bench_kmod_bpf_rbtree_delete(u64 key,
+	bench_rb_node_bpf_writable * node)
+{
+	this_cpu_inc(bench_cpu_stats.ops);
+}
+EXPORT_SYMBOL_GPL(bench_kmod_bpf_rbtree_delete);
+
+/* ------------------------------------------------------------------ */
+/* Graph                                                               */
+/* ------------------------------------------------------------------ */
+
+noinline void bench_kmod_bpf_graph_init(u32 num_nodes, u32 num_edges)
+{
+	u32 i;
+
+	if (!kmod_bpf_graph_nodes || !kmod_bpf_graph_edges)
+		return;
+	for (i = 0; i < num_nodes; i++) {
+		kmod_bpf_graph_nodes[i].first_edge = (u32)~0;
+		kmod_bpf_graph_nodes[i].data       = 0;
+	}
+	for (i = 0; i < num_edges; i++) {
+		kmod_bpf_graph_edges[i].src      = 0;
+		kmod_bpf_graph_edges[i].dst      = 0;
+		kmod_bpf_graph_edges[i].next_out = (u32)~0;
+		kmod_bpf_graph_edges[i].weight   = 0;
+	}
+}
+EXPORT_SYMBOL_GPL(bench_kmod_bpf_graph_init);
+
+noinline void bench_kmod_bpf_graph_add_edge(u32 src, u32 dst,
+	bench_graph_node_bpf_writable * src_node,
+	u32 edge_idx,
+	bench_graph_edge_bpf_writable * edge,
+	u64 weight)
+{
+	this_cpu_inc(bench_cpu_stats.ops);
+}
+EXPORT_SYMBOL_GPL(bench_kmod_bpf_graph_add_edge);
+
+noinline u64 bench_kmod_bpf_graph_lookup(u32 src, u32 dst,
+	bench_graph_node_bpf_writable * src_node)
+{
+	this_cpu_inc(bench_cpu_stats.ops);
+	return src_node ? src_node->data : 0;
+}
+EXPORT_SYMBOL_GPL(bench_kmod_bpf_graph_lookup);
+
+noinline void bench_kmod_bpf_graph_update(u32 src, u32 dst,
+	bench_graph_edge_bpf_writable * edge,
+	u64 weight)
+{
+	this_cpu_inc(bench_cpu_stats.ops);
+}
+EXPORT_SYMBOL_GPL(bench_kmod_bpf_graph_update);
+
+noinline void bench_kmod_bpf_graph_delete(u32 src, u32 dst,
+	bench_graph_edge_bpf_writable * edge)
+{
+	this_cpu_inc(bench_cpu_stats.ops);
+}
+EXPORT_SYMBOL_GPL(bench_kmod_bpf_graph_delete);
 
 /* ------------------------------------------------------------------ */
 /* call_init / call_op dispatchers                                     */
@@ -247,6 +525,18 @@ static void call_init(int variant, int ds_type, u32 pool_size)
 		case BENCH_DS_TRIE:   bench_kmod_trie_init(pool_size);             break;
 		case BENCH_DS_RBTREE: bench_kmod_rbtree_init(pool_size);           break;
 		case BENCH_DS_GRAPH:  bench_kmod_graph_init(pool_size, pool_size); break;
+		}
+		break;
+	case BENCH_VARIANT_KMOD_BPF:
+		atomic_set(&kmod_bpf_trie_alloc, 1);
+		atomic_set(&kmod_bpf_rb_alloc, 1);
+		atomic_set(&kmod_bpf_graph_edge_alloc, 0);
+		switch (ds_type) {
+		case BENCH_DS_LIST:   bench_kmod_bpf_list_init(pool_size);             break;
+		case BENCH_DS_RING:   bench_kmod_bpf_ring_init(pool_size);             break;
+		case BENCH_DS_TRIE:   bench_kmod_bpf_trie_init(pool_size);             break;
+		case BENCH_DS_RBTREE: bench_kmod_bpf_rbtree_init(pool_size);           break;
+		case BENCH_DS_GRAPH:  bench_kmod_bpf_graph_init(pool_size, pool_size); break;
 		}
 		break;
 	}
@@ -291,6 +581,43 @@ static void call_op(int variant, int ds_type, int op_type, u64 iter, u32 pool_si
 			case BENCH_DS_GRAPH:  bench_kmod_graph_add_edge(src, dst, val); break;
 			}
 			break;
+		case BENCH_VARIANT_KMOD_BPF: {
+			u32 nidx = idx < KMOD_MAX_POOL ? idx : 0;
+			u32 eidx;
+
+			switch (ds_type) {
+			case BENCH_DS_LIST:
+				bench_kmod_bpf_list_insert(nidx,
+					&kmod_bpf_list_pool[nidx], 0);
+				break;
+			case BENCH_DS_RING:
+				bench_kmod_bpf_ring_enqueue(src,
+					&kmod_bpf_ring_pool[src], val);
+				break;
+			case BENCH_DS_TRIE: {
+				u32 tidx = (u32)atomic_inc_return(&kmod_bpf_trie_alloc) %
+					   KMOD_MAX_POOL;
+				bench_kmod_bpf_trie_insert(tidx,
+					&kmod_bpf_trie_pool[tidx], key, val);
+				break;
+			}
+			case BENCH_DS_RBTREE: {
+				u32 ridx = (u32)atomic_inc_return(&kmod_bpf_rb_alloc) %
+					   KMOD_MAX_POOL;
+				bench_kmod_bpf_rbtree_insert(ridx,
+					&kmod_bpf_rb_pool[ridx], key, val);
+				break;
+			}
+			case BENCH_DS_GRAPH:
+				eidx = (u32)atomic_inc_return(&kmod_bpf_graph_edge_alloc) %
+				       KMOD_MAX_POOL;
+				bench_kmod_bpf_graph_add_edge(src, dst,
+					&kmod_bpf_graph_nodes[src], eidx,
+					&kmod_bpf_graph_edges[eidx], val);
+				break;
+			}
+			break;
+		}
 		}
 		break;
 
@@ -323,6 +650,33 @@ static void call_op(int variant, int ds_type, int op_type, u64 iter, u32 pool_si
 			case BENCH_DS_GRAPH:  bench_kmod_graph_lookup(src, dst);     break;
 			}
 			break;
+		case BENCH_VARIANT_KMOD_BPF: {
+			u32 nidx = idx < KMOD_MAX_POOL ? idx : 0;
+
+			switch (ds_type) {
+			case BENCH_DS_LIST:
+				bench_kmod_bpf_list_lookup(nidx,
+					&kmod_bpf_list_pool[nidx]);
+				break;
+			case BENCH_DS_RING:
+				bench_kmod_bpf_ring_lookup(src,
+					&kmod_bpf_ring_pool[src]);
+				break;
+			case BENCH_DS_TRIE:
+				bench_kmod_bpf_trie_lookup(key,
+					&kmod_bpf_trie_pool[nidx]);
+				break;
+			case BENCH_DS_RBTREE:
+				bench_kmod_bpf_rbtree_lookup(key,
+					&kmod_bpf_rb_pool[nidx]);
+				break;
+			case BENCH_DS_GRAPH:
+				bench_kmod_bpf_graph_lookup(src, dst,
+					&kmod_bpf_graph_nodes[src]);
+				break;
+			}
+			break;
+		}
 		}
 		break;
 
@@ -355,6 +709,34 @@ static void call_op(int variant, int ds_type, int op_type, u64 iter, u32 pool_si
 			case BENCH_DS_GRAPH:  bench_kmod_graph_update(src, dst, val);    break;
 			}
 			break;
+		case BENCH_VARIANT_KMOD_BPF: {
+			u32 nidx = idx < KMOD_MAX_POOL ? idx : 0;
+			u32 eidx = src < KMOD_MAX_POOL ? src : 0;
+
+			switch (ds_type) {
+			case BENCH_DS_LIST:
+				bench_kmod_bpf_list_update(nidx,
+					&kmod_bpf_list_pool[nidx], val);
+				break;
+			case BENCH_DS_RING:
+				bench_kmod_bpf_ring_update(src,
+					&kmod_bpf_ring_pool[src], val);
+				break;
+			case BENCH_DS_TRIE:
+				bench_kmod_bpf_trie_update(key,
+					&kmod_bpf_trie_pool[nidx], val);
+				break;
+			case BENCH_DS_RBTREE:
+				bench_kmod_bpf_rbtree_update(key,
+					&kmod_bpf_rb_pool[nidx], val);
+				break;
+			case BENCH_DS_GRAPH:
+				bench_kmod_bpf_graph_update(src, dst,
+					&kmod_bpf_graph_edges[eidx], val);
+				break;
+			}
+			break;
+		}
 		}
 		break;
 
@@ -387,6 +769,34 @@ static void call_op(int variant, int ds_type, int op_type, u64 iter, u32 pool_si
 			case BENCH_DS_GRAPH:  bench_kmod_graph_delete(src, dst);    break;
 			}
 			break;
+		case BENCH_VARIANT_KMOD_BPF: {
+			u32 nidx = idx < KMOD_MAX_POOL ? idx : 0;
+			u32 eidx = src < KMOD_MAX_POOL ? src : 0;
+
+			switch (ds_type) {
+			case BENCH_DS_LIST:
+				bench_kmod_bpf_list_delete(nidx,
+					&kmod_bpf_list_pool[nidx]);
+				break;
+			case BENCH_DS_RING:
+				bench_kmod_bpf_ring_dequeue(src,
+					&kmod_bpf_ring_pool[src]);
+				break;
+			case BENCH_DS_TRIE:
+				bench_kmod_bpf_trie_delete(key,
+					&kmod_bpf_trie_pool[nidx]);
+				break;
+			case BENCH_DS_RBTREE:
+				bench_kmod_bpf_rbtree_delete(key,
+					&kmod_bpf_rb_pool[nidx]);
+				break;
+			case BENCH_DS_GRAPH:
+				bench_kmod_bpf_graph_delete(src, dst,
+					&kmod_bpf_graph_edges[eidx]);
+				break;
+			}
+			break;
+		}
 		}
 		break;
 	}
@@ -609,8 +1019,18 @@ static int alloc_kmod_pools(u32 pool_size)
 	kmod_graph_nodes  = kcalloc(pool_size, sizeof(*kmod_graph_nodes),  GFP_KERNEL);
 	kmod_graph_edges  = kcalloc(pool_size, sizeof(*kmod_graph_edges),  GFP_KERNEL);
 
+	/* kmod_bpf pools: same sizes, no embedded spinlock */
+	kmod_bpf_list_pool    = kcalloc(pool_size, sizeof(*kmod_bpf_list_pool),    GFP_KERNEL);
+	kmod_bpf_ring_pool    = kcalloc(pool_size, sizeof(*kmod_bpf_ring_pool),    GFP_KERNEL);
+	kmod_bpf_trie_pool    = kcalloc(pool_size, sizeof(*kmod_bpf_trie_pool),    GFP_KERNEL);
+	kmod_bpf_rb_pool      = kcalloc(pool_size, sizeof(*kmod_bpf_rb_pool),      GFP_KERNEL);
+	kmod_bpf_graph_nodes  = kcalloc(pool_size, sizeof(*kmod_bpf_graph_nodes),  GFP_KERNEL);
+	kmod_bpf_graph_edges  = kcalloc(pool_size, sizeof(*kmod_bpf_graph_edges),  GFP_KERNEL);
+
 	return (kmod_list_pool && kmod_ring_pool && kmod_trie_pool &&
-		kmod_rb_pool && kmod_graph_nodes && kmod_graph_edges) ? 0 : -ENOMEM;
+		kmod_rb_pool && kmod_graph_nodes && kmod_graph_edges &&
+		kmod_bpf_list_pool && kmod_bpf_ring_pool && kmod_bpf_trie_pool &&
+		kmod_bpf_rb_pool && kmod_bpf_graph_nodes && kmod_bpf_graph_edges) ? 0 : -ENOMEM;
 }
 
 static void free_kmod_pools(void)
@@ -621,6 +1041,13 @@ static void free_kmod_pools(void)
 	kfree(kmod_rb_pool);      kmod_rb_pool     = NULL;
 	kfree(kmod_graph_nodes);  kmod_graph_nodes = NULL;
 	kfree(kmod_graph_edges);  kmod_graph_edges = NULL;
+
+	kfree(kmod_bpf_list_pool);    kmod_bpf_list_pool    = NULL;
+	kfree(kmod_bpf_ring_pool);    kmod_bpf_ring_pool    = NULL;
+	kfree(kmod_bpf_trie_pool);    kmod_bpf_trie_pool    = NULL;
+	kfree(kmod_bpf_rb_pool);      kmod_bpf_rb_pool      = NULL;
+	kfree(kmod_bpf_graph_nodes);  kmod_bpf_graph_nodes  = NULL;
+	kfree(kmod_bpf_graph_edges);  kmod_bpf_graph_edges  = NULL;
 }
 
 /* ------------------------------------------------------------------ */
@@ -637,7 +1064,7 @@ static long bench_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
 
 		if (copy_from_user(&p, (void __user *)arg, sizeof(p)))
 			return -EFAULT;
-		if (p.ds_type > BENCH_DS_GRAPH || p.variant > BENCH_VARIANT_KMOD)
+		if (p.ds_type > BENCH_DS_GRAPH || p.variant > BENCH_VARIANT_KMOD_BPF)
 			return -EINVAL;
 		if (p.op_type > BENCH_OP_DELETE)
 			return -EINVAL;

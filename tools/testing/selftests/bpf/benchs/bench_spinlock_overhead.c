@@ -11,7 +11,7 @@
  *
  * Options:
  *   --ds <list|ring|trie|rbtree|graph|all>          (default: all)
- *   --variant <undo_log|arena|kmod|all>             (default: all)
+ *   --variant <undo_log|arena|kmod|kmod_bpf|all>    (default: all)
  *   --op <insert|lookup|update|delete|all>          (default: all)
  *   --threads <N>                                   (default: nproc)
  *   --pool <N>                                      (default: 256)
@@ -57,6 +57,11 @@ struct bench_arena_ring_slot { struct __qspinlock lock; __u64 data; __u32 valid;
 #include "bench_arena_trie.skel.h"
 #include "bench_arena_rbtree.skel.h"
 #include "bench_arena_graph.skel.h"
+#include "bench_kmod_bpf_list.skel.h"
+#include "bench_kmod_bpf_ring.skel.h"
+#include "bench_kmod_bpf_trie.skel.h"
+#include "bench_kmod_bpf_rbtree.skel.h"
+#include "bench_kmod_bpf_graph.skel.h"
 
 #define BENCH_DEV "/dev/bench_spinlock"
 #define SYSCTL_TIMEOUT "/proc/sys/net/core/bpf_spin_lock_timeout"
@@ -76,7 +81,7 @@ static struct {
 	__u32 bench_ms;
 } cfg = {
 	.ds_mask      = (1 << 5) - 1,   /* all DS */
-	.variant_mask = (1 << 3) - 1,   /* all variants */
+	.variant_mask = (1 << 4) - 1,   /* all variants */
 	.op_mask      = (1 << 4) - 1,   /* all ops */
 	.pool_size    = 256,
 	.init_size    = 0,
@@ -176,6 +181,34 @@ static void write_sysctl(const char *path, int val)
 			}						\
 		}							\
 		bench_arena_##name##__destroy(_skel);			\
+	}								\
+	_ret;								\
+})
+
+#define RUN_KMOD_BPF_BENCH(name, DS_CONST, fd, cfg_ptr)			\
+({									\
+	struct bench_kmod_bpf_##name *_skel;				\
+	int _ret = 0;							\
+									\
+	_skel = bench_kmod_bpf_##name##__open_and_load();		\
+	if (!_skel) {							\
+		fprintf(stderr, "failed to load bench_kmod_bpf_" #name "\n"); \
+		_ret = -1;						\
+	} else {							\
+		_ret = bench_kmod_bpf_##name##__attach(_skel);		\
+		if (_ret) {						\
+			fprintf(stderr, "failed to attach " #name ": %d\n", _ret); \
+		} else {						\
+			struct bench_params _p = *(cfg_ptr);		\
+			_p.variant = BENCH_VARIANT_KMOD_BPF;		\
+			_p.ds_type = (DS_CONST);			\
+			ioctl((fd), BENCH_IOCTL_SET_PARAMS, &_p);	\
+			_ret = ioctl((fd), BENCH_IOCTL_EBPF_READY, 0); \
+			if (_ret)					\
+				fprintf(stderr, "ioctl EBPF_READY failed: %s\n", \
+					strerror(errno));		\
+		}							\
+		bench_kmod_bpf_##name##__destroy(_skel);		\
 	}								\
 	_ret;								\
 })
@@ -287,6 +320,21 @@ static void run_one(int fd, int variant, int ds, int op,
 			return;
 		}
 		break;
+
+	case BENCH_VARIANT_KMOD_BPF:
+		switch (ds) {
+		case BENCH_DS_LIST:
+			ret = RUN_KMOD_BPF_BENCH(list,   BENCH_DS_LIST,   fd, &p); break;
+		case BENCH_DS_RING:
+			ret = RUN_KMOD_BPF_BENCH(ring,   BENCH_DS_RING,   fd, &p); break;
+		case BENCH_DS_TRIE:
+			ret = RUN_KMOD_BPF_BENCH(trie,   BENCH_DS_TRIE,   fd, &p); break;
+		case BENCH_DS_RBTREE:
+			ret = RUN_KMOD_BPF_BENCH(rbtree, BENCH_DS_RBTREE, fd, &p); break;
+		case BENCH_DS_GRAPH:
+			ret = RUN_KMOD_BPF_BENCH(graph,  BENCH_DS_GRAPH,  fd, &p); break;
+		}
+		break;
 	}
 
 	if (!ret)
@@ -317,7 +365,7 @@ static void usage(const char *prog)
 	fprintf(stderr,
 		"Usage: %s [OPTIONS]\n"
 		"  --ds <list|ring|trie|rbtree|graph|all>          (default: all)\n"
-		"  --variant <undo_log|arena|kmod|all>             (default: all)\n"
+		"  --variant <undo_log|arena|kmod|kmod_bpf|all>    (default: all)\n"
 		"  --op <insert|lookup|update|delete|all>          (default: all)\n"
 		"  --threads <N>       (default: nproc)\n"
 		"  --pool <N>          (default: 256)\n"
@@ -356,13 +404,15 @@ int main(int argc, char **argv)
 			break;
 		case 'v':
 			if (!strcmp(optarg, "all")) {
-				cfg.variant_mask = (1 << 3) - 1;
+				cfg.variant_mask = (1 << 4) - 1;
 			} else if (!strcmp(optarg, "undo_log")) {
 				cfg.variant_mask = 1 << BENCH_VARIANT_UNDO_LOG;
 			} else if (!strcmp(optarg, "arena")) {
 				cfg.variant_mask = 1 << BENCH_VARIANT_ARENA;
 			} else if (!strcmp(optarg, "kmod")) {
 				cfg.variant_mask = 1 << BENCH_VARIANT_KMOD;
+			} else if (!strcmp(optarg, "kmod_bpf")) {
+				cfg.variant_mask = 1 << BENCH_VARIANT_KMOD_BPF;
 			} else {
 				fprintf(stderr, "unknown variant: %s\n", optarg);
 				return 1;
@@ -417,7 +467,7 @@ int main(int argc, char **argv)
 	fputs(BENCH_CSV_HEADER, stdout);
 
 	/* Run all requested (variant, ds, op) combinations */
-	for (int v = 0; v < 3; v++) {
+	for (int v = 0; v < 4; v++) {
 		if (!(cfg.variant_mask & (1 << v)))
 			continue;
 		for (int d = 0; d < 5; d++) {

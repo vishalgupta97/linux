@@ -7004,6 +7004,46 @@ bool btf_ctx_access(int off, int size, enum bpf_access_type type,
 			info->reg_type |= MEM_USER;
 		if (strcmp(tag_value, "percpu") == 0)
 			info->reg_type |= MEM_PERCPU;
+		if (strcmp(tag_value, "writable_bpf") == 0)
+			info->reg_type |= MEM_WRITE;
+	}
+
+	/*
+	 * GCC-compatible alternative: a typedef whose name ends in
+	 * "_bpf_writable" marks the pointed-to struct as writable inside
+	 * bpf_spin_lock critical sections.  GCC ignores btf_decl_tag but
+	 * faithfully emits typedef names in BTF, so this convention works
+	 * with both GCC and Clang module builds.
+	 */
+	if (!(info->reg_type & MEM_WRITE) && btf_type_is_typedef(t)) {
+		const char *tdef_name = __btf_name_by_offset(btf, t->name_off);
+		static const char writable_suffix[] = "_bpf_writable";
+		size_t tdef_len = strlen(tdef_name);
+		size_t sfx_len = sizeof(writable_suffix) - 1;
+
+		if (tdef_len > sfx_len &&
+		    strcmp(tdef_name + tdef_len - sfx_len, writable_suffix) == 0)
+			info->reg_type |= MEM_WRITE;
+	}
+
+	/*
+	 * Also check for a BTF_KIND_DECL_TAG "writable_bpf" on the function
+	 * with component_idx matching this argument.  This catches kernel
+	 * modules compiled with Clang native (not BPF target): those emit
+	 * DW_TAG_LLVM_annotation → BTF DECL_TAG for btf_decl_tag attributes
+	 * on function parameters, while BTF_KIND_TYPE_TAG is only produced
+	 * when compiling for the BPF target or by vmlinux BTF.
+	 */
+	if (!(info->reg_type & MEM_WRITE) && prog->aux->attach_btf &&
+	    prog->aux->attach_btf_id) {
+		const struct btf_type *func_t =
+			btf_type_by_id(prog->aux->attach_btf,
+				       prog->aux->attach_btf_id);
+
+		if (func_t &&
+		    btf_find_next_decl_tag(prog->aux->attach_btf, func_t,
+					   arg, "writable_bpf", 0) >= 0)
+			info->reg_type |= MEM_WRITE;
 	}
 
 	/* skip modifiers */

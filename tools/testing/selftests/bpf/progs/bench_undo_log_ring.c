@@ -75,7 +75,7 @@ int BPF_PROG(ring_enqueue, __u64 val)
 SEC("fentry/bench_undo_ring_lookup")
 int BPF_PROG(ring_lookup, __u32 slot)
 {
-	struct ring_lock_entry *lk;
+	/*struct ring_lock_entry *lk;
 	int ret = -1;
 
 	slot %= BENCH_RING_SLOTS;
@@ -86,8 +86,8 @@ int BPF_PROG(ring_lookup, __u32 slot)
 	bpf_spin_lock(&lk->lock);
 	if (ring_pool[slot].valid)
 		ret = ring_pool[slot].data;
-	bpf_spin_unlock(&lk->lock);
-	return ret;
+	bpf_spin_unlock(&lk->lock);*/
+	return 0;
 }
 
 /* Overwrite slot data. 1 undo-log write. */
