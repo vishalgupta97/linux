@@ -106,7 +106,7 @@
 #include <linux/time_namespace.h>
 #include <linux/unaligned.h>
 #include <net/net_namespace.h>
-#ifdef CONFIG_BPF_UNDO_LOG
+#ifdef CONFIG_BPF_SPINLOCK_HOOKS
 #include <linux/bpf_komb.h>
 #endif
 
@@ -1209,7 +1209,7 @@ void start_kernel(void)
 	arch_post_acpi_subsys_init();
 	kcsan_init();
 
-#ifdef CONFIG_BPF_UNDO_LOG
+#ifdef CONFIG_BPF_SPINLOCK_HOOKS
 	komb_init();
 #endif
 

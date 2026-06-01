@@ -65,7 +65,7 @@ extern spinlock_t btf_idr_lock;
 extern struct kobject *btf_kobj;
 extern struct bpf_mem_alloc bpf_global_ma, bpf_global_percpu_ma;
 extern bool bpf_global_ma_set;
-#ifdef CONFIG_BPF_UNDO_LOG
+#ifdef CONFIG_BPF_TIMEOUT
 extern int sysctl_bpf_spin_lock_timeout;
 #endif
 

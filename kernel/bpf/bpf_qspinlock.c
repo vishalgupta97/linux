@@ -41,11 +41,13 @@ static DEFINE_PER_CPU_ALIGNED(struct qnode, bpf_qnodes[_Q_MAX_NODES]);
 /* ---------------------------------------------------------------------- */
 /* Externs defined in helpers.c / syscall.c                               */
 /* ---------------------------------------------------------------------- */
+#ifdef CONFIG_BPF_TIMEOUT
 extern int ebpf_spinlock_timeout;
 extern int sysctl_bpf_spin_lock_timeout;
 extern const struct bpf_lock_timer_ops bpf_hrtimer_ops;
 extern enum hrtimer_restart bpf_qspinlock_timer_cb(struct hrtimer *timer);
 extern void bpf_notify_lock_kthread(void);
+#endif /* CONFIG_BPF_TIMEOUT */
 
 /* ---------------------------------------------------------------------- */
 /* Per-CPU waiter timers                                                    */
@@ -56,8 +58,10 @@ extern void bpf_notify_lock_kthread(void);
  * Started with IRQs enabled so it can fire on the waiting CPU and set
  * ebpf_spinlock_timeout to terminate the owner.
  */
+#ifdef CONFIG_BPF_TIMEOUT
 static DEFINE_PER_CPU(struct hrtimer, bpf_waiter_hrtimer);
 static DEFINE_PER_CPU(struct bpf_lock_timer, bpf_waiter_timer);
+#endif /* CONFIG_BPF_TIMEOUT */
 
 /*
  * Per-CPU pointer to whichever bpf_lock_timer is currently active for this
@@ -67,13 +71,16 @@ static DEFINE_PER_CPU(struct bpf_lock_timer, bpf_waiter_timer);
  * Cleared (and the underlying timer cancelled) by bpf_spin_unlock via
  * bpf_lock_timer_cancel().
  */
+#ifdef CONFIG_BPF_TIMEOUT
 DEFINE_PER_CPU(struct bpf_lock_timer *, bpf_active_timer);
 EXPORT_PER_CPU_SYMBOL_GPL(bpf_active_timer);
+#endif /* CONFIG_BPF_TIMEOUT */
 
 /* ---------------------------------------------------------------------- */
 /* Initialisation                                                           */
 /* ---------------------------------------------------------------------- */
 
+#ifdef CONFIG_BPF_TIMEOUT
 /**
  * bpf_qspinlock_init_timers - initialise per-CPU waiter hrtimers.
  * Called once from bpf_lock_kthread_init() (late_initcall in helpers.c).
@@ -94,6 +101,7 @@ void __init bpf_qspinlock_init_timers(void)
 }
 
 extern void tell_bpf_loop_to_terminate(void);
+#endif /* CONFIG_BPF_TIMEOUT */
 
 /* ---------------------------------------------------------------------- */
 /* Slow path                                                                */
@@ -117,8 +125,6 @@ extern void tell_bpf_loop_to_terminate(void);
 static void bpf_queued_spin_lock_slowpath(struct qspinlock *lock, u32 val)
 {
 	struct mcs_spinlock *prev, *next, *node;
-	struct bpf_lock_timer *lt;
-	u64 timeout_ns;
 	int idx;
 	u32 old, tail;
 
@@ -174,23 +180,24 @@ static void bpf_queued_spin_lock_slowpath(struct qspinlock *lock, u32 val)
 	 * IRQs are enabled here so the hrtimer can fire on this CPU.
 	 */
 	if (val & _Q_LOCKED_MASK) {
-    	//smp_cond_load_acquire(&lock->locked, !VAL);
+#ifdef CONFIG_BPF_TIMEOUT
+		u64 timeout_ns = (u64)READ_ONCE(sysctl_bpf_spin_lock_timeout) * NSEC_PER_MSEC;
+		u64 end_time = ktime_get_mono_fast_ns() + timeout_ns;
+		bool already_told_to_terminate = false;
 
-        u64 end_time = ktime_get_mono_fast_ns() + timeout_ns;
-        bool already_told_to_terminate = false;
-
-        while(true) {
-            if(!already_told_to_terminate && ktime_get_mono_fast_ns() >  end_time) {
-                tell_bpf_loop_to_terminate();
-                already_told_to_terminate = true;
-            }
-
-            if(!(READ_ONCE(lock->locked)))
-                break;
-
-            cpu_relax();
-        }    
-    }
+		while (true) {
+			if (!already_told_to_terminate && ktime_get_mono_fast_ns() > end_time) {
+				tell_bpf_loop_to_terminate();
+				already_told_to_terminate = true;
+			}
+			if (!(READ_ONCE(lock->locked)))
+				break;
+			cpu_relax();
+		}
+#else
+		smp_cond_load_acquire(&lock->locked, !VAL);
+#endif
+	}
 
 	/*
 	 * Take ownership and clear the pending bit: 0,1,0 -> 0,0,1
@@ -199,7 +206,9 @@ static void bpf_queued_spin_lock_slowpath(struct qspinlock *lock, u32 val)
 	 * running — it will be cancelled by bpf_spin_unlock via bpf_active_timer.
 	 */
 	clear_pending_set_locked(lock);
+#ifdef CONFIG_BPF_TIMEOUT
 	bpf_notify_lock_kthread(); // Only waiter. Notify kthread.
+#endif
 	return;
 
 queue:
@@ -215,7 +224,9 @@ queue:
 		node->count--;
 		while (!queued_spin_trylock(lock))
 			cpu_relax();
+#ifdef CONFIG_BPF_TIMEOUT
 		bpf_notify_lock_kthread(); // Don't know the next waiter. Notify kthread.
+#endif
 		return;
 	}
 
@@ -236,7 +247,9 @@ queue:
 	 */
 	if (queued_spin_trylock(lock)) {
 		__this_cpu_dec(bpf_qnodes[0].mcs.count);
+#ifdef CONFIG_BPF_TIMEOUT
 		bpf_notify_lock_kthread(); // Don't know the next waiter. Notify kthread.
+#endif
 		return;
 	}
 
@@ -273,39 +286,27 @@ queue:
 
 	/*
 	 * We are now at the head of the waitqueue.
-	 * Start the hrtimer so it can fire on this CPU (IRQs are still
-	 * enabled) and set ebpf_spinlock_timeout to terminate the owner.
-	 */
-	timeout_ns = (u64)READ_ONCE(sysctl_bpf_spin_lock_timeout) * NSEC_PER_MSEC;
-	/*lt = this_cpu_ptr(&bpf_waiter_timer);
-	if (timeout_ns > 0) {
-		bpf_lock_timer_start(lt, timeout_ns);
-		this_cpu_write(bpf_active_timer, lt);
-	}*/
-
-	/*
 	 * Wait for the owner & pending to go away: *,x,y -> *,0,0
-	 *
-	 * This must be a load-acquire to create lock sequentiality.
-	 * IRQs are enabled here so the hrtimer can fire on this CPU.
 	 */
-	//val = atomic_cond_read_acquire(&lock->val,
-	//			       !(VAL & _Q_LOCKED_PENDING_MASK));
+#ifdef CONFIG_BPF_TIMEOUT
+	{
+		u64 timeout_ns = (u64)READ_ONCE(sysctl_bpf_spin_lock_timeout) * NSEC_PER_MSEC;
+		u64 end_time = ktime_get_mono_fast_ns() + timeout_ns;
+		bool already_told_to_terminate = false;
 
-    	u64 end_time = ktime_get_mono_fast_ns() + timeout_ns;
-    	bool already_told_to_terminate = false;
-
-    	while(true) {
-        	if(!already_told_to_terminate && ktime_get_mono_fast_ns() >  end_time) {
-            		tell_bpf_loop_to_terminate();
-            		already_told_to_terminate = true;
-        	}
-
-        	if(!(READ_ONCE(lock->val.counter) & _Q_LOCKED_PENDING_MASK))
-            		break;
-
-        	cpu_relax();
-    	}    
+		while (true) {
+			if (!already_told_to_terminate && ktime_get_mono_fast_ns() > end_time) {
+				tell_bpf_loop_to_terminate();
+				already_told_to_terminate = true;
+			}
+			if (!(READ_ONCE(lock->val.counter) & _Q_LOCKED_PENDING_MASK))
+				break;
+			cpu_relax();
+		}
+	}
+#else
+	atomic_cond_read_acquire(&lock->val, !(VAL & _Q_LOCKED_PENDING_MASK));
+#endif
 
 	val = READ_ONCE(lock->val.counter);
 
@@ -320,9 +321,10 @@ queue:
 	 * Otherwise just grab the lock.
 	 */
 	if ((val & _Q_TAIL_MASK) == tail) {
-		if (atomic_try_cmpxchg_relaxed(&lock->val, &val, _Q_LOCKED_VAL))
-		{
+		if (atomic_try_cmpxchg_relaxed(&lock->val, &val, _Q_LOCKED_VAL)) {
+#ifdef CONFIG_BPF_TIMEOUT
 			bpf_notify_lock_kthread(); //No next waiter. Notify kthread.
+#endif
 			goto release;
 		}
 	}
@@ -363,10 +365,12 @@ void bpf_qspinlock_lock(struct qspinlock *lock)
 	if (likely(atomic_try_cmpxchg_acquire(&lock->val, &val, _Q_LOCKED_VAL))) {
 		/*
 		 * Uncontended fast path — no waiter is at the head of the queue
-		 * to start the timer.  Disable IRQs, then notify the kthread so
-		 * it can start the watchdog timer for this CPU's critical section.
+		 * to start the timer.  Notify the kthread so it can start the
+		 * watchdog timer for this CPU's critical section.
 		 */
+#ifdef CONFIG_BPF_TIMEOUT
 		bpf_notify_lock_kthread();
+#endif
 		return;
 	}
 

@@ -8,6 +8,20 @@
 
 #define SYSCTL_PATH "/proc/sys/net/core/bpf_spin_lock_timeout"
 
+/*
+ * Returns true if the running kernel was compiled with CONFIG_BPF_TIMEOUT.
+ * Detected by checking for the sysctl knob that only exists when enabled.
+ */
+static bool has_bpf_timeout(void)
+{
+	int fd = open(SYSCTL_PATH, O_RDONLY);
+
+	if (fd < 0)
+		return false;
+	close(fd);
+	return true;
+}
+
 static int __read_sysctl(void)
 {
 	int fd, val = 0;
@@ -48,6 +62,11 @@ static void trigger_spinlock_loop_timeout(void)
 	struct test_spin_lock_loop_timeout *skel;
 	int prog_fd;
 	int err, old_timeout;
+
+	if (!has_bpf_timeout()) {
+		test__skip();
+		return;
+	}
 
 	/* Save current timeout and set a short timeout */
 	old_timeout = __read_sysctl();
@@ -97,4 +116,10 @@ void test_spin_lock_loop_timeout(void)
 {
 	if (test__start_subtest("trigger_spinlock_loop_timeout"))
 		trigger_spinlock_loop_timeout();
+
+	/* Skip timeout-only subtests when the sysctl knob is absent. */
+	if (!has_bpf_timeout()) {
+		if (test__start_subtest("timeout_not_available"))
+			test__skip();
+	}
 }

@@ -41,6 +41,7 @@ run_bench() {
 	local pool="$2"
 	local op="$3"
 	local init_size="$4"
+	local variant="$5"
 
 	"$BENCH" \
 		--threads "$thread" \
@@ -48,13 +49,14 @@ run_bench() {
 		--op "$op" \
 		--init-size "$init_size" \
 		--warmup-ms 5000 \
-		--bench-ms 15000
+		--bench-ms 30000
 }
 
 {
 	for thread in 1 2 4 8 16 32 64 80 96 112 128; do
-		for pool in 1 8 32 128; do
-			for op in insert lookup update delete; do
+		for pool in 128; do #1 8 32 128; do
+			for op in insert; do  #lookup update delete; do
+				for variant in kmod kmod_bpf; do
 				# For insert, no prefill; for read/write/delete ops
 				# prefill to full pool capacity.
 				if [ "$op" = "insert" ]; then
@@ -62,7 +64,8 @@ run_bench() {
 				else
 					init_size=$pool
 				fi
-				run_bench "$thread" "$pool" "$op" "$init_size"
+				run_bench "$thread" "$pool" "$op" "$init_size" "$variant"
+				done
 			done
 		done
 	done

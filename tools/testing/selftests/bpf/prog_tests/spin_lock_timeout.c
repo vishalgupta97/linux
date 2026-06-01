@@ -3,11 +3,71 @@
 #include <test_progs.h>
 #include <network_helpers.h>
 #include <sys/stat.h>
+#include <sys/utsname.h>
 #include <fcntl.h>
 
 #include "test_spin_lock_timeout.skel.h"
 
 #define SYSCTL_PATH "/proc/sys/net/core/bpf_spin_lock_timeout"
+
+/*
+ * Returns true if the running kernel was compiled with CONFIG_BPF_TIMEOUT.
+ * Detected by checking for the sysctl knob that only exists when enabled.
+ */
+static bool has_bpf_timeout(void)
+{
+	int fd = open(SYSCTL_PATH, O_RDONLY);
+
+	if (fd < 0)
+		return false;
+	close(fd);
+	return true;
+}
+
+/*
+ * Search a line-oriented config buffer for "CONFIG_BPF_UNDO_LOG=y".
+ */
+static bool config_buf_has_undo_log(const char *buf, size_t len)
+{
+	const char needle[] = "CONFIG_BPF_UNDO_LOG=y";
+	size_t nlen = sizeof(needle) - 1;
+	size_t i;
+
+	for (i = 0; i + nlen <= len; i++) {
+		if (memcmp(buf + i, needle, nlen) == 0)
+			return true;
+	}
+	return false;
+}
+
+/*
+ * Returns true if the running kernel was compiled with CONFIG_BPF_UNDO_LOG.
+ * Checks /boot/config-<uname-r> first, then /proc/config.gz (uncompressed
+ * via zcat).  Returns false if neither file is readable or the option is
+ * absent.
+ */
+static bool has_bpf_undo_log(void)
+{
+	struct utsname u;
+	char path[256];
+	char buf[65536];
+	FILE *fp;
+	size_t n;
+
+	uname(&u);
+	snprintf(path, sizeof(path), "/boot/config-%s", u.release);
+	fp = fopen(path, "r");
+	if (!fp)
+		fp = fopen("/proc/config.gz", "r"); /* might be compressed */
+	if (!fp)
+		return false;
+	n = fread(buf, 1, sizeof(buf) - 1, fp);
+	fclose(fp);
+	if (n == 0)
+		return false;
+	buf[n] = '\0';
+	return config_buf_has_undo_log(buf, n);
+}
 
 static void test_nested_locking(void)
 {
@@ -17,6 +77,12 @@ static void test_nested_locking(void)
 		.data_size_in = sizeof(pkt_v4),
 	);
 	int prog_fd, err;
+
+	/* Requires lock tracking (BPF_TIMEOUT or BPF_UNDO_LOG) */
+	if (!has_bpf_timeout() && !has_bpf_undo_log()) {
+		test__skip();
+		return;
+	}
 
 	skel = test_spin_lock_timeout__open_and_load();
 	if (!ASSERT_OK_PTR(skel, "test_spin_lock_timeout__open_and_load"))
@@ -38,6 +104,12 @@ static void test_ooo_unlocking(void)
 		.data_size_in = sizeof(pkt_v4),
 	);
 	int prog_fd, err;
+
+	/* Requires lock tracking (BPF_TIMEOUT or BPF_UNDO_LOG) */
+	if (!has_bpf_timeout() && !has_bpf_undo_log()) {
+		test__skip();
+		return;
+	}
 
 	skel = test_spin_lock_timeout__open_and_load();
 	if (!ASSERT_OK_PTR(skel, "test_spin_lock_timeout__open_and_load"))
@@ -94,6 +166,11 @@ static void test_timeout_trigger(void)
 		.data_size_in = sizeof(pkt_v4),
 	);
 	int prog_fd, err, old_timeout;
+
+	if (!has_bpf_timeout()) {
+		test__skip();
+		return;
+	}
 
 	/* Save current timeout and set a short timeout */
 	old_timeout = __read_sysctl();
@@ -159,6 +236,11 @@ static void test_deadlock_abba(void)
 	pthread_t tid1, tid2;
 	int prog_fd1, prog_fd2, old_timeout;
 
+	if (!has_bpf_timeout()) {
+		test__skip();
+		return;
+	}
+
 	/* Save current timeout and set a short timeout */
 	old_timeout = __read_sysctl();
 	if (old_timeout < 0) {
@@ -193,6 +275,37 @@ cleanup:
 	__write_sysctl(old_timeout);
 }
 
+/*
+ * test_undo_log_only - verify that BPF programs with CS writes load and run
+ * correctly when CONFIG_BPF_UNDO_LOG is enabled (even without a timer firing).
+ * Skipped when CONFIG_BPF_UNDO_LOG is absent.
+ */
+static void test_undo_log_only(void)
+{
+	struct test_spin_lock_timeout *skel;
+	LIBBPF_OPTS(bpf_test_run_opts, opts,
+		.data_in = &pkt_v4,
+		.data_size_in = sizeof(pkt_v4),
+	);
+	int prog_fd, err;
+
+	if (!has_bpf_undo_log()) {
+		test__skip();
+		return;
+	}
+
+	skel = test_spin_lock_timeout__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "undo_log_only__open_and_load"))
+		return;
+
+	/* Run a program that has CS writes; verifier/JIT should handle it. */
+	prog_fd = bpf_program__fd(skel->progs.test_nested_locking);
+	err = bpf_prog_test_run_opts(prog_fd, &opts);
+	ASSERT_OK(err, "undo_log_only run");
+
+	test_spin_lock_timeout__destroy(skel);
+}
+
 void test_spin_lock_timeout(void)
 {
 	if (test__start_subtest("nested_locking"))
@@ -203,4 +316,6 @@ void test_spin_lock_timeout(void)
 		test_timeout_trigger();
 	if (test__start_subtest("deadlock_abba"))
 		test_deadlock_abba();
+	if (test__start_subtest("undo_log_only"))
+		test_undo_log_only();
 }

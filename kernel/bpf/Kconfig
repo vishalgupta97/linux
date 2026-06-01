@@ -101,19 +101,38 @@ config BPF_LSM
 
 	  If you are unsure how to answer this question, answer N.
 
+config BPF_TIMEOUT
+	bool "Enable BPF spinlock timeout"
+	default n
+	help
+	  Enable a per-CPU hrtimer and kthread watchdog for BPF spinlock
+	  critical sections.  When the timeout fires (configurable via
+	  /proc/sys/net/core/bpf_spin_lock_timeout in milliseconds) the BPF
+	  program is terminated via bpf_throw().  All held locks are released.
+	  Without BPF_UNDO_LOG, writes inside the critical section are NOT
+	  rolled back.
+
+	  Can be enabled independently of BPF_UNDO_LOG.
+
+config BPF_SPINLOCK_HOOKS
+	def_bool (BPF_TIMEOUT || BPF_UNDO_LOG)
+
 config BPF_UNDO_LOG
 	bool "Enable BPF Undo log"
 	default n
 	help
-	  Enable BPF Undo log
+	  Track writes inside BPF spinlock critical sections and roll them back
+	  on timeout, guaranteeing atomicity on abort.  The verifier injects
+	  undo-log markers before each critical-section write; the x86 JIT
+	  replaces them with inline R12-cursor code.
 
-	  If unsure, use the default value of 64.
-
+	  Can be enabled independently of BPF_TIMEOUT (instrumentation works
+	  even without a timeout; writes are tracked but never replayed).
 
 config BPF_UNDO_LOG_MAX_ENTRIES
 	int "Maximum undo log entries per BPF spinlock critical section"
 	default 64
-	depends on BPF_SYSCALL
+	depends on BPF_UNDO_LOG
 	range 1 1024
 	help
 	  Sets the maximum number of memory write operations that can be
