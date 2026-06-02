@@ -8,6 +8,9 @@ Q = @
 endif
 
 obj-m := bench_spinlock_kmod.o
+# Prevent GCC's IPA constant propagation from creating .constprop.N clones
+# of the noinline stub functions, which breaks BPF fentry BTF lookup.
+ccflags-y += -fno-ipa-cp
 
 all:
 	$(Q)$(MAKE) -C $(KDIR) M=$(BENCH_KMOD_DIR) modules

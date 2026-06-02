@@ -132,7 +132,7 @@ config BPF_UNDO_LOG
 config BPF_UNDO_LOG_MAX_ENTRIES
 	int "Maximum undo log entries per BPF spinlock critical section"
 	default 64
-	depends on BPF_UNDO_LOG
+	depends on BPF_SYSCALL
 	range 1 1024
 	help
 	  Sets the maximum number of memory write operations that can be

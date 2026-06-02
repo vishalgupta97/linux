@@ -117,6 +117,7 @@ int BPF_PROG(graph_delete_op, __u32 src, __u32 dst,
 
 	bpf_spin_lock(&g->lock);
 	edge->src = 0;		/* undo-log entry 1 */
+	asm volatile("" ::: "memory");	/* prevent clang from merging adjacent u32 stores into one u64 */
 	edge->dst = 0;		/* undo-log entry 2 */
 	bpf_spin_unlock(&g->lock);
 	return 0;

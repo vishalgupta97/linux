@@ -14,6 +14,17 @@ KMOD="${SCRIPT_DIR}/../bench_kmod/bench_spinlock_kmod.ko"
 
 OUTPUT="${1:-/dev/stdout}"
 
+declare -A DONE=()
+FILE_EXISTS=0
+if [ "$OUTPUT" != "/dev/stdout" ] && [ -f "$OUTPUT" ]; then
+	FILE_EXISTS=1
+	while IFS=, read -r variant ds op threads pool_size rest; do
+		[ "$variant" = "variant" ] && continue
+		DONE["${threads}:${pool_size}:${op}:${variant}:${ds}"]=1
+	done < "$OUTPUT"
+	echo "Resuming: ${#DONE[@]} combinations already in $OUTPUT will be skipped" >&2
+fi
+
 if [ ! -x "$BENCH" ]; then
 	echo "ERROR: $BENCH not found. Build first:" >&2
 	echo "  make -C tools/testing/selftests/bpf bench_spinlock" >&2
@@ -42,6 +53,7 @@ run_bench() {
 	local op="$3"
 	local init_size="$4"
 	local variant="$5"
+	local ds="$6"
 
 	"$BENCH" \
 		--threads "$thread" \
@@ -49,14 +61,18 @@ run_bench() {
 		--op "$op" \
 		--init-size "$init_size" \
 		--warmup-ms 5000 \
-		--bench-ms 30000
+		--bench-ms 30000 \
+                --variant "$variant" \
+		--ds "$ds"
 }
 
 {
 	for thread in 1 2 4 8 16 32 64 80 96 112 128; do
 		for pool in 128; do #1 8 32 128; do
+			for ds in ring list trie graph; do
 			for op in insert; do  #lookup update delete; do
-				for variant in kmod kmod_bpf; do
+				for variant in kmod kmod_bpf undo_log; do
+				
 				# For insert, no prefill; for read/write/delete ops
 				# prefill to full pool capacity.
 				if [ "$op" = "insert" ]; then
@@ -64,11 +80,17 @@ run_bench() {
 				else
 					init_size=$pool
 				fi
-				run_bench "$thread" "$pool" "$op" "$init_size" "$variant"
+				key="${thread}:${pool}:${op}:${variant}:${ds}"
+				if [ -n "${DONE[$key]+x}" ]; then
+					echo "Skipping (exists): threads=$thread pool=$pool op=$op variant=$variant ds=$ds" >&2
+					continue
+				fi
+				run_bench "$thread" "$pool" "$op" "$init_size" "$variant" "$ds"
 				done
+			done
 			done
 		done
 	done
-} | awk 'NR==1 || !/^variant/' > "$OUTPUT"
+} | { if [ "$FILE_EXISTS" -eq 1 ]; then awk '!/^variant/' >> "$OUTPUT"; else awk 'NR==1 || !/^variant/' > "$OUTPUT"; fi; }
 
 echo "Done. Results written to: $OUTPUT" >&2
