@@ -117,6 +117,11 @@ config BPF_TIMEOUT
 config BPF_SPINLOCK_HOOKS
 	def_bool (BPF_TIMEOUT || BPF_UNDO_LOG)
 
+config BPF_SPINLOCK_USE_KOMB
+	bool "Enable komb for spinlock"
+	default n
+	depends on BPF_TIMEOUT
+
 config BPF_UNDO_LOG
 	bool "Enable BPF Undo log"
 	default n

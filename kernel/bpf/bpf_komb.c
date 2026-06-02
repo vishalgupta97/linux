@@ -11,6 +11,19 @@
 #include <linux/syscalls.h>
 #include <linux/bpf_komb.h>
 
+//#define DSM_DEBUG 1
+#ifdef DSM_DEBUG
+#define print_debug(fmt, ...)                                                  \
+	({                                                                     \
+		printk(KERN_EMERG "[%d] komb (%s) lock(%px) val(%x): " fmt,    \
+		       smp_processor_id(), __func__, lock, lock->val,          \
+		       ##__VA_ARGS__);                                         \
+	})
+#else
+#define print_debug(fmt, ...)
+#endif
+
+
 #define MAX_NODES 4
 #define NUM_PREFETCH_LINES 6
 #define SIZE_OF_SHADOW_STACK 4096
@@ -198,7 +211,10 @@ __attribute__((noipa)) noinline notrace static void
 execute_cs(struct qspinlock *lock, struct komb_node *curr_node)
 {
 	void *incoming_rsp_ptr, *outgoing_rsp_ptr;
+
 	struct shadow_stack *ptr = this_cpu_ptr(&local_shadow_stack);
+
+	ptr->curr_cs_cpu = curr_node->cpuid;
 
 	incoming_rsp_ptr = &(curr_node->rsp);
 	outgoing_rsp_ptr = &(ptr->local_shadow_stack_ptr);
@@ -207,8 +223,10 @@ execute_cs(struct qspinlock *lock, struct komb_node *curr_node)
 }
 #pragma GCC pop_options
 
-__always_inline static struct komb_node* run_combiner(struct qspinlock *lock,
-					 struct komb_node *curr_node)
+#pragma GCC push_options
+#pragma GCC optimize("O3")
+__attribute__((noipa)) noinline notrace static void
+run_combiner(struct qspinlock *lock, struct komb_node *curr_node)
 {
 	struct shadow_stack *ptr;
 	struct komb_node *next_node = curr_node->next;
@@ -217,7 +235,7 @@ __always_inline static struct komb_node* run_combiner(struct qspinlock *lock,
 		set_locked(lock);
 		curr_node->locked = false;
 		smp_mb();
-		return NULL;
+		return;
 	}
 
 	ptr = this_cpu_ptr(&local_shadow_stack);
@@ -230,7 +248,14 @@ __always_inline static struct komb_node* run_combiner(struct qspinlock *lock,
 	ptr->lock_addr = lock;
 	ptr->counter_val = 0;
 
+	print_debug("Combiner %d giving control to %d rsp: %px\n", smp_processor_id(),
+		    curr_node->cpuid, curr_node->rsp);
+
 	execute_cs(lock, curr_node);
+
+	print_debug(
+		"Combiner got the control back: %d counter: %d last_waiter: %d\n",
+		smp_processor_id(), ptr->counter_val, ptr->curr_cs_cpu);
 
 	if (ptr->prev_cs_cpu != -1) {
 		clear_locked_set_completed(
@@ -247,11 +272,12 @@ __always_inline static struct komb_node* run_combiner(struct qspinlock *lock,
 		ptr->local_queue_tail = NULL;
 	}
 
-	ptr->lock_addr = NULL;
+	set_locked(lock);
 	ptr->curr_cs_cpu = -1;
-
-	return next_node;
+	ptr->lock_addr = NULL;
+	next_node->locked = false;
 }
+#pragma GCC pop_options
 
 #pragma GCC push_options
 #pragma GCC optimize("O3")
@@ -259,7 +285,7 @@ __attribute__((noipa)) noinline notrace static void
 __komb_spin_lock_slowpath(struct qspinlock *lock)
 {
 	register struct komb_node *curr_node;
-	struct komb_node *prev_node = NULL, *next_node = NULL, *temp_node = NULL;
+	struct komb_node *prev_node = NULL, *next_node = NULL;
 	int old_tail, val, i, tail, idx;
 
 	curr_node = this_cpu_ptr(&komb_nodes[0]);
@@ -275,11 +301,17 @@ __komb_spin_lock_slowpath(struct qspinlock *lock)
 	curr_node->lock = lock;
 	curr_node->task_struct_ptr = current;
 
+	print_debug("Waiter thread going to join the queue. Stack PTR %px\n", curr_node->rsp);
+
 	old_tail = xchg_tail(lock, tail);
 
 	if (old_tail & _Q_TAIL_MASK) {
 		prev_node = decode_tail(old_tail);
+
 		prev_node->next = curr_node;
+
+		print_debug("Waiter thread spinning. prev_node: %d\n", prev_node->cpuid);
+
 		smp_cond_load_relaxed_sched(&curr_node->locked, !(VAL));
 
 		if (curr_node->completed) {
@@ -303,12 +335,7 @@ __komb_spin_lock_slowpath(struct qspinlock *lock)
 	next_node = curr_node->next;
 
 	curr_node->count--;
-	temp_node = run_combiner(lock, next_node);
-	set_locked(lock);
-	if(temp_node)
-		temp_node->locked = false;
-	else
-		next_node->locked = false;
+	run_combiner(lock, next_node);
 	return;
 
 release:
@@ -331,7 +358,7 @@ get_komb_node(void)
 
 #pragma GCC push_options
 #pragma GCC optimize("O3")
-__attribute__((noipa)) noinline notrace static void
+static __attribute__((noipa)) noinline notrace void
 komb_spin_lock_slowpath(struct qspinlock *lock)
 {
 	asm volatile("pushq %%rbp\n"
@@ -419,6 +446,19 @@ komb_spin_lock(struct qspinlock *lock)
 queue:
 
 	curr_node = this_cpu_ptr(&komb_nodes[0]);
+//	if(curr_node->count > 0) {
+//		printk(KERN_ALERT "cpu: %d Komb node count is higher\n", smp_processor_id());
+//	}
+//	if(!in_task()) {
+//		printk(KERN_ALERT "cpu: %d Komb not in task context\n", smp_processor_id());
+//	}
+//	if(irqs_disabled()) {
+//		printk(KERN_ALERT "cpu: %d Komb irqs are disabled\n", smp_processor_id());
+//	}
+//	if(current->migration_disabled) {
+//		printk(KERN_ALERT "cpu: %d Komb task migration is disabled\n", smp_processor_id());
+//	}
+
 	komb_spin_lock_slowpath(lock);
 
 	ptr = this_cpu_ptr(&local_shadow_stack);
