@@ -23545,7 +23545,8 @@ static int do_misc_fixups(struct bpf_verifier_env *env)
 			u8 mode = BPF_MODE(insn->code);
 
 			if ((cls == BPF_STX || cls == BPF_ST) &&
-			    (mode == BPF_MEM || mode == BPF_ATOMIC)) {
+			    (mode == BPF_MEM || mode == BPF_ATOMIC ||
+			     mode == BPF_PROBE_MEM32)) {
 				cnt = 0;
 				insn_buf[cnt++] = BPF_EMIT_CALL(bpf_undo_log_push);
 				insn_buf[cnt++] = *insn;
