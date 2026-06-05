@@ -874,6 +874,10 @@ $(OUTPUT)/bench_spinlock_overhead.o: benchs/bench_spinlock_overhead.c \
 	$(OUTPUT)/bench_kmod_bpf_trie.skel.h \
 	$(OUTPUT)/bench_kmod_bpf_rbtree.skel.h \
 	$(OUTPUT)/bench_kmod_bpf_graph.skel.h \
+	$(OUTPUT)/bench_lock_func_list.skel.h \
+	$(OUTPUT)/bench_lock_func_ring.skel.h \
+	$(OUTPUT)/bench_lock_func_trie.skel.h \
+	$(OUTPUT)/bench_lock_func_graph.skel.h \
 	$(BPFOBJ)
 	$(call msg,CC,,$@)
 	$(Q)$(CC) $(CFLAGS) -O2 -c benchs/bench_spinlock_overhead.c \

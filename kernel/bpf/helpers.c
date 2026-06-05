@@ -689,6 +689,48 @@ const struct bpf_func_proto bpf_spin_unlock_proto = {
 	.arg1_btf_id = BPF_PTR_POISON,
 };
 
+/*
+ * bpf_lock_func(lock, callback_fn, local_state)
+ *
+ * Acquire @lock, run @callback_fn(local_state) with the lock held, then
+ * release @lock.  Because the lock is held across the callback, every write
+ * to global state inside the callback is undo-logged (the verifier injects
+ * undo-log markers for those writes, see do_misc_fixups()).  If the critical
+ * section is aborted by the timeout handler, the callback never returns here:
+ * bpf_spin_lock_timeout_handler() rolls back the undo log, releases the locks
+ * held in this CPU's held_locks[], and bpf_throw()s out of the program.
+ */
+NOTRACE_BPF_CALL_3(bpf_lock_func, void *, lock, void *, callback_fn,
+		   void *, local_state)
+{
+	bpf_callback_t callback = (bpf_callback_t)callback_fn;
+
+#ifdef CONFIG_BPF_SPINLOCK_HOOKS
+	__internal__bpf_spin_lock((struct qspinlock *)lock);
+#else
+	__bpf_spin_lock(lock);
+#endif
+
+	callback((u64)(long)local_state, 0, 0, 0, 0);
+
+#ifdef CONFIG_BPF_SPINLOCK_HOOKS
+	__internal__bpf_spin_unlock((struct qspinlock *)lock);
+#else
+	__bpf_spin_unlock(lock);
+#endif
+	return 0;
+}
+
+const struct bpf_func_proto bpf_lock_func_proto = {
+	.func = bpf_lock_func,
+	.gpl_only = false,
+	.ret_type = RET_INTEGER,
+	.arg1_type = ARG_PTR_TO_SPIN_LOCK,
+	.arg1_btf_id = BPF_PTR_POISON,
+	.arg2_type = ARG_PTR_TO_FUNC,
+	.arg3_type = ARG_PTR_TO_STACK_OR_NULL,
+};
+
 #ifdef CONFIG_BPF_TIMEOUT
 /* ---------------------------------------------------------------------- */
 /* Kthread for uncontended timeout*/
@@ -2550,6 +2592,8 @@ bpf_base_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		return &bpf_for_each_map_elem_proto;
 	case BPF_FUNC_loop:
 		return &bpf_loop_proto;
+	case BPF_FUNC_lock_func:
+		return &bpf_lock_func_proto;
 	case BPF_FUNC_user_ringbuf_drain:
 		return &bpf_user_ringbuf_drain_proto;
 	case BPF_FUNC_ringbuf_reserve_dynptr:

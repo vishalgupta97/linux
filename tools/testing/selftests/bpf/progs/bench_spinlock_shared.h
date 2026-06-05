@@ -28,6 +28,7 @@
 #define BENCH_VARIANT_ARENA     1
 #define BENCH_VARIANT_KMOD      2
 #define BENCH_VARIANT_KMOD_BPF  3
+#define BENCH_VARIANT_LOCK_FUNC 4
 
 #define BENCH_OP_INSERT  0
 #define BENCH_OP_LOOKUP  1
@@ -153,6 +154,7 @@ static const char * const bench_variant_names[] = {
 	[BENCH_VARIANT_ARENA]    = "arena",
 	[BENCH_VARIANT_KMOD]     = "kmod",
 	[BENCH_VARIANT_KMOD_BPF] = "kmod_bpf",
+	[BENCH_VARIANT_LOCK_FUNC] = "lock_func",
 };
 
 static const char * const bench_op_names[] = {

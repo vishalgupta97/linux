@@ -306,6 +306,15 @@ struct bpf_func_state {
 	 */
 	u32 callback_depth;
 
+	/* Set on the callee frame entered by bpf_lock_func(): the callback runs
+	 * with the lock held, and bpf_lock_func() must not be nested.  The lock
+	 * acquired by bpf_lock_func() is released from this frame on callback
+	 * exit (see prepare_func_exit()); lock_func_lock_{id,ptr} identify it.
+	 */
+	bool in_lock_func_cb;
+	int lock_func_lock_id;
+	void *lock_func_lock_ptr;
+
 	/* The following fields should be last. See copy_func_state() */
 	/* The state of the stack. Each element of the array describes BPF_REG_SIZE
 	 * (i.e. 8) bytes worth of stack memory.

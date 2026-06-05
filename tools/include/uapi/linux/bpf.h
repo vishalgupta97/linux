@@ -5898,6 +5898,25 @@ union bpf_attr {
  *		0 on success.
  *
  *		**-ENOENT** if the bpf_local_storage cannot be found.
+ *
+ * long bpf_lock_func(void *lock, void *callback_fn, void *local_state)
+ *	Description
+ *		Acquire the spin lock *lock*, invoke *callback_fn* with the
+ *		lock held, then release *lock*. The callback receives
+ *		*local_state* as its only argument:
+ *
+ *		long (\*callback_fn)(void \*local_state);
+ *
+ *		All writes to global state performed inside *callback_fn*
+ *		are recorded in the per-CPU undo log and rolled back if the
+ *		critical section is aborted by the spin lock timeout handler.
+ *
+ *		*bpf_lock_func*\ () calls cannot be nested: *callback_fn* (and
+ *		any function it calls) must not call *bpf_lock_func*\ () again.
+ *		Locking a *different* lock inside *callback_fn* with
+ *		*bpf_spin_lock*\ () is allowed.
+ *	Return
+ *		0 on success.
  */
 #define ___BPF_FUNC_MAPPER(FN, ctx...)			\
 	FN(unspec, 0, ##ctx)				\
@@ -6112,6 +6131,7 @@ union bpf_attr {
 	FN(user_ringbuf_drain, 209, ##ctx)		\
 	FN(cgrp_storage_get, 210, ##ctx)		\
 	FN(cgrp_storage_delete, 211, ##ctx)		\
+	FN(lock_func, 212, ##ctx)			\
 	/* This helper list is effectively frozen. If you are trying to	\
 	 * add a new helper, you should add a kfunc instead which has	\
 	 * less stability guarantees. See Documentation/bpf/kfuncs.rst	\

@@ -47,6 +47,7 @@
 #define BENCH_VARIANT_ARENA     1
 #define BENCH_VARIANT_KMOD      2
 #define BENCH_VARIANT_KMOD_BPF  3
+#define BENCH_VARIANT_LOCK_FUNC 4
 
 #define BENCH_OP_INSERT  0
 #define BENCH_OP_LOOKUP  1
@@ -501,6 +502,7 @@ static void call_init(int variant, int ds_type, u32 pool_size)
 {
 	switch (variant) {
 	case BENCH_VARIANT_UNDO_LOG:
+	case BENCH_VARIANT_LOCK_FUNC:
 		switch (ds_type) {
 		case BENCH_DS_LIST:   bench_undo_list_init(pool_size);             break;
 		case BENCH_DS_RING:   bench_undo_ring_init(pool_size);             break;
@@ -555,6 +557,7 @@ static void call_op(int variant, int ds_type, int op_type, u64 iter, u32 pool_si
 	case BENCH_OP_INSERT:
 		switch (variant) {
 		case BENCH_VARIANT_UNDO_LOG:
+		case BENCH_VARIANT_LOCK_FUNC:
 			switch (ds_type) {
 			case BENCH_DS_LIST:   bench_undo_list_insert(idx, 0);           break;
 			case BENCH_DS_RING:   bench_undo_ring_enqueue(val);             break;
@@ -624,6 +627,7 @@ static void call_op(int variant, int ds_type, int op_type, u64 iter, u32 pool_si
 	case BENCH_OP_LOOKUP:
 		switch (variant) {
 		case BENCH_VARIANT_UNDO_LOG:
+		case BENCH_VARIANT_LOCK_FUNC:
 			switch (ds_type) {
 			case BENCH_DS_LIST:   bench_undo_list_lookup(idx);           break;
 			case BENCH_DS_RING:   bench_undo_ring_lookup(idx);           break;
@@ -683,6 +687,7 @@ static void call_op(int variant, int ds_type, int op_type, u64 iter, u32 pool_si
 	case BENCH_OP_UPDATE:
 		switch (variant) {
 		case BENCH_VARIANT_UNDO_LOG:
+		case BENCH_VARIANT_LOCK_FUNC:
 			switch (ds_type) {
 			case BENCH_DS_LIST:   bench_undo_list_update(idx, val);          break;
 			case BENCH_DS_RING:   bench_undo_ring_update(idx, val);          break;
@@ -743,6 +748,7 @@ static void call_op(int variant, int ds_type, int op_type, u64 iter, u32 pool_si
 	case BENCH_OP_DELETE:
 		switch (variant) {
 		case BENCH_VARIANT_UNDO_LOG:
+		case BENCH_VARIANT_LOCK_FUNC:
 			switch (ds_type) {
 			case BENCH_DS_LIST:   bench_undo_list_delete();              break;
 			case BENCH_DS_RING:   bench_undo_ring_dequeue(idx);         break;
@@ -1064,7 +1070,7 @@ static long bench_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
 
 		if (copy_from_user(&p, (void __user *)arg, sizeof(p)))
 			return -EFAULT;
-		if (p.ds_type > BENCH_DS_GRAPH || p.variant > BENCH_VARIANT_KMOD_BPF)
+		if (p.ds_type > BENCH_DS_GRAPH || p.variant > BENCH_VARIANT_LOCK_FUNC)
 			return -EINVAL;
 		if (p.op_type > BENCH_OP_DELETE)
 			return -EINVAL;

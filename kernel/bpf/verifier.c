@@ -529,6 +529,7 @@ static bool is_sync_callback_calling_function(enum bpf_func_id func_id)
 	return func_id == BPF_FUNC_for_each_map_elem ||
 	       func_id == BPF_FUNC_find_vma ||
 	       func_id == BPF_FUNC_loop ||
+	       func_id == BPF_FUNC_lock_func ||
 	       func_id == BPF_FUNC_user_ringbuf_drain;
 }
 
@@ -10126,6 +10127,17 @@ skip_type_check:
 			err = process_spin_lock(env, regno, 0);
 			if (err)
 				return err;
+		} else if (meta->func_id == BPF_FUNC_lock_func) {
+			/* bpf_lock_func() acquires the lock here so its callback
+			 * is verified with the lock held (writes get undo-logged).
+			 * Acquiring the same lock again is an AA deadlock and is
+			 * rejected by process_spin_lock(). The lock is released on
+			 * the main path in check_helper_call() and on the callback
+			 * branch in prepare_func_exit().
+			 */
+			err = process_spin_lock(env, regno, PROCESS_SPIN_LOCK);
+			if (err)
+				return err;
 		} else {
 			verifier_bug(env, "spin lock arg on unexpected helper");
 			return -EFAULT;
@@ -11123,6 +11135,52 @@ static int set_loop_callback_state(struct bpf_verifier_env *env,
 	return 0;
 }
 
+static int set_lock_func_callback_state(struct bpf_verifier_env *env,
+					struct bpf_func_state *caller,
+					struct bpf_func_state *callee,
+					int insn_idx)
+{
+	/* bpf_lock_func(void *lock, void *callback_fn, void *local_state);
+	 * callback_fn(void *local_state);
+	 * The lock has already been acquired (in check_func_arg) so the
+	 * callback is verified with the lock held.
+	 */
+	callee->regs[BPF_REG_1] = caller->regs[BPF_REG_3];
+
+	/* unused */
+	__mark_reg_not_init(env, &callee->regs[BPF_REG_2]);
+	__mark_reg_not_init(env, &callee->regs[BPF_REG_3]);
+	__mark_reg_not_init(env, &callee->regs[BPF_REG_4]);
+	__mark_reg_not_init(env, &callee->regs[BPF_REG_5]);
+
+	callee->in_callback_fn = true;
+	callee->callback_ret_range = retval_range(0, 1);
+
+	/* Mark this callback frame as a bpf_lock_func() critical section so
+	 * nested bpf_lock_func() calls are rejected and the lock is released
+	 * when the callback returns (see prepare_func_exit()). The lock just
+	 * acquired is the active lock on the current (caller) state.
+	 */
+	callee->in_lock_func_cb = true;
+	callee->lock_func_lock_id = env->cur_state->active_lock_id;
+	callee->lock_func_lock_ptr = env->cur_state->active_lock_ptr;
+	return 0;
+}
+
+/* True if any frame on the current call stack is a bpf_lock_func() callback.
+ * Used to reject nested bpf_lock_func() calls (directly or transitively).
+ */
+static bool is_in_lock_func_cb(struct bpf_verifier_env *env)
+{
+	struct bpf_verifier_state *state = env->cur_state;
+	int i;
+
+	for (i = 0; i <= state->curframe; i++)
+		if (state->frame[i]->in_lock_func_cb)
+			return true;
+	return false;
+}
+
 static int set_timer_callback_state(struct bpf_verifier_env *env,
 				    struct bpf_func_state *caller,
 				    struct bpf_func_state *callee,
@@ -11358,10 +11416,28 @@ static int prepare_func_exit(struct bpf_verifier_env *env, int *insn_idx)
 	 * converges is_state_visited() would prune that visit eventually.
 	 */
 	in_callback_fn = callee->in_callback_fn;
-	if (in_callback_fn)
+	/* bpf_lock_func() invokes its callback exactly once, so return past the
+	 * call (callsite + 1) instead of rescheduling it like bpf_loop.
+	 */
+	if (in_callback_fn && !callee->in_lock_func_cb)
 		*insn_idx = callee->callsite;
 	else
 		*insn_idx = callee->callsite + 1;
+
+	if (callee->in_lock_func_cb) {
+		/* The bpf_lock_func() callback is returning: release the lock it
+		 * acquired so the post-callback path holds no lock (matching the
+		 * release done on the main path in check_helper_call()).
+		 */
+		if (release_lock_state(state, REF_TYPE_LOCK,
+				       callee->lock_func_lock_id,
+				       callee->lock_func_lock_ptr)) {
+			verbose(env, "bpf_lock_func: failed to release lock on callback return\n");
+			return -EINVAL;
+		}
+		if (!state->active_locks)
+			state->cs_write_count = 0;
+	}
 
 	if (env->log.level & BPF_LOG_LEVEL) {
 		verbose(env, "returning from callee:\n");
@@ -11916,6 +11992,27 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 				verbose(env, "frame%d bpf_loop iteration limit reached\n",
 					env->cur_state->curframe);
 		}
+		break;
+	case BPF_FUNC_lock_func:
+		/* bpf_lock_func() must not be nested: its callback (or anything
+		 * it calls) cannot call bpf_lock_func() again. The lock was
+		 * acquired in check_func_arg() so the callback is verified with
+		 * the lock held (writes get undo-logged).
+		 */
+		if (is_in_lock_func_cb(env)) {
+			verbose(env, "bpf_lock_func cannot be nested\n");
+			return -EINVAL;
+		}
+		err = push_callback_call(env, insn, insn_idx, meta.subprogno,
+					 set_lock_func_callback_state);
+		if (err)
+			return err;
+		/* Release the lock on the main continuation path; after
+		 * bpf_lock_func() returns no lock is held. The pushed callback
+		 * branch keeps the lock and releases it on callback exit
+		 * (see prepare_func_exit()).
+		 */
+		err = process_spin_lock(env, BPF_REG_1, 0);
 		break;
 	case BPF_FUNC_dynptr_from_mem:
 		if (regs[BPF_REG_1].type != PTR_TO_MAP_VALUE) {
