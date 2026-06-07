@@ -26,6 +26,26 @@ make -j100 -C tools/testing/selftests/bpf test_progs
 ./tools/testing/selftests/bpf/test_progs
 ```
 
+### Load-check a new BPF program before running it
+
+After building, **always do a verifier load-check before running a newly written or
+modified BPF program**. Loading a program runs it through the verifier (and the JIT)
+without executing it, so it surfaces verifier rejections, undo-log marker / JIT issues,
+and bad lock nesting cheaply and without the risk of a buggy program hanging or
+spinning the machine at run time.
+
+```bash
+# Load every program in the compiled object through the verifier (does NOT run them).
+# The .bpf.o is produced by the test_progs build above.
+cd tools/testing/selftests/bpf
+sudo ./tools/sbin/bpftool prog loadall <name>.bpf.o /sys/fs/bpf/<name>
+# exit status 0 == all programs passed the verifier
+sudo ./tools/sbin/bpftool prog show pinned /sys/fs/bpf/<name>/<prog>   # inspect xlated/jited
+sudo rm -rf /sys/fs/bpf/<name>                                         # clean up the pins
+```
+
+Only after the load-check passes should you run the program via `test_progs`.
+
 The build config is `bpftest-config` (not `.config`). Key config options relevant to this work:
 - `CONFIG_BPF_UNDO_LOG=y`, `CONFIG_BPF_UNDO_LOG_MAX_ENTRIES=64`
 - `CONFIG_QUEUED_SPINLOCKS=y` (required for the custom qspinlock path)
