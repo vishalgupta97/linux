@@ -27,6 +27,7 @@
 
 #include <linux/cgroup-defs.h>
 #include <linux/page_counter.h>
+#include <linux/hashtable.h>
 #include <linux/memcontrol.h>
 #include <linux/cgroup.h>
 #include <linux/cpuset.h>
@@ -127,6 +128,224 @@ struct mem_cgroup *vmpressure_to_memcg(struct vmpressure *vmpr)
 #define SEQ_BUF_SIZE SZ_4K
 #define CURRENT_OBJCG_UPDATE_BIT 0
 #define CURRENT_OBJCG_UPDATE_FLAG (1UL << CURRENT_OBJCG_UPDATE_BIT)
+
+/*
+ * cache_ext: page cache eviction policy support.
+ */
+
+bool cache_ext_cgroup_enabled(struct cgroup *cgroup) {
+	down_read(&cgroup->bpf.cache_ext_sem);
+	bool res = cgroup->bpf.cache_ext_enabled;
+	up_read(&cgroup->bpf.cache_ext_sem);
+
+	return res;
+}
+
+noinline struct cache_ext_ops *get_cache_ext_ops(struct mem_cgroup *memcg)
+{
+	if (memcg && memcg->cache_ext_valid && cache_ext_cgroup_enabled(memcg->css.cgroup))
+		return memcg->css.cgroup->bpf.cache_ext_ops;
+	return NULL;
+}
+
+/*
+ * Valid folios set code.
+ */
+
+static inline uintptr_t folio_ptr_to_key (struct folio *folio) {
+	return (uintptr_t)folio;
+}
+
+inline struct valid_folios_set *folio_to_valid_folios_set(struct folio *folio) {
+	// Get cgroup from folio
+	struct mem_cgroup *memcg = folio_memcg(folio);
+	// Get pgdat from folio
+	pg_data_t *pgdat = folio_pgdat(folio);
+	// Get node cgroup
+	struct mem_cgroup_per_node *node_cgroup = memcg->nodeinfo[pgdat->node_id];
+	// Get valid folios set from cgroup
+	struct valid_folios_set *valid_folios_set = node_cgroup->valid_folios_set;
+	return valid_folios_set;
+}
+
+inline struct valid_folios_set *memcg_to_valid_folios_set(struct mem_cgroup *memcg) {
+	return memcg->nodeinfo[0]->valid_folios_set;
+}
+
+inline struct valid_folios_set *lruvec_to_valid_folios_set(struct lruvec *lruvec) {
+	// Get cgroup from lruvec
+	struct mem_cgroup *memcg = lruvec_memcg(lruvec);
+	// Get pgdat from lruvec
+	pg_data_t *pgdat = lruvec_pgdat(lruvec);
+	// Get node cgroup
+	struct mem_cgroup_per_node *node_cgroup = memcg->nodeinfo[pgdat->node_id];
+	// Get valid folios set from cgroup
+	struct valid_folios_set *valid_folios_set = node_cgroup->valid_folios_set;
+	return valid_folios_set;
+}
+
+spinlock_t *valid_folios_set_get_bucket_lock(struct valid_folios_set *valid_folios_set, struct folio *folio) {
+	uintptr_t key = folio_ptr_to_key(folio);
+	int bkt = hash_bucket_idx(valid_folios_set->valid_folios, key);
+	if (bkt < 0 || bkt >= VALID_FOLIOS_SET_SIZE) {
+		pr_err("invalid bkt: %d", bkt);
+		BUG();
+	}
+	return &valid_folios_set->bucket_locks[bkt];
+}
+
+struct valid_folios_set* init_valid_folios_set(int node, uint64_t num_buckets) {
+	struct sysinfo sysinfo;
+	si_meminfo(&sysinfo);
+	uint64_t total_memory_in_bytes = sysinfo.totalram * sysinfo.mem_unit;
+	uint64_t total_memory_in_mbytes = total_memory_in_bytes / (1024*1024);
+	pr_info("cache_ext: Cgroup sees available memory: %llu B (%llu MB)\n",
+		total_memory_in_bytes, total_memory_in_mbytes);
+	struct valid_folios_set *valid_folios_set;
+	// TODO: Change to vmalloc_node
+	valid_folios_set = vmalloc_huge(sizeof(struct valid_folios_set), GFP_KERNEL | __GFP_ZERO);
+	if (!valid_folios_set) {
+		pr_err("cache_ext: Failed to allocate valid folios set\n");
+		return NULL;
+	}
+	atomic64_set(&valid_folios_set->nr_entries, 0);
+
+	hash_init(valid_folios_set->valid_folios);
+	for (int i = 0; i < VALID_FOLIOS_SET_SIZE; i++) {
+		spin_lock_init(&valid_folios_set->bucket_locks[i]);
+	}
+	return valid_folios_set;
+}
+
+void free_valid_folios_set(struct valid_folios_set *valid_folios_set) {
+	struct valid_folio *cur;
+	struct hlist_node *tmp;
+	int bkt;
+	pr_info("Freeing valid folios set");
+	// TODO: Do we need to lock here?
+	hash_for_each_safe(valid_folios_set->valid_folios, bkt, tmp, cur, h_node) {
+		hash_del(&cur->h_node);
+		kfree(cur);
+	}
+	vfree(valid_folios_set);
+}
+
+void valid_folios_add(struct folio *folio) {
+	// TODO: Error check this!
+	struct valid_folio *new = kmalloc(sizeof(struct valid_folio), GFP_KERNEL);
+	WARN_ON_ONCE(!new);
+	struct cache_ext_list_node *node = cache_ext_list_node_alloc(folio);
+	new->folio_ptr = folio_ptr_to_key(folio);
+	struct valid_folios_set *valid_folios_set = folio_to_valid_folios_set(folio);
+	// Lock the bucket
+	spinlock_t *bucket_lock = valid_folios_set_get_bucket_lock(valid_folios_set, folio);
+	spin_lock(bucket_lock);
+	// Use valid_folios_exists function to check if the folio is already in the valid folio hash table
+	if (valid_folios_exists_unlocked(valid_folios_set, folio)) {
+		spin_unlock(bucket_lock);
+		kfree(new);
+		cache_ext_list_node_free(node);
+		return;
+	}
+	// The folio is valid, so we add it to the valid folio hash table
+	new->cache_ext_node = node;
+	hash_add(valid_folios_set->valid_folios, &new->h_node, new->folio_ptr);
+	spin_unlock(bucket_lock);
+	atomic64_fetch_add(1, &valid_folios_set->nr_entries);
+}
+
+/*
+ * Delete a folio from the valid folio hash table. If the folio is not in the
+ * hash table, do nothing.
+ */
+void valid_folios_del(struct folio *folio) {
+	if (in_interrupt()) {
+		pr_err("valid_folios_del called in irq mode!\n");
+	}
+	struct valid_folios_set *valid_folios_set = folio_to_valid_folios_set(folio);
+	struct valid_folio *cur;
+	spinlock_t *bucket_lock = valid_folios_set_get_bucket_lock(valid_folios_set, folio);
+	spin_lock(bucket_lock);
+	uintptr_t key = folio_ptr_to_key(folio);
+	hash_for_each_possible(valid_folios_set->valid_folios, cur, h_node, key) {
+		if (cur->folio_ptr == key) {
+			hash_del(&cur->h_node);
+			// TODO: If BPF has not removed it we are screwed!
+			// Change to dealloc in BPF.
+
+			cache_ext_ds_registry_write_lock(folio);
+			// Is it in a list currently? If so, remove it.
+			// if (!list_empty(&cur->cache_ext_node->node)) {
+			list_del(&cur->cache_ext_node->node);
+			//}
+			cache_ext_ds_registry_write_unlock(folio);
+			cache_ext_list_node_free(cur->cache_ext_node);
+
+			kfree(cur);
+			spin_unlock(bucket_lock);
+			atomic64_fetch_add(-1, &valid_folios_set->nr_entries);
+			return;
+		}
+	}
+	spin_unlock(bucket_lock);
+}
+
+void valid_folios_clear_list(struct valid_folios_set *valid_folios_set) {
+	// For each bucket:
+	// 1. Lock the bucket
+	// 2. Iterate over the valid folios in the bucket
+	// 3. Set the cache_ext_node pointer to null
+	// 4. Unlock the bucket
+	struct valid_folio *cur;
+	spinlock_t *bucket_lock;
+
+	for (int i = 0; i < VALID_FOLIOS_SET_SIZE; i++) {
+		bucket_lock = &valid_folios_set->bucket_locks[i];
+		spin_lock(bucket_lock);
+		hlist_for_each_entry(cur, &valid_folios_set->valid_folios[i], h_node) {
+			INIT_LIST_HEAD(&cur->cache_ext_node->node);
+		}
+		spin_unlock(bucket_lock);
+	}
+}
+
+bool valid_folios_exists(struct valid_folios_set *valid_folios_set, struct folio *folio) {
+	spinlock_t *bucket_lock = valid_folios_set_get_bucket_lock(valid_folios_set, folio);
+	spin_lock(bucket_lock);
+	bool ret = valid_folios_exists_unlocked(valid_folios_set, folio);
+	spin_unlock(bucket_lock);
+	return ret;
+}
+
+bool valid_folios_exists_unlocked(struct valid_folios_set *valid_folios_set, struct folio *folio) {
+	// TODO: Add read lock.
+	// Use hash_for_each_possible to iterate over the valid folio hash table
+	// and check if the folio is valid
+	struct valid_folio *cur;
+	uintptr_t key = folio_ptr_to_key(folio);
+	hash_for_each_possible(valid_folios_set->valid_folios, cur, h_node, key) {
+		if (cur->folio_ptr == key) {
+			return true;
+		}
+	}
+	return false;
+}
+
+u64 valid_folios_get_nr_entries(struct valid_folios_set *valid_folios_set) {
+	return (u64) (atomic64_read(&valid_folios_set->nr_entries));
+}
+
+struct valid_folio *valid_folios_lookup(struct folio *folio) {
+	struct valid_folios_set *valid_folios_set = folio_to_valid_folios_set(folio);
+	struct valid_folio *cur;
+	uintptr_t key = folio_ptr_to_key(folio);
+	hash_for_each_possible(valid_folios_set->valid_folios, cur, h_node, key) {
+		if (cur->folio_ptr == key) {
+			return cur;
+		}
+	}
+	return NULL;
+}
 
 static DEFINE_SPINLOCK(objcg_lock);
 
@@ -3687,6 +3906,10 @@ static void free_mem_cgroup_per_node_info(struct mem_cgroup_per_node *pn)
 	if (!pn)
 		return;
 
+	/* cache_ext: release the per-node valid folios set if present. */
+	if (pn->valid_folios_set)
+		free_valid_folios_set(pn->valid_folios_set);
+
 	free_percpu(pn->lruvec_stats_percpu);
 	kfree(pn->lruvec_stats);
 	kfree(pn);
@@ -3872,9 +4095,53 @@ mem_cgroup_css_alloc(struct cgroup_subsys_state *parent_css)
 	return &memcg->css;
 }
 
+/* cache_ext: allocate the per-node valid folios set + DS registry. */
+static int add_cache_ext_structures(struct mem_cgroup *memcg) {
+	int node;
+	struct mem_cgroup_per_node *pn;
+
+	if (unlikely(memcg->css.cgroup == NULL)) {
+		pr_err("cache_ext: memcg css is NULL\n");
+		return -1;
+	}
+
+	for_each_node(node) {
+		pn = memcg->nodeinfo[node];
+		// Get memory size for the node
+		struct sysinfo si;
+		si_meminfo(&si);
+		uint64_t memory_in_bytes  = si.totalram * si.mem_unit;
+		uint64_t max_num_pages = memory_in_bytes / PAGE_SIZE;
+		uint64_t num_buckets = roundup_pow_of_two(max_num_pages);
+		pr_info("cache_ext: Creating cache ext structures for node %d, num_buckets = %llu\n", node, num_buckets);
+		pn->valid_folios_set = init_valid_folios_set(node, num_buckets);
+		if (pn->valid_folios_set == NULL) {
+			pr_err("cache_ext: Failed to initialize valid folios set for node %d\n", node);
+			return -1;
+		}
+		cache_ext_ds_registry_init(&pn->cache_ext_ds_registry);
+	}
+	return 0;
+}
+
 static int mem_cgroup_css_online(struct cgroup_subsys_state *css)
 {
 	struct mem_cgroup *memcg = mem_cgroup_from_css(css);
+	char name[NAME_MAX];
+	int ce_ret;
+
+	/* cache_ext: cgroups named "cache_ext*" get eviction-policy support. */
+	if (memcg->css.cgroup &&
+	    cgroup_name(memcg->css.cgroup, name, NAME_MAX) >= 0 &&
+	    str_has_prefix(name, "cache_ext")) {
+		pr_info("cache_ext: Cgroup %s is a cache_ext cgroup\n", name);
+		ce_ret = add_cache_ext_structures(memcg);
+		if (ce_ret < 0) {
+			pr_err("cache_ext: Failed to add cache ext structures for cgroup %s\n", name);
+			return -1;
+		}
+		memcg->cache_ext_valid = true;
+	}
 
 	if (memcg_online_kmem(memcg))
 		goto remove_id;

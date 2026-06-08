@@ -454,6 +454,12 @@ static bool lru_gen_clear_refs(struct folio *folio)
  */
 void folio_mark_accessed(struct folio *folio)
 {
+	/* cache_ext: folio_accessed hook */
+	struct mem_cgroup *memcg = folio_memcg(folio);
+	struct cache_ext_ops *pcext_ops = get_cache_ext_ops(memcg);
+	if (pcext_ops != NULL && pcext_ops->folio_accessed != NULL)
+		pcext_ops->folio_accessed(folio);
+
 	if (folio_test_dropbehind(folio))
 		return;
 	if (lru_gen_enabled()) {
