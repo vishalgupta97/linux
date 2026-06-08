@@ -559,6 +559,14 @@ enum cache_ext_list_ops_type {
 	KF_bpf_cache_ext_list_iterate_extended,
 };
 
+/*
+ * NOTE: this tree enforces trusted pointer args for ALL KF_ARG_PTR_TO_BTF_ID
+ * kfunc arguments unconditionally (verifier.c check_kfunc_args: "R%d must be
+ * referenced or trusted"), with no KF_TRUSTED_ARGS gate (the flag was removed
+ * from this kernel). So the struct folio * args below are already required to
+ * be verifier-trusted -- either a struct_ops hook arg or node->folio walked
+ * from a trusted cache_ext_list_node (see BTF_TYPE_SAFE_TRUSTED in verifier.c).
+ */
 BTF_KFUNCS_START(cache_ext_list_ops)
 BTF_ID_FLAGS(func, bpf_cache_ext_list_add)
 BTF_ID_FLAGS(func, bpf_cache_ext_list_add_tail)

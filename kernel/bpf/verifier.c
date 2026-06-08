@@ -7331,6 +7331,17 @@ BTF_TYPE_SAFE_TRUSTED_OR_NULL(struct vm_area_struct) {
 	struct file *vm_file;
 };
 
+/*
+ * cache_ext: the iterate/sample callbacks receive a trusted
+ * struct cache_ext_list_node *; its embedded folio is kernel-owned and valid
+ * for the duration of the callback, so walking node->folio yields a trusted
+ * folio (which may then be passed to the cache_ext list kfuncs, whose
+ * PTR_TO_BTF_ID args are required to be trusted by check_kfunc_args).
+ */
+BTF_TYPE_SAFE_TRUSTED(struct cache_ext_list_node) {
+	struct folio *folio;
+};
+
 static bool type_is_rcu(struct bpf_verifier_env *env,
 			struct bpf_reg_state *reg,
 			const char *field_name, u32 btf_id)
@@ -7362,6 +7373,7 @@ static bool type_is_trusted(struct bpf_verifier_env *env,
 	BTF_TYPE_EMIT(BTF_TYPE_SAFE_TRUSTED(struct bpf_iter__task));
 	BTF_TYPE_EMIT(BTF_TYPE_SAFE_TRUSTED(struct linux_binprm));
 	BTF_TYPE_EMIT(BTF_TYPE_SAFE_TRUSTED(struct file));
+	BTF_TYPE_EMIT(BTF_TYPE_SAFE_TRUSTED(struct cache_ext_list_node));
 
 	return btf_nested_type_is_trusted(&env->log, reg, field_name, btf_id, "__safe_trusted");
 }
@@ -11280,8 +11292,11 @@ static int set_cache_ext_list_iterate_callback_state(
 	/* idx: scalar */
 	__mark_reg_unknown(env, &callee->regs[BPF_REG_1]);
 
-	/* node: PTR_TO_BTF_ID(struct cache_ext_list_node) */
-	callee->regs[BPF_REG_2].type = PTR_TO_BTF_ID;
+	/* node: PTR_TO_BTF_ID | PTR_TRUSTED (struct cache_ext_list_node).
+	 * Trusted so that node->folio (tagged BTF_TYPE_SAFE_TRUSTED) is itself a
+	 * trusted folio usable with the cache_ext list kfuncs (whose btf_id args must be trusted).
+	 */
+	callee->regs[BPF_REG_2].type = PTR_TO_BTF_ID | PTR_TRUSTED;
 	__mark_reg_known_zero(&callee->regs[BPF_REG_2]);
 	callee->regs[BPF_REG_2].btf = btf_vmlinux;
 	callee->regs[BPF_REG_2].btf_id = btf_tracing_ids[BTF_TRACING_TYPE_CACHE_EXT_LIST_NODE];
@@ -11316,8 +11331,11 @@ static int set_cache_ext_list_sample_callback_state(
 	 */
 	__mark_reg_not_init(env, &callee->regs[BPF_REG_0]);
 
-	/* node: PTR_TO_BTF_ID(struct cache_ext_list_node) */
-	callee->regs[BPF_REG_1].type = PTR_TO_BTF_ID;
+	/* node: PTR_TO_BTF_ID | PTR_TRUSTED (struct cache_ext_list_node).
+	 * Trusted so that node->folio (tagged BTF_TYPE_SAFE_TRUSTED) is itself a
+	 * trusted folio usable with the cache_ext list kfuncs (whose btf_id args must be trusted).
+	 */
+	callee->regs[BPF_REG_1].type = PTR_TO_BTF_ID | PTR_TRUSTED;
 	__mark_reg_known_zero(&callee->regs[BPF_REG_1]);
 	callee->regs[BPF_REG_1].btf = btf_vmlinux;
 	callee->regs[BPF_REG_1].btf_id = btf_tracing_ids[BTF_TRACING_TYPE_CACHE_EXT_LIST_NODE];
