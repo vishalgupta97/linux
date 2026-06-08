@@ -56,6 +56,12 @@ DEFINE_EVENT(mm_filemap_op_page_cache, mm_filemap_add_to_page_cache,
 	TP_ARGS(folio)
 	);
 
+/* cache_ext: fired when a folio is added to the page cache via readahead/prefetch */
+DEFINE_EVENT(mm_filemap_op_page_cache, mm_filemap_add_to_page_cache_prefetch,
+	TP_PROTO(struct folio *folio),
+	TP_ARGS(folio)
+	);
+
 DECLARE_EVENT_CLASS(mm_filemap_op_page_cache_range,
 
 	TP_PROTO(

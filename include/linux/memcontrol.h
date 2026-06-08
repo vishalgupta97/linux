@@ -23,6 +23,7 @@
 #include <linux/writeback.h>
 #include <linux/page-flags.h>
 #include <linux/shrinker.h>
+#include <linux/cache_ext.h>
 
 struct mem_cgroup;
 struct obj_cgroup;
@@ -62,6 +63,53 @@ struct mem_cgroup_reclaim_cookie {
 };
 
 #ifdef CONFIG_MEMCG
+
+/*
+ * Page cache ext.
+ */
+
+bool cache_ext_cgroup_enabled(struct cgroup *cgroup);
+
+/*
+ * valid_folios is a set of valid folio counters in the system. It's used to
+ * validate untrusted page references.
+ *
+ * Key: Pointer interpreted as a number.
+ * Value: Nothing, we just want to check for existence.
+ */
+
+// Support up to 20 GiB of memory
+// Each bucket represents 4KiB of memory.
+#define VALID_FOLIOS_SET_SIZE_POW 23
+#define VALID_FOLIOS_SET_SIZE (1 << VALID_FOLIOS_SET_SIZE_POW)
+
+struct valid_folios_set {
+	/* DECLARE_HASHTABLE() expanded to avoid including hashtable.h here */
+	struct hlist_head valid_folios[1 << VALID_FOLIOS_SET_SIZE_POW];
+	spinlock_t bucket_locks[VALID_FOLIOS_SET_SIZE];
+	atomic64_t nr_entries;
+};
+
+struct valid_folio {
+	struct hlist_node h_node;
+	uintptr_t folio_ptr;
+	struct cache_ext_list_node *cache_ext_node;
+};
+
+// Function definitions for the valid_folios_set
+struct valid_folios_set* init_valid_folios_set(int node, uint64_t num_buckets);
+void free_valid_folios_set(struct valid_folios_set *valid_folios_set);
+void valid_folios_add(struct folio *folio);
+void valid_folios_del(struct folio *folio);
+bool valid_folios_exists(struct valid_folios_set *valid_folios_set, struct folio *folio);
+bool valid_folios_exists_unlocked(struct valid_folios_set *valid_folios_set, struct folio *folio);
+struct valid_folios_set * lruvec_to_valid_folios_set(struct lruvec *lruvec);
+struct cache_ext_ops *get_cache_ext_ops(struct mem_cgroup *memcg);
+struct valid_folio *valid_folios_lookup(struct folio *folio);
+struct valid_folios_set *folio_to_valid_folios_set(struct folio *folio);
+spinlock_t *valid_folios_set_get_bucket_lock(struct valid_folios_set *valid_folios_set, struct folio *folio);
+void valid_folios_clear_list(struct valid_folios_set *valid_folios_set);
+inline struct valid_folios_set *memcg_to_valid_folios_set(struct mem_cgroup *memcg);
 
 #define MEM_CGROUP_ID_SHIFT	16
 
@@ -111,6 +159,9 @@ struct mem_cgroup_per_node {
 
 	/* Fields which get updated often at the end. */
 	struct lruvec		lruvec;
+	/* cache_ext: per-node folio validity set + DS registry */
+	struct valid_folios_set *valid_folios_set;
+	struct cache_ext_ds_registry cache_ext_ds_registry;
 	CACHELINE_PADDING(_pad2_);
 	unsigned long		lru_zone_size[MAX_NR_ZONES][NR_LRU_LISTS];
 	struct mem_cgroup_reclaim_iter	iter;
@@ -320,6 +371,9 @@ struct mem_cgroup {
 	struct list_head event_list;
 	spinlock_t event_list_lock;
 #endif /* CONFIG_MEMCG_V1 */
+
+	/* cache_ext: set when this memcg participates in cache_ext */
+	bool cache_ext_valid;
 
 	struct mem_cgroup_per_node *nodeinfo[];
 };

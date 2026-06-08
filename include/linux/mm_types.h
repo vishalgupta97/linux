@@ -1938,4 +1938,35 @@ static inline unsigned long mmf_init_legacy_flags(unsigned long flags)
 	return flags & MMF_INIT_LEGACY_MASK;
 }
 
+/*
+ * cache_ext
+ */
+
+struct cache_ext_eviction_ctx {
+	// Input
+	unsigned long request_nr_folios_to_evict;
+	// Output
+	unsigned long nr_folios_to_evict;
+	struct folio *folios_to_evict[32];
+	s64 scores[32];
+};
+
+struct cache_ext_admission_ctx {
+	u64 ino;
+	u64 offset;
+	u64 size;
+};
+
+// TODO: How can I make only some fields cache_ext_eviction_ctx writeable?
+struct cache_ext_ops {
+	// Implement bpf_verifier_ops
+	s32  (*init)(struct mem_cgroup *memcg);
+	void (*evict_folios)(struct cache_ext_eviction_ctx *ctx, struct mem_cgroup *memcg);
+	void (*folio_added)(struct folio *folio);
+	void (*folio_accessed)(struct folio *folio);
+	void (*folio_evicted)(struct folio *folio);
+	bool (*admit_folio)(struct cache_ext_admission_ctx *ctx);
+	// TODO: Add name?
+};
+
 #endif /* _LINUX_MM_TYPES_H */

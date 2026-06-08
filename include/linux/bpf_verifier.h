@@ -292,6 +292,10 @@ struct bpf_func_state {
 	u32 async_entry_cnt;
 	struct bpf_retval_range callback_ret_range;
 	bool in_callback_fn;
+	/* cache_ext: callback returns an arbitrary s64 (e.g. a sampling score),
+	 * so skip the s32 callback_ret_range enforcement for it.
+	 */
+	bool callback_ret_unrestricted;
 	bool in_async_callback_fn;
 	bool in_exception_callback_fn;
 	/* For callback calling functions that limit number of possible

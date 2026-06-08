@@ -920,6 +920,8 @@ bpf_program__attach_cgroup_opts(const struct bpf_program *prog, int cgroup_fd,
 struct bpf_map;
 
 LIBBPF_API struct bpf_link *bpf_map__attach_struct_ops(const struct bpf_map *map);
+/* cache_ext: attach a struct_ops map to a specific cgroup. */
+LIBBPF_API struct bpf_link *bpf_map__attach_cache_ext_ops(const struct bpf_map *map, int cgroup_fd);
 LIBBPF_API int bpf_link__update_map(struct bpf_link *link, const struct bpf_map *map);
 
 struct bpf_iter_attach_opts {

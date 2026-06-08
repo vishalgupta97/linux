@@ -23,6 +23,7 @@
 #include <linux/error-injection.h>
 #include <linux/bpf_lsm.h>
 #include <linux/btf_ids.h>
+#include <linux/cache_ext.h>
 #include <linux/poison.h>
 #include <linux/module.h>
 #include <linux/cpumask.h>
@@ -11135,6 +11136,79 @@ static int set_user_ringbuf_callback_state(struct bpf_verifier_env *env,
 	return 0;
 }
 
+static int set_cache_ext_list_iterate_callback_state(
+	struct bpf_verifier_env *env,
+	struct bpf_func_state *caller,
+	struct bpf_func_state *callee,
+	int insn_idx)
+{
+	/*
+	 * int bpf_cache_ext_list_iterate(
+	 *	struct mem_cgroup *memcg, u64 list,
+	 *	int (iter_fn)(int idx, struct cache_ext_list_node *node),
+	 *	struct cache_ext_eviction_ctx *ctx)
+	 */
+	__mark_reg_not_init(env, &callee->regs[BPF_REG_0]);
+
+	/* idx: scalar */
+	__mark_reg_unknown(env, &callee->regs[BPF_REG_1]);
+
+	/* node: PTR_TO_BTF_ID(struct cache_ext_list_node) */
+	callee->regs[BPF_REG_2].type = PTR_TO_BTF_ID;
+	__mark_reg_known_zero(&callee->regs[BPF_REG_2]);
+	callee->regs[BPF_REG_2].btf = btf_vmlinux;
+	callee->regs[BPF_REG_2].btf_id = btf_tracing_ids[BTF_TRACING_TYPE_CACHE_EXT_LIST_NODE];
+
+	/* unused */
+	__mark_reg_not_init(env, &callee->regs[BPF_REG_3]);
+	__mark_reg_not_init(env, &callee->regs[BPF_REG_4]);
+	__mark_reg_not_init(env, &callee->regs[BPF_REG_5]);
+
+	callee->in_callback_fn = true;
+	/* CACHE_EXT_CONTINUE_ITER=0, STOP=1, EVICT=2 */
+	callee->callback_ret_range = retval_range(0, 2);
+	return 0;
+}
+
+static int set_cache_ext_list_sample_callback_state(
+	struct bpf_verifier_env *env,
+	struct bpf_func_state *caller,
+	struct bpf_func_state *callee,
+	int insn_idx)
+{
+	/*
+	 * int bpf_cache_ext_list_sample(struct mem_cgroup *memcg, u64 list,
+	 *	s64(score_fn)(struct cache_ext_list_node *a),
+	 *	struct sampling_options *opts,
+	 *	struct cache_ext_eviction_ctx *ctx)
+	 *
+	 * NOTE: the score callback returns s64, but v7.0's callback_ret_range is
+	 * s32-based. We allow the full s32 range here; scores outside s32 (e.g. an
+	 * INT64_MAX sentinel) would be rejected by the verifier -- revisit when the
+	 * sample kfunc is reimplemented in BPF (see plan M4).
+	 */
+	__mark_reg_not_init(env, &callee->regs[BPF_REG_0]);
+
+	/* node: PTR_TO_BTF_ID(struct cache_ext_list_node) */
+	callee->regs[BPF_REG_1].type = PTR_TO_BTF_ID;
+	__mark_reg_known_zero(&callee->regs[BPF_REG_1]);
+	callee->regs[BPF_REG_1].btf = btf_vmlinux;
+	callee->regs[BPF_REG_1].btf_id = btf_tracing_ids[BTF_TRACING_TYPE_CACHE_EXT_LIST_NODE];
+
+	/* unused */
+	__mark_reg_not_init(env, &callee->regs[BPF_REG_3]);
+	__mark_reg_not_init(env, &callee->regs[BPF_REG_4]);
+	__mark_reg_not_init(env, &callee->regs[BPF_REG_5]);
+
+	callee->in_callback_fn = true;
+	/* The score callback returns an arbitrary s64; don't constrain it to the
+	 * s32 callback_ret_range (which cannot express the full 64-bit range).
+	 */
+	callee->callback_ret_unrestricted = true;
+	callee->callback_ret_range = retval_range(S32_MIN, S32_MAX);
+	return 0;
+}
+
 static int set_rbtree_add_callback_state(struct bpf_verifier_env *env,
 					 struct bpf_func_state *caller,
 					 struct bpf_func_state *callee,
@@ -11269,7 +11343,8 @@ static int prepare_func_exit(struct bpf_verifier_env *env, int *insn_idx)
 			return err;
 
 		/* enforce R0 return value range, and bpf_callback_t returns 64bit */
-		if (!retval_range_within(callee->callback_ret_range, r0, false)) {
+		if (!callee->callback_ret_unrestricted &&
+		    !retval_range_within(callee->callback_ret_range, r0, false)) {
 			verbose_invalid_scalar(env, r0, callee->callback_ret_range,
 					       "At callback return", "R0");
 			return -EINVAL;
@@ -13095,7 +13170,9 @@ static bool kfunc_spin_allowed(u32 btf_id)
 
 static bool is_sync_callback_calling_kfunc(u32 btf_id)
 {
-	return btf_id == special_kfunc_list[KF_bpf_rbtree_add_impl];
+	return btf_id == special_kfunc_list[KF_bpf_rbtree_add_impl] ||
+	       cache_ext_is_callback_calling_kfunc_iterate(btf_id) ||
+	       cache_ext_is_callback_calling_kfunc_sample(btf_id);
 }
 
 static bool is_async_callback_calling_kfunc(u32 btf_id)
@@ -13117,6 +13194,7 @@ static bool is_bpf_wq_set_callback_kfunc(u32 btf_id)
 
 static bool is_callback_calling_kfunc(u32 btf_id)
 {
+	/* cache_ext iterate/sample are covered via is_sync_callback_calling_kfunc */
 	return is_sync_callback_calling_kfunc(btf_id) ||
 	       is_async_callback_calling_kfunc(btf_id);
 }
@@ -14185,6 +14263,26 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	err = check_kfunc_args(env, &meta, insn_idx);
 	if (err < 0)
 		return err;
+
+	if (cache_ext_is_callback_calling_kfunc_iterate(meta.func_id)) {
+		err = push_callback_call(env, insn, insn_idx, meta.subprogno,
+					 set_cache_ext_list_iterate_callback_state);
+		if (err) {
+			verbose(env, "kfunc %s#%d failed callback verification\n",
+				func_name, meta.func_id);
+			return err;
+		}
+	}
+
+	if (cache_ext_is_callback_calling_kfunc_sample(meta.func_id)) {
+		err = push_callback_call(env, insn, insn_idx, meta.subprogno,
+					 set_cache_ext_list_sample_callback_state);
+		if (err) {
+			verbose(env, "kfunc %s#%d failed callback verification\n",
+				func_name, meta.func_id);
+			return err;
+		}
+	}
 
 	if (meta.func_id == special_kfunc_list[KF_bpf_rbtree_add_impl]) {
 		err = push_callback_call(env, insn, insn_idx, meta.subprogno,

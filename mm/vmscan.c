@@ -5769,6 +5769,117 @@ static void lru_gen_shrink_node(struct pglist_data *pgdat, struct scan_control *
 
 #endif /* CONFIG_LRU_GEN */
 
+/******************************************************************************
+ * cache_ext ******************************************************************
+ *****************************************************************************/
+
+static bool cache_ext_isolate_folio(struct folio *folio) {
+	struct lruvec *lruvec;
+	enum lru_list lru;
+
+	if (folio_test_unevictable(folio)) {
+		pr_debug("cache_ext: Failed to isolate because unevictable\n");
+		return false;
+	}
+
+	/* raced with release_pages() */
+	if (!folio_try_get(folio)){
+		pr_debug("cache_ext: Failed to isolate because try_get failed\n");
+		return false;
+	}
+
+	/* raced with another isolation */
+	if (!folio_test_clear_lru(folio)) {
+		pr_debug("cache_ext: Failed to isolate because clear_lru failed\n");
+		folio_put(folio);
+		return false;
+	}
+
+	lruvec = folio_lruvec_lock_irq(folio);
+
+	// What list was this folio in? Find out from the page flags.
+	if (folio_test_anon(folio)) {
+		if (folio_test_active(folio)) {
+			lru = LRU_ACTIVE_ANON;
+		} else {
+			lru = LRU_INACTIVE_ANON;
+		}
+	} else {
+		if (folio_test_active(folio)) {
+			lru = LRU_ACTIVE_FILE;
+		} else {
+			lru = LRU_INACTIVE_FILE;
+		}
+	}
+
+	/* remove from list */
+	list_del(&folio->lru);
+	long nr_pages = folio_nr_pages(folio);
+	update_lru_size(lruvec, lru, folio_zonenum(folio), -nr_pages);
+	unlock_page_lruvec_irq(lruvec);
+	return true;
+}
+
+static unsigned long __cache_ext_isolate_and_reclaim(struct lruvec *lruvec,
+	long request_nr_to_evict, struct cache_ext_ops *pcext_ops) {
+
+	LIST_HEAD(free_folios);
+	unsigned long nr_reclaimed = 0, nr_reclaimed_for_batch = 0;
+	struct cache_ext_eviction_ctx ctx;
+	pr_debug("cache_ext: Trying to evict %lu pages\n", request_nr_to_evict);
+	for (long request_nr_to_evict_batch = min((long)32, request_nr_to_evict);
+	     request_nr_to_evict > 0;
+		 request_nr_to_evict -= 32) {
+
+		memset(&ctx, 0, sizeof(ctx));
+		ctx.request_nr_folios_to_evict = request_nr_to_evict_batch;
+		pcext_ops->evict_folios(&ctx, lruvec_memcg(lruvec));
+		if (ctx.nr_folios_to_evict > ARRAY_SIZE(ctx.folios_to_evict)) {
+			pr_debug("cache_ext: nr_folios_evicted bigger than array size!\n");
+			goto free;
+		}
+		if (ctx.nr_folios_to_evict == 0) {
+			pr_debug_ratelimited("cache_ext: No pages to evict, nr_folios_to_evict == 0!\n");
+		}
+		if (ctx.nr_folios_to_evict != request_nr_to_evict_batch) {
+			pr_debug("cache_ext: nr_folios_returned_for_eviction(%lu) != nr_folios_requested_for_eviction(%lu)!\n",
+				ctx.nr_folios_to_evict, request_nr_to_evict_batch);
+		}
+		for (int i = 0; i < ctx.nr_folios_to_evict; i++) {
+			struct folio *untrusted_folio_ptr = ctx.folios_to_evict[i];
+			if (!valid_folios_exists_unlocked(lruvec_to_valid_folios_set(lruvec), untrusted_folio_ptr)) {
+				pr_debug("cache_ext: Folio not in valid_folios_set: %p!\n", untrusted_folio_ptr);
+				continue;
+			}
+			// Isolate page
+			if (!cache_ext_isolate_folio(untrusted_folio_ptr)) {
+				pr_debug("cache_ext: Failed to isolate folio: %p\n", untrusted_folio_ptr);
+				continue;
+			}
+			// Free isolated folios
+			list_add(&untrusted_folio_ptr->lru, &free_folios);
+		}
+		nr_reclaimed_for_batch = reclaim_pages(&free_folios);
+		if (nr_reclaimed_for_batch != ctx.nr_folios_to_evict) {
+			pr_debug("cache_ext: nr_reclaimed(%lu) != request_nr_to_evict(%lu)!\n", nr_reclaimed_for_batch, ctx.nr_folios_to_evict);
+		}
+		nr_reclaimed += nr_reclaimed_for_batch;
+	}
+
+	pr_debug("cache_ext: Reclaimed %lu pages\n", nr_reclaimed);
+free:
+	return nr_reclaimed;
+}
+
+static noinline unsigned long cache_ext_isolate_and_reclaim(struct lruvec *lruvec, unsigned long nr_to_evict) {
+	struct mem_cgroup *memcg = lruvec_memcg(lruvec);
+	struct cache_ext_ops *pcext_ops = get_cache_ext_ops(memcg);
+	if (pcext_ops != NULL && pcext_ops->evict_folios != NULL) {
+		return __cache_ext_isolate_and_reclaim(lruvec, nr_to_evict, pcext_ops);
+	}
+	return 0;
+}
+
 static void shrink_lruvec(struct lruvec *lruvec, struct scan_control *sc)
 {
 	unsigned long nr[NR_LRU_LISTS];
@@ -5805,6 +5916,37 @@ static void shrink_lruvec(struct lruvec *lruvec, struct scan_control *sc)
 				sc->priority == DEF_PRIORITY);
 
 	blk_start_plug(&plug);
+
+	/*
+	 * cache_ext: if a BPF eviction policy is attached to this lruvec's
+	 * cgroup, let it pick the file folios to reclaim first. If it satisfied
+	 * most of the request, skip the normal scan loop. The cache_ext count is
+	 * folded into the local nr_reclaimed, which is added to sc->nr_reclaimed
+	 * at the end of this function (or here, on the early-return path).
+	 */
+	{
+		unsigned long nr_to_evict = nr[LRU_INACTIVE_FILE];
+		unsigned long nr_ce_reclaimed;
+		unsigned long long threshold_pct = 80;
+		unsigned long long reclaim_pct;
+
+		nr_ce_reclaimed = cache_ext_isolate_and_reclaim(lruvec, nr_to_evict);
+		nr_reclaimed += nr_ce_reclaimed;
+		if (nr_ce_reclaimed > nr[LRU_INACTIVE_FILE])
+			nr[LRU_INACTIVE_FILE] = 0;
+		else
+			nr[LRU_INACTIVE_FILE] -= nr_ce_reclaimed;
+
+		sc->nr_scanned += nr_ce_reclaimed;
+
+		reclaim_pct = nr_to_evict ? (100 * nr_ce_reclaimed / nr_to_evict) : 100;
+		if (nr_ce_reclaimed && reclaim_pct > threshold_pct) {
+			sc->nr_reclaimed += nr_reclaimed;
+			blk_finish_plug(&plug);
+			return;
+		}
+	}
+
 	while (nr[LRU_INACTIVE_ANON] || nr[LRU_ACTIVE_FILE] ||
 					nr[LRU_INACTIVE_FILE]) {
 		unsigned long nr_anon, nr_file, percentage;

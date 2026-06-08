@@ -51,6 +51,10 @@ static inline void __hash_init(struct hlist_head *ht, unsigned int sz)
  */
 #define hash_init(hashtable) __hash_init(hashtable, HASH_SIZE(hashtable))
 
+/* cache_ext: return the bucket index a key hashes to. */
+#define hash_bucket_idx(hashtable, key)				\
+	hash_min(key, HASH_BITS(hashtable))
+
 /**
  * hash_add - add an object to a hashtable
  * @hashtable: hashtable to add to

@@ -526,6 +526,11 @@ static int cgroup_bpf_inherit(struct cgroup *cgrp)
 
 	INIT_LIST_HEAD(&cgrp->bpf.storages);
 
+	/* cache_ext: initialize per-cgroup eviction-policy state. */
+	init_rwsem(&cgrp->bpf.cache_ext_sem);
+	cgrp->bpf.cache_ext_enabled = false;
+	cgrp->bpf.cache_ext_ops = NULL;
+
 	for (i = 0; i < NR; i++)
 		if (compute_effective_progs(cgrp, i, &arrays[i]))
 			goto cleanup;
