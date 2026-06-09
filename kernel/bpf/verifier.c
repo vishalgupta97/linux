@@ -7446,7 +7446,15 @@ static int check_ptr_to_btf_access(struct bpf_verifier_env *env,
 		return -EACCES;
 	}
 
-	if (env->ops->btf_struct_access && !type_is_alloc(reg->type) && atype == BPF_WRITE) {
+	/*
+	 * cache_ext: a MEM_WRITE pointer (a writable kernel struct handed to the
+	 * BPF program, e.g. mem_cgroup_per_node, and anything walked from it) must
+	 * use the generic btf_struct_access write path rather than the program's
+	 * custom one (cache_ext's custom btf_struct_access only permits its ctx
+	 * types). The generic path honors MEM_WRITE.
+	 */
+	if (env->ops->btf_struct_access && !type_is_alloc(reg->type) && atype == BPF_WRITE &&
+	    !(reg->type & MEM_WRITE)) {
 		if (!btf_is_kernel(reg->btf)) {
 			verifier_bug(env, "reg->btf must be kernel btf");
 			return -EFAULT;
@@ -7534,6 +7542,16 @@ static int check_ptr_to_btf_access(struct bpf_verifier_env *env,
 		/* Old compat. Deprecated */
 		clear_trusted_flags(&flag);
 	}
+
+	/*
+	 * cache_ext: writable-ness propagates through pointer walks. A BPF policy
+	 * handed a writable parent struct (mem_cgroup_per_node) can therefore read
+	 * AND write the entire object graph reachable from it -- the basis for
+	 * reimplementing the cache_ext data-structure kfuncs as pure BPF. Maximal
+	 * exposure for now; to be narrowed later.
+	 */
+	if (ret == PTR_TO_BTF_ID && (reg->type & MEM_WRITE))
+		flag |= MEM_WRITE;
 
 	if (atype == BPF_READ && value_regno >= 0) {
 		ret = mark_btf_ld_reg(env, regs, value_regno, ret, reg->btf, btf_id, flag);

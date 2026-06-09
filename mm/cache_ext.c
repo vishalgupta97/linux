@@ -186,7 +186,8 @@ static void __cache_ext_evict_folios(struct cache_ext_eviction_ctx *ctx,
 				     struct mem_cgroup *memcg)
 {
 }
-static void __cache_ext_folio_added(struct folio *folio)
+static void __cache_ext_folio_added(struct folio *folio,
+				    mem_cgroup_per_node_bpf_writable *pn)
 {
 }
 static void __cache_ext_folio_accessed(struct folio *folio)

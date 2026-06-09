@@ -959,8 +959,13 @@ unlock:
 		if (memcg && memcg->cache_ext_valid)
 			valid_folios_add(folio);
 		pcext_ops = get_cache_ext_ops(memcg);
-		if (pcext_ops != NULL && pcext_ops->folio_added != NULL)
-			pcext_ops->folio_added(folio);
+		if (pcext_ops != NULL && pcext_ops->folio_added != NULL) {
+			/* M4: hand the policy the writable parent node so it can
+			 * link the folio's node into its own data structure. */
+			struct mem_cgroup_per_node *pn =
+				memcg->nodeinfo[folio_pgdat(folio)->node_id];
+			pcext_ops->folio_added(folio, pn);
+		}
 	}
 
 	trace_mm_filemap_add_to_page_cache(folio);

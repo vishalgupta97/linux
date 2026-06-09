@@ -1957,12 +1957,30 @@ struct cache_ext_admission_ctx {
 	u64 size;
 };
 
+struct mem_cgroup_per_node;
+/*
+ * Writable alias for the BPF data-structure work (M4). A struct_ops hook
+ * argument typed "*_bpf_writable" is detected by btf_ctx_access (by the typedef
+ * name suffix) and handed to the BPF program as a MEM_WRITE pointer, i.e. the
+ * program may write through it (and, with the verifier's MEM_WRITE walk
+ * propagation, through the whole object graph reachable from it).
+ *
+ * mem_cgroup_per_node is the parent struct that stores the cache_ext data
+ * structures (its valid_folios_set holds the per-folio nodes, and its embedded
+ * cache_ext_ds_registry holds the lists). Exposing it writable lets a BPF
+ * policy implement the list/lookup/sample operations itself, replacing the
+ * cache_ext kfuncs.
+ */
+typedef struct mem_cgroup_per_node mem_cgroup_per_node_bpf_writable;
+
 // TODO: How can I make only some fields cache_ext_eviction_ctx writeable?
 struct cache_ext_ops {
 	// Implement bpf_verifier_ops
 	s32  (*init)(struct mem_cgroup *memcg);
 	void (*evict_folios)(struct cache_ext_eviction_ctx *ctx, struct mem_cgroup *memcg);
-	void (*folio_added)(struct folio *folio);
+	/* folio_added receives the writable parent node so a BPF policy can link
+	 * the folio's node into its own data structure (M4). */
+	void (*folio_added)(struct folio *folio, mem_cgroup_per_node_bpf_writable *pn);
 	void (*folio_accessed)(struct folio *folio);
 	void (*folio_evicted)(struct folio *folio);
 	bool (*admit_folio)(struct cache_ext_admission_ctx *ctx);
