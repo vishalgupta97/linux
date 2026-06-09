@@ -407,6 +407,22 @@ __bpf_kfunc int bpf_cache_ext_list_del(struct folio *folio)
 	return cache_ext_list_del(folio);
 };
 
+/*
+ * Re-type an address to a writable (MEM_WRITE) typed pointer. Like
+ * bpf_rdonly_cast, but the result is writable so a BPF policy can store into
+ * the kernel-resident cache_ext data structures (e.g. cast the node address
+ * returned by a BPF valid_folios lookup to a writable cache_ext_list_node* and
+ * link it into a list). The verifier (check_kfunc_call) sets the return reg to
+ * PTR_TO_BTF_ID | PTR_TRUSTED | MEM_WRITE with the requested type id; at runtime
+ * this is the identity. addr is the kernel address (e.g. a node address from a
+ * BPF valid_folios lookup); type_id__k is a constant BTF type id
+ * (bpf_core_type_id_kernel(struct ...)).
+ */
+__bpf_kfunc void *bpf_cache_ext_writable_cast(u64 addr, u32 type_id__k)
+{
+	return (void *)addr;
+}
+
 __bpf_kfunc int bpf_cache_ext_list_iterate(
 	struct mem_cgroup *memcg, u64 list,
 	int(iter_fn)(int idx, struct cache_ext_list_node *node),
@@ -575,6 +591,7 @@ BTF_ID_FLAGS(func, bpf_cache_ext_list_iterate)
 BTF_ID_FLAGS(func, bpf_cache_ext_list_sample)
 BTF_ID_FLAGS(func, bpf_cache_ext_list_move)
 BTF_ID_FLAGS(func, bpf_cache_ext_list_iterate_extended)
+BTF_ID_FLAGS(func, bpf_cache_ext_writable_cast)
 BTF_KFUNCS_END(cache_ext_list_ops)
 
 BTF_ID_LIST(cache_ext_list_ops_list)

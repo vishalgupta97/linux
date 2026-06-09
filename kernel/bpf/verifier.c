@@ -12838,6 +12838,7 @@ enum special_kfunc_type {
 	KF_bpf_session_is_return,
 	KF_bpf_stream_vprintk,
 	KF_bpf_stream_print_stack,
+	KF_bpf_cache_ext_writable_cast,
 };
 
 BTF_ID_LIST(special_kfunc_list)
@@ -12918,6 +12919,7 @@ BTF_ID(func, bpf_arena_reserve_pages)
 BTF_ID(func, bpf_session_is_return)
 BTF_ID(func, bpf_stream_vprintk)
 BTF_ID(func, bpf_stream_print_stack)
+BTF_ID(func, bpf_cache_ext_writable_cast)
 
 static bool is_task_work_add_kfunc(u32 func_id)
 {
@@ -14330,6 +14332,20 @@ static int check_special_kfunc(struct bpf_verifier_env *env, struct bpf_kfunc_ca
 		regs[BPF_REG_0].type = PTR_TO_BTF_ID | PTR_TRUSTED;
 		regs[BPF_REG_0].btf = desc_btf;
 		regs[BPF_REG_0].btf_id = meta->ret_btf_id;
+	} else if (meta->func_id == special_kfunc_list[KF_bpf_cache_ext_writable_cast]) {
+		/* Like bpf_rdonly_cast, but the result is WRITABLE (MEM_WRITE), so a
+		 * BPF policy can store into the kernel-resident cache_ext data
+		 * structures it reached via this cast. */
+		ret_t = btf_type_by_id(desc_btf, meta->arg_constant.value);
+		if (!ret_t || !btf_type_is_struct(ret_t)) {
+			verbose(env, "kfunc bpf_cache_ext_writable_cast type ID %lld must be a struct\n",
+				meta->arg_constant.value);
+			return -EINVAL;
+		}
+		mark_reg_known_zero(env, regs, BPF_REG_0);
+		regs[BPF_REG_0].type = PTR_TO_BTF_ID | PTR_TRUSTED | MEM_WRITE;
+		regs[BPF_REG_0].btf = desc_btf;
+		regs[BPF_REG_0].btf_id = meta->arg_constant.value;
 	} else if (meta->func_id == special_kfunc_list[KF_bpf_rdonly_cast]) {
 		ret_t = btf_type_by_id(desc_btf, meta->arg_constant.value);
 		if (!ret_t) {
