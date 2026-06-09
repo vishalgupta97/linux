@@ -1982,7 +1982,10 @@ struct cache_ext_ops {
 	 * the folio's node into its own data structure (M4). */
 	void (*folio_added)(struct folio *folio, mem_cgroup_per_node_bpf_writable *pn);
 	void (*folio_accessed)(struct folio *folio);
-	void (*folio_evicted)(struct folio *folio);
+	/* folio_evicted also receives the writable parent so a BPF policy can
+	 * unlink the folio's node from its data structure BEFORE the kernel frees
+	 * it in valid_folios_del (M4). */
+	void (*folio_evicted)(struct folio *folio, mem_cgroup_per_node_bpf_writable *pn);
 	bool (*admit_folio)(struct cache_ext_admission_ctx *ctx);
 	// TODO: Add name?
 };

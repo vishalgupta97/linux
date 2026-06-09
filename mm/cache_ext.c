@@ -193,7 +193,8 @@ static void __cache_ext_folio_added(struct folio *folio,
 static void __cache_ext_folio_accessed(struct folio *folio)
 {
 }
-static void __cache_ext_folio_evicted(struct folio *folio)
+static void __cache_ext_folio_evicted(struct folio *folio,
+				      mem_cgroup_per_node_bpf_writable *pn)
 {
 }
 static bool __cache_ext_admit_folio(struct cache_ext_admission_ctx *ctx)

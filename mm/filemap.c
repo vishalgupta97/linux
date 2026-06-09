@@ -225,8 +225,11 @@ void __filemap_remove_folio(struct folio *folio, void *shadow)
 	/* cache_ext: folio_evicted hook */
 	struct mem_cgroup *memcg = folio_memcg(folio);
 	struct cache_ext_ops *pcext_ops = get_cache_ext_ops(memcg);
-	if (pcext_ops != NULL && pcext_ops->folio_evicted != NULL)
-		pcext_ops->folio_evicted(folio);
+	if (pcext_ops != NULL && pcext_ops->folio_evicted != NULL) {
+		struct mem_cgroup_per_node *pn =
+			memcg->nodeinfo[folio_pgdat(folio)->node_id];
+		pcext_ops->folio_evicted(folio, pn);
+	}
 
 	if (memcg && memcg->cache_ext_valid)
 		valid_folios_del(folio);
@@ -340,8 +343,11 @@ void delete_from_page_cache_batch(struct address_space *mapping,
 		/* cache_ext: folio_evicted hook */
 		struct mem_cgroup *memcg = folio_memcg(folio);
 		struct cache_ext_ops *pcext_ops = get_cache_ext_ops(memcg);
-		if (pcext_ops != NULL && pcext_ops->folio_evicted != NULL)
-			pcext_ops->folio_evicted(folio);
+		if (pcext_ops != NULL && pcext_ops->folio_evicted != NULL) {
+			struct mem_cgroup_per_node *pn =
+				memcg->nodeinfo[folio_pgdat(folio)->node_id];
+			pcext_ops->folio_evicted(folio, pn);
+		}
 
 		if (memcg && memcg->cache_ext_valid)
 			valid_folios_del(folio);
