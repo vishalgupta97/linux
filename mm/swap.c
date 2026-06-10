@@ -457,8 +457,13 @@ void folio_mark_accessed(struct folio *folio)
 	/* cache_ext: folio_accessed hook */
 	struct mem_cgroup *memcg = folio_memcg(folio);
 	struct cache_ext_ops *pcext_ops = get_cache_ext_ops(memcg);
-	if (pcext_ops != NULL && pcext_ops->folio_accessed != NULL)
-		pcext_ops->folio_accessed(folio);
+	if (pcext_ops != NULL && pcext_ops->folio_accessed != NULL) {
+		/* M4: hand the policy the writable parent node so it can move
+		 * the folio's node within its own data structure (MRU). */
+		struct mem_cgroup_per_node *pn =
+			memcg->nodeinfo[folio_pgdat(folio)->node_id];
+		pcext_ops->folio_accessed(folio, pn);
+	}
 
 	if (folio_test_dropbehind(folio))
 		return;

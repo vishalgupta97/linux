@@ -1981,7 +1981,9 @@ struct cache_ext_ops {
 	/* folio_added receives the writable parent node so a BPF policy can link
 	 * the folio's node into its own data structure (M4). */
 	void (*folio_added)(struct folio *folio, mem_cgroup_per_node_bpf_writable *pn);
-	void (*folio_accessed)(struct folio *folio);
+	/* folio_accessed also receives the writable parent so a BPF policy can
+	 * move the folio's node within its data structure (M4, MRU). */
+	void (*folio_accessed)(struct folio *folio, mem_cgroup_per_node_bpf_writable *pn);
 	/* folio_evicted also receives the writable parent so a BPF policy can
 	 * unlink the folio's node from its data structure BEFORE the kernel frees
 	 * it in valid_folios_del (M4). */

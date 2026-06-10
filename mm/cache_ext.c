@@ -190,7 +190,8 @@ static void __cache_ext_folio_added(struct folio *folio,
 				    mem_cgroup_per_node_bpf_writable *pn)
 {
 }
-static void __cache_ext_folio_accessed(struct folio *folio)
+static void __cache_ext_folio_accessed(struct folio *folio,
+				       mem_cgroup_per_node_bpf_writable *pn)
 {
 }
 static void __cache_ext_folio_evicted(struct folio *folio,
