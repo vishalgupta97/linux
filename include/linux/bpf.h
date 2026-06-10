@@ -3705,7 +3705,7 @@ struct bpf_undo_log_entry {
 	u8    size;	/* operand size in bytes: 1, 2, 4, or 8 */
 };
 
-DECLARE_PER_CPU(struct bpf_undo_log_entry[CONFIG_BPF_UNDO_LOG_MAX_ENTRIES],
+DECLARE_PER_CPU(struct bpf_undo_log_entry[CONFIG_BPF_UNDO_LOG_CURR_ENTRIES],
 		bpf_undo_log);
 DECLARE_PER_CPU(struct bpf_undo_log_entry *, bpf_undo_log_cursor);
 /* Base pointer used to reset the cursor; equals bpf_undo_log for undo-log-only

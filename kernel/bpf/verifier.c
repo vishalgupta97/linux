@@ -20590,8 +20590,22 @@ static bool states_equal(struct bpf_verifier_env *env,
 	 * writes as the current state.  Otherwise pruning would skip counting
 	 * writes on the current path, potentially allowing an overflowing
 	 * program to slip through the limit check.
+	 *
+	 * Exception: pruning comparisons (NOT_EXACT and RANGE_WITHIN). A bpf_loop
+	 * callback that runs inside a spin-lock critical section accumulates one
+	 * undo-logged write per iteration, so cs_write_count grows monotonically
+	 * and a later iteration never matches the cached loop-entry state --
+	 * convergence never happens and the walk explodes the state/jump-sequence
+	 * complexity limits. (A bpf_loop is a verifier-internal re-invocation, not
+	 * a CFG SCC, so its callsite pruning uses NOT_EXACT, not RANGE_WITHIN.)
+	 * The undo log tolerates the converged loop's runtime writes -- it is sized
+	 * (CONFIG_BPF_UNDO_LOG_MAX_ENTRIES) for the worst-case in-CS write count and
+	 * the spin-lock timeout watchdog bounds it -- so allow these prunings
+	 * regardless of the in-CS write count. EXACT comparisons (infinite-loop
+	 * detection) keep the gate; the per-write cap check at check_mem_access()
+	 * still rejects any path that actually exceeds the undo log capacity.
 	 */
-	if (old->cs_write_count < cur->cs_write_count)
+	if (exact == EXACT && old->cs_write_count < cur->cs_write_count)
 		return false;
 
 	if (!refsafe(old, cur, &env->idmap_scratch))

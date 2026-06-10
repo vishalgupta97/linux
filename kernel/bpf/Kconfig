@@ -134,11 +134,18 @@ config BPF_UNDO_LOG
 	  Can be enabled independently of BPF_TIMEOUT (instrumentation works
 	  even without a timeout; writes are tracked but never replayed).
 
-config BPF_UNDO_LOG_MAX_ENTRIES
-	int "Maximum undo log entries per BPF spinlock critical section"
-	default 64
+config BPF_UNDO_LOG_CURR_ENTRIES
+	int "Base undo log entries per BPF spinlock critical section"
+	default 1024
 	depends on BPF_SYSCALL
 	range 1 1024
+
+
+config BPF_UNDO_LOG_MAX_ENTRIES
+	int "Maximum undo log entries per BPF spinlock critical section"
+	default 65536
+	depends on BPF_SYSCALL
+	range 1 65536
 	help
 	  Sets the maximum number of memory write operations that can be
 	  tracked in the per-CPU undo log for a single BPF spinlock critical

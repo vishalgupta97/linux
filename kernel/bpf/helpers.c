@@ -311,7 +311,7 @@ int ebpf_spinlock_timeout;
 #endif /* CONFIG_BPF_TIMEOUT */
 
 #ifdef CONFIG_BPF_UNDO_LOG
-DEFINE_PER_CPU(struct bpf_undo_log_entry[CONFIG_BPF_UNDO_LOG_MAX_ENTRIES],
+DEFINE_PER_CPU(struct bpf_undo_log_entry[CONFIG_BPF_UNDO_LOG_CURR_ENTRIES],
 	       bpf_undo_log);
 EXPORT_PER_CPU_SYMBOL_GPL(bpf_undo_log);
 
