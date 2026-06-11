@@ -7,10 +7,10 @@ import matplotlib.ticker as ticker
 import matplotlib.cm as cm
 
 # ── User-defined config superset (from bench_kmod/bench_spinlock_kmod.c) ─────
-DATA_STRUCTURES = ["graph", "list", "ring", "trie"] #"rbtree"
+DATA_STRUCTURES = ["list"] # "graph", "list", "ring", "trie"] #"rbtree"
 OPERATIONS      = ["insert"] #, "lookup", "update", "delete"]
-VARIANTS        = ["kmod_bpf", "kmod"] #"undo_log", "kmod", "kmod_bpf"] #"arena"
-THREADS         = [1, 2, 4, 8, 16, 32, 64, 80, 96, 112] #, 128]
+VARIANTS        = ["kmod_bpf", "lock_func"] #"undo_log", "kmod", "kmod_bpf"] #"arena"
+THREADS         = [1, 2, 4, 8, 16, 28, 32, 64, 80, 96, 112]
 # ─────────────────────────────────────────────────────────────────────────────
 
 if len(sys.argv) < 2:
