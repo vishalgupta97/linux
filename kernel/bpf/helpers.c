@@ -34,6 +34,7 @@
 #include <linux/bpf_lock_timer.h>
 #include <linux/bpf_qspinlock.h>
 #include <linux/bpf_komb.h>
+#include <linux/bpf_fpop.h>
 #include <linux/kthread.h>
 #include <linux/wait.h>
 #endif
@@ -653,7 +654,8 @@ noinline void __internal__bpf_spin_unlock(struct qspinlock *lock)
 		 * bpf_qspinlock.c) and the kthread-started hrtimer (set by
 		 * bpf_notify_lock_kthread).  hrtimer_cancel() is safe cross-CPU.
 		 */
-		{
+		this_cpu_write(bpf_active_timer, NULL);
+		/*{
 			struct bpf_lock_timer *active =
 				this_cpu_read(bpf_active_timer);
 
@@ -661,7 +663,7 @@ noinline void __internal__bpf_spin_unlock(struct qspinlock *lock)
 				//bpf_lock_timer_cancel(active);
 				this_cpu_write(bpf_active_timer, NULL);
 			}
-		}
+		}*/
 		WRITE_ONCE(ebpf_spinlock_timeout, 0);
 #endif
 	}
@@ -705,19 +707,21 @@ NOTRACE_BPF_CALL_3(bpf_lock_func, void *, lock, void *, callback_fn,
 {
 	bpf_callback_t callback = (bpf_callback_t)callback_fn;
 
-#ifdef CONFIG_BPF_SPINLOCK_HOOKS
-	__internal__bpf_spin_lock((struct qspinlock *)lock);
-#else
-	__bpf_spin_lock(lock);
-#endif
+	fpop_execute((struct qspinlock *)lock, callback, local_state);
 
-	callback((u64)(long)local_state, 0, 0, 0, 0);
-
-#ifdef CONFIG_BPF_SPINLOCK_HOOKS
-	__internal__bpf_spin_unlock((struct qspinlock *)lock);
-#else
-	__bpf_spin_unlock(lock);
-#endif
+//#ifdef CONFIG_BPF_SPINLOCK_HOOKS
+//	__internal__bpf_spin_lock((struct qspinlock *)lock);
+//#else
+//	__bpf_spin_lock(lock);
+//#endif
+//
+//	callback((u64)(long)local_state, 0, 0, 0, 0);
+//
+//#ifdef CONFIG_BPF_SPINLOCK_HOOKS
+//	__internal__bpf_spin_unlock((struct qspinlock *)lock);
+//#else
+//	__bpf_spin_unlock(lock);
+//#endif
 	return 0;
 }
 
@@ -757,7 +761,11 @@ void bpf_notify_lock_kthread(void)
 	atomic_set(&bpf_lock_timeout_pending, 1);
 	wake_up(&bpf_lock_timeout_wq);
 }
-EXPORT_SYMBOL_GPL(bpf_notify_lock_kthread);
+
+void bpf_notify_unlock_kthread(void)
+{
+	this_cpu_write(bpf_active_timer, NULL);
+}
 
 //TODO: Remove noinline
 noinline void tell_bpf_loop_to_terminate(void)

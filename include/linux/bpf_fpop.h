@@ -1,12 +1,16 @@
-#ifndef __BPF_KOMB_H__
-#define __BPF_KOMB_H__
+#ifndef __BPF_FPOP_H__
+#define __BPF_FPOP_H__
 
 #include <asm/qspinlock.h>
+
+typedef u64 (*bpf_callback_t)(u64, u64, u64, u64, u64);
 
 struct fpop_node {
 	union {
 		struct {
 			struct fpop_node *next;
+			bpf_callback_t callback;
+			void* local_state;
 			int tail;
 			int socket_id;
 			int cpuid;
@@ -58,6 +62,6 @@ struct fpop_node {
 #define atomic_cond_read_acquire_sched(v, c) \
 	smp_cond_load_acquire_sched(&(v)->counter, (c))
 
-void fpop_execute(struct qspinlock *lock);
+void fpop_execute(struct qspinlock *lock, bpf_callback_t callback, void* local_state);
 
-#endif // __BPF_KOMB_H__
+#endif // __BPF_FPOP_H__
