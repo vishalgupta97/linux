@@ -8,6 +8,7 @@
 #include <linux/percpu-defs.h>
 #include <linux/kernel.h>
 #include <linux/syscalls.h>
+#include <linux/bpf.h>
 #include <linux/bpf_fpop.h>
 
 #ifdef CONFIG_BPF_TIMEOUT
@@ -15,6 +16,23 @@ extern void bpf_notify_lock_kthread(void);
 extern void bpf_notify_unlock_kthread(void);
 extern void tell_bpf_loop_to_terminate(void);
 #endif /* CONFIG_BPF_TIMEOUT */
+
+/*
+ * bpf_lock_func() acquires and releases the lock inline (it does not go through
+ * the bpf_spin_lock()/bpf_spin_unlock() helpers), so the per-CPU undo-log cursor
+ * is not reset on acquire the way it is for plain bpf_spin_lock() (see the
+ * cnt == 1 path in __internal__bpf_spin_lock()).  Each callback executed here is
+ * an independent, outermost critical section, so reset the cursor to base before
+ * running it.  Without this the cursor advances forever across successive
+ * lock_func() calls (and across every queued node a combiner executes on this
+ * CPU) until it overflows the per-CPU undo-log page and faults.
+ */
+static __always_inline void fpop_reset_undo_log(void)
+{
+#ifdef CONFIG_BPF_UNDO_LOG
+	this_cpu_write(bpf_undo_log_cursor, this_cpu_read(bpf_undo_log_base));
+#endif
+}
 
 
 static DEFINE_PER_CPU_SHARED_ALIGNED(struct fpop_node, fpop_nodes);
@@ -106,17 +124,20 @@ next_node_null:
 	return next_node;
 }
 
-static void execute_op(bpf_callback_t callback, void* local_state)
+static void execute_op(bpf_callback_t callback, u64 v1, u64 v2, u64 v3)
 {
-	callback((u64)(long)local_state, 0, 0, 0, 0);
+	fpop_reset_undo_log();
+	callback(v1, v2, v3, 0, 0);
 }
 
-static void execute_op_and_unlock(struct qspinlock *lock, bpf_callback_t callback, void* local_state)
+static void execute_op_and_unlock(struct qspinlock *lock, bpf_callback_t callback,
+				  u64 v1, u64 v2, u64 v3)
 {
 #ifdef CONFIG_BPF_TIMEOUT
 	bpf_notify_lock_kthread(); // Only waiter. Notify kthread.
 #endif
-	callback((u64)(long)local_state, 0, 0, 0, 0);
+	fpop_reset_undo_log();
+	callback(v1, v2, v3, 0, 0);
 	WRITE_ONCE(lock->locked, false);
 #ifdef CONFIG_BPF_TIMEOUT
 	bpf_notify_unlock_kthread(); // Only waiter. Notify kthread.
@@ -125,7 +146,8 @@ static void execute_op_and_unlock(struct qspinlock *lock, bpf_callback_t callbac
 }
 
 
-static void komb_spin_lock_slowpath(struct qspinlock *lock, bpf_callback_t callback, void* local_state)
+static void komb_spin_lock_slowpath(struct qspinlock *lock, bpf_callback_t callback,
+				    u64 v1, u64 v2, u64 v3)
 {
 	register struct fpop_node *curr_node;
 	struct fpop_node *prev_node = NULL, *next_node = NULL;
@@ -142,7 +164,9 @@ static void komb_spin_lock_slowpath(struct qspinlock *lock, bpf_callback_t callb
 	curr_node->socket_id = numa_node_id();
 	curr_node->cpuid = smp_processor_id();
 	curr_node->callback = callback;
-	curr_node->local_state = local_state;
+	curr_node->v1 = v1;
+	curr_node->v2 = v2;
+	curr_node->v3 = v3;
 
 	old_tail = xchg_tail(lock, tail);
 
@@ -160,7 +184,7 @@ static void komb_spin_lock_slowpath(struct qspinlock *lock, bpf_callback_t callb
 
 	if (((val & _Q_TAIL_MASK) == tail) &&
 	    atomic_try_cmpxchg_relaxed(&lock->val, &val, _Q_LOCKED_VAL)) {
-		execute_op_and_unlock(lock, callback, local_state);
+		execute_op_and_unlock(lock, callback, v1, v2, v3);
 		return;
 	}
 
@@ -176,7 +200,7 @@ static void komb_spin_lock_slowpath(struct qspinlock *lock, bpf_callback_t callb
 		set_locked(lock);
 		curr_node->locked = false;
 		smp_mb();
-		execute_op(callback, local_state); // No Timeout, next waiter exists.
+		execute_op(callback, v1, v2, v3); // No Timeout, next waiter exists.
 		WRITE_ONCE(lock->locked, false);
 		return;
 	}
@@ -184,7 +208,7 @@ static void komb_spin_lock_slowpath(struct qspinlock *lock, bpf_callback_t callb
 	while(true) {
 		counter_val++;
 		next_node = get_next_node(curr_node);
-		execute_op(curr_node->callback, curr_node->local_state);
+		execute_op(curr_node->callback, curr_node->v1, curr_node->v2, curr_node->v3);
 		WRITE_ONCE(curr_node->locked_completed, 1);
 		if(next_node == NULL || next_node->next == NULL || counter_val > komb_batch_size || need_resched())
 			break;
@@ -201,19 +225,20 @@ static void komb_spin_lock_slowpath(struct qspinlock *lock, bpf_callback_t callb
 	set_locked(lock);
 	next_node->locked = false;
 	smp_mb();
-	execute_op(callback, local_state); // No Timeout, next waiter exists.
+	execute_op(callback, v1, v2, v3); // No Timeout, next waiter exists.
 	WRITE_ONCE(lock->locked, false);
 	return;
 }
 
-void fpop_execute(struct qspinlock *lock, bpf_callback_t callback, void* local_state)
+void fpop_execute(struct qspinlock *lock, bpf_callback_t callback,
+		  u64 v1, u64 v2, u64 v3)
 {
 	u32 val, cnt;
 
 	val = atomic_cmpxchg_acquire(&lock->val, 0, _Q_LOCKED_VAL);
 	if (val == 0)
 	{
-		execute_op_and_unlock(lock, callback, local_state);
+		execute_op_and_unlock(lock, callback, v1, v2, v3);
 		return;
 	}
 
@@ -255,10 +280,10 @@ void fpop_execute(struct qspinlock *lock, bpf_callback_t callback, void* local_s
 	}
 
 	WRITE_ONCE(lock->locked_pending, _Q_LOCKED_VAL);
-	execute_op_and_unlock(lock, callback, local_state);
+	execute_op_and_unlock(lock, callback, v1, v2, v3);
 	return;
 
 queue:
-	komb_spin_lock_slowpath(lock, callback, local_state);
+	komb_spin_lock_slowpath(lock, callback, v1, v2, v3);
 	return;
 }

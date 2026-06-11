@@ -702,26 +702,12 @@ const struct bpf_func_proto bpf_spin_unlock_proto = {
  * bpf_spin_lock_timeout_handler() rolls back the undo log, releases the locks
  * held in this CPU's held_locks[], and bpf_throw()s out of the program.
  */
-NOTRACE_BPF_CALL_3(bpf_lock_func, void *, lock, void *, callback_fn,
-		   void *, local_state)
+NOTRACE_BPF_CALL_5(bpf_lock_func, void *, lock, void *, callback_fn,
+		   u64, v1, u64, v2, u64, v3)
 {
 	bpf_callback_t callback = (bpf_callback_t)callback_fn;
 
-	fpop_execute((struct qspinlock *)lock, callback, local_state);
-
-//#ifdef CONFIG_BPF_SPINLOCK_HOOKS
-//	__internal__bpf_spin_lock((struct qspinlock *)lock);
-//#else
-//	__bpf_spin_lock(lock);
-//#endif
-//
-//	callback((u64)(long)local_state, 0, 0, 0, 0);
-//
-//#ifdef CONFIG_BPF_SPINLOCK_HOOKS
-//	__internal__bpf_spin_unlock((struct qspinlock *)lock);
-//#else
-//	__bpf_spin_unlock(lock);
-//#endif
+	fpop_execute((struct qspinlock *)lock, callback, v1, v2, v3);
 	return 0;
 }
 
@@ -732,7 +718,9 @@ const struct bpf_func_proto bpf_lock_func_proto = {
 	.arg1_type = ARG_PTR_TO_SPIN_LOCK,
 	.arg1_btf_id = BPF_PTR_POISON,
 	.arg2_type = ARG_PTR_TO_FUNC,
-	.arg3_type = ARG_PTR_TO_STACK_OR_NULL,
+	.arg3_type = ARG_ANYTHING,
+	.arg4_type = ARG_ANYTHING,
+	.arg5_type = ARG_ANYTHING,
 };
 
 #ifdef CONFIG_BPF_TIMEOUT

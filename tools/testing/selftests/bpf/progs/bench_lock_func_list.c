@@ -55,16 +55,12 @@ int BPF_PROG(list_init, __u32 pool_size)
 }
 
 /* ---- Insert-at-head with per-element bpf_spin_lock ---- */
-struct list_insert_ctx {
-	__u32 new_idx;
-};
-
-static int list_insert_cb(void *ctx)
+static int list_insert_cb(__u64 new_idx_v)
 {
-	struct list_insert_ctx *c = ctx;
+	__u32 new_idx = (__u32)new_idx_v;
 	struct list_lock_entry *nl;
 
-	nl = bpf_map_lookup_elem(&list_locks, &c->new_idx);
+	nl = bpf_map_lookup_elem(&list_locks, &new_idx);
 	if (!nl)
 		return 0;
 
@@ -72,9 +68,9 @@ static int list_insert_cb(void *ctx)
 	bpf_spin_lock(&nl->lock);
 
 	/* 3 arena writes → 3 undo-log entries injected by JIT */
-	list_pool[c->new_idx].next_idx = list_head_idx;
-	list_pool[c->new_idx].data     = bpf_ktime_get_ns();
-	list_head_idx                  = c->new_idx;
+	list_pool[new_idx].next_idx = list_head_idx;
+	list_pool[new_idx].data     = bpf_ktime_get_ns();
+	list_head_idx               = new_idx;
 
 	bpf_spin_unlock(&nl->lock);
 	return 0;
@@ -83,7 +79,6 @@ static int list_insert_cb(void *ctx)
 SEC("fentry/bench_undo_list_insert")
 int BPF_PROG(list_insert, __u32 new_idx, __u32 head_lock_idx)
 {
-	struct list_insert_ctx c = { .new_idx = new_idx };
 	struct list_lock_entry *hl;
 
 	if (new_idx >= BENCH_MAX_POOL)
@@ -93,25 +88,21 @@ int BPF_PROG(list_insert, __u32 new_idx, __u32 head_lock_idx)
 	if (!hl)
 		return 0;
 
-	bpf_lock_func(&hl->lock, list_insert_cb, &c);
+	bpf_lock_func(&hl->lock, list_insert_cb, new_idx, 0, 0);
 	return 0;
 }
 
 /* Traverse from head, read data at position (idx % pool_size). 0 undo-log writes. */
-struct list_lookup_ctx {
-	__u32 idx;
-};
-
-static int list_lookup_cb(void *ctx)
+static int list_lookup_cb(__u64 idx_v)
 {
-	struct list_lookup_ctx *c = ctx;
+	__u32 idx = (__u32)idx_v;
 	__u32 cur = list_head_idx;
 	int i;
 
 	bpf_for(i, 0, BENCH_MAX_POOL) {
 		if (cur == (__u32)~0)
 			break;
-		if ((__u32)i == c->idx % BENCH_MAX_POOL)
+		if ((__u32)i == idx % BENCH_MAX_POOL)
 			break;
 		cur = list_pool[cur].next_idx;
 	}
@@ -121,7 +112,6 @@ static int list_lookup_cb(void *ctx)
 SEC("fentry/bench_undo_list_lookup")
 int BPF_PROG(list_lookup, __u32 idx)
 {
-	struct list_lookup_ctx c = { .idx = idx };
 	struct list_lock_entry *hl;
 	__u32 key0 = 0;
 
@@ -129,27 +119,22 @@ int BPF_PROG(list_lookup, __u32 idx)
 	if (!hl)
 		return 0;
 
-	bpf_lock_func(&hl->lock, list_lookup_cb, &c);
+	bpf_lock_func(&hl->lock, list_lookup_cb, idx, 0, 0);
 	return 0;
 }
 
 /* Traverse to position (idx % pool_size) and write data. 1 undo-log write. */
-struct list_update_ctx {
-	__u32 idx;
-	__u64 val;
-};
-
-static int list_update_cb(void *ctx)
+static int list_update_cb(__u64 idx_v, __u64 val)
 {
-	struct list_update_ctx *c = ctx;
+	__u32 idx = (__u32)idx_v;
 	__u32 cur = list_head_idx;
 	int i;
 
 	bpf_for(i, 0, BENCH_MAX_POOL) {
 		if (cur == (__u32)~0)
 			break;
-		if ((__u32)i == c->idx % BENCH_MAX_POOL) {
-			list_pool[cur].data = c->val;	/* 1 undo-log entry */
+		if ((__u32)i == idx % BENCH_MAX_POOL) {
+			list_pool[cur].data = val;	/* 1 undo-log entry */
 			break;
 		}
 		cur = list_pool[cur].next_idx;
@@ -160,7 +145,6 @@ static int list_update_cb(void *ctx)
 SEC("fentry/bench_undo_list_update")
 int BPF_PROG(list_update, __u32 idx, __u64 val)
 {
-	struct list_update_ctx c = { .idx = idx, .val = val };
 	struct list_lock_entry *hl;
 	__u32 key0 = 0;
 
@@ -168,12 +152,12 @@ int BPF_PROG(list_update, __u32 idx, __u64 val)
 	if (!hl)
 		return 0;
 
-	bpf_lock_func(&hl->lock, list_update_cb, &c);
+	bpf_lock_func(&hl->lock, list_update_cb, idx, val, 0);
 	return 0;
 }
 
 /* Remove the head node. 1 undo-log write. No-op when list is empty. */
-static int list_delete_cb(void *ctx)
+static int list_delete_cb(void)
 {
 	__u32 head = list_head_idx;
 
@@ -192,7 +176,7 @@ int BPF_PROG(list_delete_op)
 	if (!hl)
 		return 0;
 
-	bpf_lock_func(&hl->lock, list_delete_cb, NULL);
+	bpf_lock_func(&hl->lock, list_delete_cb, 0, 0, 0);
 	return 0;
 }
 

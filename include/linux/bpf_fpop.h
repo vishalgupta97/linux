@@ -10,7 +10,9 @@ struct fpop_node {
 		struct {
 			struct fpop_node *next;
 			bpf_callback_t callback;
-			void* local_state;
+			u64 v1;
+			u64 v2;
+			u64 v3;
 			int tail;
 			int socket_id;
 			int cpuid;
@@ -62,6 +64,7 @@ struct fpop_node {
 #define atomic_cond_read_acquire_sched(v, c) \
 	smp_cond_load_acquire_sched(&(v)->counter, (c))
 
-void fpop_execute(struct qspinlock *lock, bpf_callback_t callback, void* local_state);
+void fpop_execute(struct qspinlock *lock, bpf_callback_t callback,
+		  u64 v1, u64 v2, u64 v3);
 
 #endif // __BPF_FPOP_H__

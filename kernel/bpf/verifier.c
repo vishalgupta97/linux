@@ -11140,16 +11140,18 @@ static int set_lock_func_callback_state(struct bpf_verifier_env *env,
 					struct bpf_func_state *callee,
 					int insn_idx)
 {
-	/* bpf_lock_func(void *lock, void *callback_fn, void *local_state);
-	 * callback_fn(void *local_state);
+	/* bpf_lock_func(void *lock, void *callback_fn, u64 v1, u64 v2, u64 v3);
+	 * callback_fn(u64 v1, u64 v2, u64 v3, u64, u64);
 	 * The lock has already been acquired (in check_func_arg) so the
-	 * callback is verified with the lock held.
+	 * callback is verified with the lock held.  The three scalar values
+	 * passed to bpf_lock_func() are forwarded as the first three callback
+	 * arguments; the remaining two are always zero (see execute_op()).
 	 */
 	callee->regs[BPF_REG_1] = caller->regs[BPF_REG_3];
+	callee->regs[BPF_REG_2] = caller->regs[BPF_REG_4];
+	callee->regs[BPF_REG_3] = caller->regs[BPF_REG_5];
 
 	/* unused */
-	__mark_reg_not_init(env, &callee->regs[BPF_REG_2]);
-	__mark_reg_not_init(env, &callee->regs[BPF_REG_3]);
 	__mark_reg_not_init(env, &callee->regs[BPF_REG_4]);
 	__mark_reg_not_init(env, &callee->regs[BPF_REG_5]);
 

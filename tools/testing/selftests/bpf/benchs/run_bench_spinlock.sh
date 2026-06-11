@@ -69,7 +69,7 @@ run_bench() {
 {
 	for thread in 1 2 4 8 16 28 32 64 80 96 112; do
 		for pool in 128; do #1 8 32 128; do
-			for ds in list; do #ring trie graph 
+			for ds in list ring graph; do #trie
 			for op in insert; do  #lookup update delete; do
 				for variant in lock_func; do #kmod kmod_bpf undo_log; do
 				

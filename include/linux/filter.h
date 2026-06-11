@@ -630,6 +630,7 @@ static inline bool insn_is_cast_user(const struct bpf_insn *insn)
 #define NOTRACE_BPF_CALL_1(name, ...)	BPF_CALL_x(1, notrace, name, __VA_ARGS__)
 #define NOTRACE_BPF_CALL_2(name, ...)	BPF_CALL_x(2, notrace, name, __VA_ARGS__)
 #define NOTRACE_BPF_CALL_3(name, ...)	BPF_CALL_x(3, notrace, name, __VA_ARGS__)
+#define NOTRACE_BPF_CALL_5(name, ...)	BPF_CALL_x(5, notrace, name, __VA_ARGS__)
 
 #define bpf_ctx_range(TYPE, MEMBER)						\
 	offsetof(TYPE, MEMBER) ... offsetofend(TYPE, MEMBER) - 1

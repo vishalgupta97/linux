@@ -53,14 +53,8 @@ int BPF_PROG(trie_init, __u32 pool_size)
 	return 0;
 }
 
-struct trie_kv_ctx {
-	__u64 key;
-	__u64 val;
-};
-
-static int trie_insert_cb(void *ctx)
+static int trie_insert_cb(__u64 key, __u64 val)
 {
-	struct trie_kv_ctx *c = ctx;
 	__u32 cur, parent, new_node;
 	int dir = 0, depth;
 
@@ -68,7 +62,7 @@ static int trie_insert_cb(void *ctx)
 	parent = 0;
 
 	bpf_for(depth, 0, 64) {
-		int bit = (int)((c->key >> (63 - depth)) & 1);
+		int bit = (int)((key >> (63 - depth)) & 1);
 
 		if (!cur) {
 			new_node = (__u32)__sync_fetch_and_add(&trie_alloc_idx, 1);
@@ -79,7 +73,7 @@ static int trie_insert_cb(void *ctx)
 			trie_pool[new_node].child[0] = 0;
 			trie_pool[new_node].child[1] = 0;
 			trie_pool[new_node].key_bit   = (__u32)(63 - depth);
-			trie_pool[new_node].val       = c->val;
+			trie_pool[new_node].val       = val;
 
 			/* 1 more arena write: parent's child pointer */
 			if (parent)
@@ -98,7 +92,6 @@ static int trie_insert_cb(void *ctx)
 SEC("fentry/bench_undo_trie_insert")
 int BPF_PROG(trie_insert, __u64 key, __u64 val)
 {
-	struct trie_kv_ctx c = { .key = key, .val = val };
 	struct trie_global_lock *g;
 	__u32 key0 = 0;
 
@@ -106,19 +99,18 @@ int BPF_PROG(trie_insert, __u64 key, __u64 val)
 	if (!g)
 		return 0;
 
-	bpf_lock_func(&g->lock, trie_insert_cb, &c);
+	bpf_lock_func(&g->lock, trie_insert_cb, key, val, 0);
 	return 0;
 }
 
 /* Follow bits of key from MSB; return val at leaf. 0 undo-log writes. */
-static int trie_lookup_cb(void *ctx)
+static int trie_lookup_cb(__u64 key)
 {
-	struct trie_kv_ctx *c = ctx;
 	__u32 cur = trie_root;
 	int depth;
 
 	bpf_for(depth, 0, 64) {
-		int bit = (int)((c->key >> (63 - depth)) & 1);
+		int bit = (int)((key >> (63 - depth)) & 1);
 
 		if (!cur)
 			break;
@@ -132,7 +124,6 @@ static int trie_lookup_cb(void *ctx)
 SEC("fentry/bench_undo_trie_lookup")
 int BPF_PROG(trie_lookup, __u64 key)
 {
-	struct trie_kv_ctx c = { .key = key };
 	struct trie_global_lock *g;
 	__u32 key0 = 0;
 
@@ -140,24 +131,23 @@ int BPF_PROG(trie_lookup, __u64 key)
 	if (!g)
 		return 0;
 
-	bpf_lock_func(&g->lock, trie_lookup_cb, &c);
+	bpf_lock_func(&g->lock, trie_lookup_cb, key, 0, 0);
 	return 0;
 }
 
 /* Same traversal; write val at leaf. 1 undo-log write. */
-static int trie_update_cb(void *ctx)
+static int trie_update_cb(__u64 key, __u64 val)
 {
-	struct trie_kv_ctx *c = ctx;
 	__u32 cur = trie_root;
 	int depth;
 
 	bpf_for(depth, 0, 64) {
-		int bit = (int)((c->key >> (63 - depth)) & 1);
+		int bit = (int)((key >> (63 - depth)) & 1);
 
 		if (!cur)
 			break;
 		if (!trie_pool[cur].child[0] && !trie_pool[cur].child[1]) {
-			trie_pool[cur].val = c->val;	/* 1 undo-log entry */
+			trie_pool[cur].val = val;	/* 1 undo-log entry */
 			break;
 		}
 		cur = trie_pool[cur].child[bit];
@@ -168,7 +158,6 @@ static int trie_update_cb(void *ctx)
 SEC("fentry/bench_undo_trie_update")
 int BPF_PROG(trie_update, __u64 key, __u64 val)
 {
-	struct trie_kv_ctx c = { .key = key, .val = val };
 	struct trie_global_lock *g;
 	__u32 key0 = 0;
 
@@ -176,21 +165,20 @@ int BPF_PROG(trie_update, __u64 key, __u64 val)
 	if (!g)
 		return 0;
 
-	bpf_lock_func(&g->lock, trie_update_cb, &c);
+	bpf_lock_func(&g->lock, trie_update_cb, key, val, 0);
 	return 0;
 }
 
 /* Find the leaf and zero it + unlink from parent. 2–3 undo-log writes. */
-static int trie_delete_cb(void *ctx)
+static int trie_delete_cb(__u64 key)
 {
-	struct trie_kv_ctx *c = ctx;
 	__u32 cur, parent;
 	int dir = 0, depth;
 
 	cur    = trie_root;
 	parent = 0;
 	bpf_for(depth, 0, 64) {
-		int bit = (int)((c->key >> (63 - depth)) & 1);
+		int bit = (int)((key >> (63 - depth)) & 1);
 
 		if (!cur)
 			break;
@@ -213,7 +201,6 @@ static int trie_delete_cb(void *ctx)
 SEC("fentry/bench_undo_trie_delete")
 int BPF_PROG(trie_delete_op, __u64 key)
 {
-	struct trie_kv_ctx c = { .key = key };
 	struct trie_global_lock *g;
 	__u32 key0 = 0;
 
@@ -221,7 +208,7 @@ int BPF_PROG(trie_delete_op, __u64 key)
 	if (!g)
 		return 0;
 
-	bpf_lock_func(&g->lock, trie_delete_cb, &c);
+	bpf_lock_func(&g->lock, trie_delete_cb, key, 0, 0);
 	return 0;
 }
 

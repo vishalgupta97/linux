@@ -260,7 +260,7 @@ int lf_holder_loop_write_a(struct __sk_buff *ctx)
 	a = bpf_map_lookup_elem(&mt_locks, &key);
 	if (!a)
 		return 0;
-	bpf_lock_func(&a->lock, lf_holder_a_cb, NULL);
+	bpf_lock_func(&a->lock, lf_holder_a_cb, 0, 0, 0);
 	return 0;
 }
 
@@ -284,7 +284,7 @@ int lf_short_cs_incr_a(struct __sk_buff *ctx)
 	a = bpf_map_lookup_elem(&mt_locks, &key);
 	if (!a)
 		return 0;
-	bpf_lock_func(&a->lock, lf_incr_a_cb, NULL);
+	bpf_lock_func(&a->lock, lf_incr_a_cb, 0, 0, 0);
 	return 0;
 }
 
@@ -307,7 +307,7 @@ int lf_short_cs_incr_b(struct __sk_buff *ctx)
 	b = bpf_map_lookup_elem(&mt_locks, &key);
 	if (!b)
 		return 0;
-	bpf_lock_func(&b->lock, lf_incr_b_cb, NULL);
+	bpf_lock_func(&b->lock, lf_incr_b_cb, 0, 0, 0);
 	return 0;
 }
 
@@ -333,7 +333,7 @@ int lf_worker_b_short_loop(struct __sk_buff *ctx)
 	b = bpf_map_lookup_elem(&mt_locks, &key);
 	if (!b)
 		return 0;
-	bpf_lock_func(&b->lock, lf_workerb_cb, NULL);
+	bpf_lock_func(&b->lock, lf_workerb_cb, 0, 0, 0);
 	return 0;
 }
 
@@ -367,7 +367,7 @@ int lf_nested_inner_holder(struct __sk_buff *ctx)
 	a = bpf_map_lookup_elem(&mt_locks, &key);
 	if (!a)
 		return 0;
-	bpf_lock_func(&a->lock, lf_nested_cb, NULL);
+	bpf_lock_func(&a->lock, lf_nested_cb, 0, 0, 0);
 	return 0;
 }
 
@@ -403,7 +403,7 @@ int lf_deadlock_ab(struct __sk_buff *ctx)
 	a = bpf_map_lookup_elem(&mt_locks, &key);
 	if (!a)
 		return 0;
-	bpf_lock_func(&a->lock, lf_dlab_cb, NULL);
+	bpf_lock_func(&a->lock, lf_dlab_cb, 0, 0, 0);
 	return 0;
 }
 
@@ -436,7 +436,7 @@ int lf_deadlock_ba(struct __sk_buff *ctx)
 	b = bpf_map_lookup_elem(&mt_locks, &key);
 	if (!b)
 		return 0;
-	bpf_lock_func(&b->lock, lf_dlba_cb, NULL);
+	bpf_lock_func(&b->lock, lf_dlba_cb, 0, 0, 0);
 	return 0;
 }
 
