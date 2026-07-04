@@ -184,7 +184,12 @@ int cache_ext_list_iterate(struct mem_cgroup *memcg,
 		return CACHE_EXT_EVICT_ARRAY_FILLED;
 
 	struct cache_ext_ds_registry *registry = cache_ext_ds_registry_from_memcg(memcg);
-	read_lock(&registry->lock);
+	/* READER SITE: was read_lock(&registry->lock). The registry lock is now a
+	 * single exclusive spinlock (shared with the BPF policy, which takes it via
+	 * bpf_spin_lock over a writable cast). If a reader/writer BPF spin lock is
+	 * later exposed, convert this acquire (and the matching unlock below) back
+	 * to the read side. */
+	spin_lock(&registry->lock);
 
 	list_for_each_entry(node, &list->head, node) {
 		if (iter > max_iter) {
@@ -216,7 +221,8 @@ int cache_ext_list_iterate(struct mem_cgroup *memcg,
 		}
 	}
 
-	read_unlock(&registry->lock);
+	/* READER SITE: was read_unlock(&registry->lock). See acquire above. */
+	spin_unlock(&registry->lock);
 	return ret;
 }
 
@@ -299,10 +305,13 @@ int cache_ext_list_iterate_extended(struct mem_cgroup *memcg,
 		evict_list = list;
 	}
 
-	if (opts->continue_mode == CACHE_EXT_ITERATE_SKIP && opts->evict_mode == CACHE_EXT_ITERATE_SKIP)
-		read_lock(&registry->lock);
-	else
-		write_lock(&registry->lock);
+	/* READER SITE (conditional): originally took read_lock when both
+	 * continue_mode and evict_mode were SKIP (pure traversal), otherwise
+	 * write_lock. Collapsed to one exclusive spinlock. If a reader/writer
+	 * BPF spin lock is later exposed, restore the
+	 *   if (continue_mode == SKIP && evict_mode == SKIP) read else write
+	 * split here (and at the matching unlock below). */
+	spin_lock(&registry->lock);
 
 	list_for_each_entry_safe(node, node2, &list->head, node) {
 		if (iter > max_iter) {
@@ -348,10 +357,8 @@ int cache_ext_list_iterate_extended(struct mem_cgroup *memcg,
 		}
 	}
 
-	if (opts->continue_mode == CACHE_EXT_CONTINUE_ITER && opts->evict_mode == CACHE_EXT_CONTINUE_ITER)
-		read_unlock(&registry->lock);
-	else
-		write_unlock(&registry->lock);
+	/* READER SITE (conditional): see acquire above (was read/write split). */
+	spin_unlock(&registry->lock);
 
 	return ret;
 }
@@ -493,7 +500,7 @@ int __bpf_cache_ext_list_sample(struct mem_cgroup *memcg, u64 list,
 		pr_err("cache_ext: list is NULL\n");
 		return -1;
 	}
-	write_lock(&registry->lock);
+	spin_lock(&registry->lock);
 
 	// Optimization: Snip the front of the list and select the pages without
 	// holding the lock.
@@ -501,7 +508,7 @@ int __bpf_cache_ext_list_sample(struct mem_cgroup *memcg, u64 list,
 		if (list_empty(&list_ptr->head)) {
 			pr_warn("cache_ext: ran out of folios to sample\n");
 			__putback_list_nodes(list_ptr, sample_folios_arr, sample_folios_size);
-			write_unlock(&registry->lock);
+			spin_unlock(&registry->lock);
 			return -1;
 		}
 		struct cache_ext_list_node *node = list_first_entry(
@@ -514,7 +521,7 @@ int __bpf_cache_ext_list_sample(struct mem_cgroup *memcg, u64 list,
 		list_del_init(&node->node);
 	}
 
-	write_unlock(&registry->lock);
+	spin_unlock(&registry->lock);
 
 	// 1. For every n elements, evict the one with the min score
 	ctx->nr_folios_to_evict = 0;
@@ -546,9 +553,9 @@ int __bpf_cache_ext_list_sample(struct mem_cgroup *memcg, u64 list,
 	}
 
 	// 2. Put everything to the back of the list.
-	write_lock(&registry->lock);
+	spin_lock(&registry->lock);
 	__putback_list_nodes(list_ptr, sample_folios_arr, sample_folios_size);
-	write_unlock(&registry->lock);
+	spin_unlock(&registry->lock);
 
 	return 0;
 }
@@ -626,7 +633,7 @@ static const struct btf_kfunc_id_set cache_ext_kfunc_set_list_ops = {
 void cache_ext_ds_registry_init(struct cache_ext_ds_registry *registry)
 {
 	hash_init(registry->ds_hash);
-	rwlock_init(&registry->lock);
+	spin_lock_init(&registry->lock);
 	registry->nr_entries = 0;
 }
 
@@ -643,16 +650,16 @@ struct cache_ext_list *cache_ext_ds_registry_new_list(struct mem_cgroup *memcg)
 	if (list == NULL) {
 		return NULL;
 	}
-	write_lock(&registry->lock);
+	spin_lock(&registry->lock);
 	if (registry->nr_entries >= CACHE_EXT_REGISTRY_MAX_ENTRIES) {
-		write_unlock(&registry->lock);
+		spin_unlock(&registry->lock);
 		cache_ext_list_free(list);
 		return NULL;
 	}
 	u64 key = (u64)list;
 	hash_add(registry->ds_hash, &list->h_node, key);
 	registry->nr_entries++;
-	write_unlock(&registry->lock);
+	spin_unlock(&registry->lock);
 
 	return list;
 }
@@ -662,14 +669,17 @@ cache_ext_ds_registry_get(struct cache_ext_ds_registry *registry, u64 list_ptr)
 {
 	struct cache_ext_list *cur_list;
 	u64 key = list_ptr;
-	read_lock(&registry->lock);
+	/* READER SITE: was read_lock/read_unlock(&registry->lock) (lookup only).
+	 * Now an exclusive spinlock; revert to the read side if a reader/writer BPF
+	 * spin lock is later exposed. */
+	spin_lock(&registry->lock);
 	hash_for_each_possible(registry->ds_hash, cur_list, h_node, key) {
 		if (key == (u64)cur_list) {
-			read_unlock(&registry->lock);
+			spin_unlock(&registry->lock);
 			return cur_list;
 		}
 	}
-	read_unlock(&registry->lock);
+	spin_unlock(&registry->lock);
 
 	return NULL;
 }
@@ -679,12 +689,15 @@ cache_ext_ds_registry_from_folio(struct folio *folio)
 {
 	// Get cgroup from folio
 	struct mem_cgroup *memcg = folio_memcg(folio);
-	// Get pgdat from folio
-	pg_data_t *pgdat = folio_pgdat(folio);
-	// Get node cgroup
-	struct mem_cgroup_per_node *node_cgroup = memcg->nodeinfo[pgdat->node_id];
-	// Get valid folios set from cgroup
-	return &node_cgroup->cache_ext_ds_registry;
+	/*
+	 * Use nodeinfo[0]'s registry unconditionally. Lists are created in
+	 * nodeinfo[0] (cache_ext_ds_registry_from_memcg / new_list) and the BPF
+	 * policy caches nodeinfo[0]'s lock at init, so every list_head and the
+	 * lock guarding it must come from the SAME registry. Indexing by the
+	 * folio's NUMA node here would lock a different registry than the one
+	 * holding the list, reintroducing the cross-lock race this design fixes.
+	 */
+	return &memcg->nodeinfo[0]->cache_ext_ds_registry;
 }
 
 struct cache_ext_ds_registry *
@@ -693,28 +706,45 @@ cache_ext_ds_registry_from_mem_cgroup(struct mem_cgroup *memcg)
 	return &memcg->nodeinfo[0]->cache_ext_ds_registry;
 }
 
+/*
+ * The registry lock is now a plain spinlock_t shared with pure-BPF policies:
+ * the kernel takes it with spin_lock()/spin_unlock(); a policy takes the SAME
+ * lock word via bpf_spin_lock()/bpf_spin_unlock() over a writable-cast
+ * (struct bpf_spin_lock *) pointer. bpf_spin_lock() uses the standard qspinlock
+ * word format, so the two acquire paths interoperate. There is no reader/writer
+ * distinction any more: read and write helpers both take the single exclusive
+ * lock. A kernel caller that blocks here behind a hung BPF lock holder is
+ * released by the BPF spin-lock timeout/termination machinery (the holder's own
+ * watchdog forcibly unlocks and bpf_throw()s it), so the kernel thread makes
+ * progress.
+ *
+ * READER SITE: cache_ext_ds_registry_read_lock/_read_unlock were the read side
+ * of the old rwlock. They now take the same exclusive lock as the write
+ * helpers. If a reader/writer BPF spin lock is later exposed, switch these two
+ * back to the read side.
+ */
 void cache_ext_ds_registry_read_lock(struct folio *folio)
 {
 	struct cache_ext_ds_registry *registry = cache_ext_ds_registry_from_folio(folio);
-	read_lock(&registry->lock);
+	spin_lock(&registry->lock);
 }
 
 void cache_ext_ds_registry_read_unlock(struct folio *folio)
 {
 	struct cache_ext_ds_registry *registry = cache_ext_ds_registry_from_folio(folio);
-	read_unlock(&registry->lock);
+	spin_unlock(&registry->lock);
 }
 
 void cache_ext_ds_registry_write_lock(struct folio *folio)
 {
 	struct cache_ext_ds_registry *registry = cache_ext_ds_registry_from_folio(folio);
-	write_lock(&registry->lock);
+	spin_lock(&registry->lock);
 }
 
 void cache_ext_ds_registry_write_unlock(struct folio *folio)
 {
 	struct cache_ext_ds_registry *registry = cache_ext_ds_registry_from_folio(folio);
-	write_unlock(&registry->lock);
+	spin_unlock(&registry->lock);
 }
 
 void cache_ext_ds_registry_del_all(struct mem_cgroup *memcg)
@@ -723,13 +753,13 @@ void cache_ext_ds_registry_del_all(struct mem_cgroup *memcg)
 	struct hlist_node *tmp;
 	struct cache_ext_list *cur_list;
 	struct cache_ext_ds_registry *registry = cache_ext_ds_registry_from_memcg(memcg);
-	write_lock(&registry->lock);
+	spin_lock(&registry->lock);
 	hash_for_each_safe(registry->ds_hash, bkt, tmp, cur_list, h_node) {
 		hash_del(&cur_list->h_node);
 		cache_ext_list_free(cur_list);
 	}
 	registry->nr_entries = 0;
-	write_unlock(&registry->lock);
+	spin_unlock(&registry->lock);
 	struct valid_folios_set *valid_folios_set = memcg_to_valid_folios_set(memcg);
 	valid_folios_clear_list(valid_folios_set);
 }
@@ -741,8 +771,22 @@ __bpf_kfunc u64 bpf_cache_ext_ds_registry_new_list(struct mem_cgroup *memcg)
 	return (u64)cache_ext_ds_registry_new_list(memcg);
 }
 
+/*
+ * Return the address of this memcg's registry BPF spin lock as a scalar. A
+ * pure-BPF policy caches this at init and re-casts it to a writable
+ * (struct bpf_spin_lock *) before each bpf_spin_lock() -- so the policy and the
+ * kernel (valid_folios_del, registry ops) serialise on the very same lock.
+ */
+__bpf_kfunc u64 bpf_cache_ext_registry_lock_addr(struct mem_cgroup *memcg)
+{
+	struct cache_ext_ds_registry *registry =
+		cache_ext_ds_registry_from_memcg(memcg);
+	return (u64)&registry->lock;
+}
+
 BTF_KFUNCS_START(cache_ext_registry_ops)
 BTF_ID_FLAGS(func, bpf_cache_ext_ds_registry_new_list, KF_SLEEPABLE)
+BTF_ID_FLAGS(func, bpf_cache_ext_registry_lock_addr)
 BTF_KFUNCS_END(cache_ext_registry_ops)
 
 static const struct btf_kfunc_id_set cache_ext_kfunc_set_registry_ops = {

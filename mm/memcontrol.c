@@ -270,14 +270,19 @@ void valid_folios_del(struct folio *folio) {
 	hash_for_each_possible(valid_folios_set->valid_folios, cur, h_node, key) {
 		if (cur->folio_ptr == key) {
 			hash_del(&cur->h_node);
-			// TODO: If BPF has not removed it we are screwed!
-			// Change to dealloc in BPF.
 
+			/*
+			 * The registry lock is now the SAME BPF spin lock the
+			 * policy takes, so this critical section is mutually
+			 * exclusive with the policy's list ops -- the concurrent
+			 * list-poison race is gone. folio_evicted() runs before
+			 * us on every removal path (filemap.c) and list_del_init()s
+			 * the node, leaving it self-pointing (list_empty() true),
+			 * so the guard skips a redundant poisoning list_del here.
+			 */
 			cache_ext_ds_registry_write_lock(folio);
-			// Is it in a list currently? If so, remove it.
-			// if (!list_empty(&cur->cache_ext_node->node)) {
-			list_del(&cur->cache_ext_node->node);
-			//}
+			if (!list_empty(&cur->cache_ext_node->node))
+				list_del(&cur->cache_ext_node->node);
 			cache_ext_ds_registry_write_unlock(folio);
 			cache_ext_list_node_free(cur->cache_ext_node);
 

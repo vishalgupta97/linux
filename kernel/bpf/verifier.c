@@ -8676,6 +8676,7 @@ static int process_spin_lock(struct bpf_verifier_env *env, int regno, int flags)
 	struct bpf_map *map = NULL;
 	struct btf *btf = NULL;
 	struct btf_record *rec;
+	bool is_kern_spin_lock = false;
 	u32 spin_lock_off;
 	int err;
 
@@ -8697,17 +8698,38 @@ static int process_spin_lock(struct bpf_verifier_env *env, int regno, int flags)
 		btf = reg->btf;
 	}
 
-	rec = reg_btf_record(reg);
-	if (!btf_record_has_field(rec, is_res_lock ? BPF_RES_SPIN_LOCK : BPF_SPIN_LOCK)) {
-		verbose(env, "%s '%s' has no valid %s_lock\n", map ? "map" : "local",
-			map ? map->name : "kptr", lock_str);
-		return -EINVAL;
+	/*
+	 * cache_ext: a writable-cast (MEM_WRITE) pointer that points directly AT a
+	 * kernel-resident struct bpf_spin_lock -- e.g. a page-cache policy's shared
+	 * registry lock obtained via bpf_cache_ext_writable_cast(). Such a pointer
+	 * has no btf_record (reg_btf_record() only covers map values and allocated
+	 * objects), so treat the pointee itself as the lock: it is at offset 0 and
+	 * is identified by its BTF type name. The lock identity used for
+	 * lock/unlock matching is (reg->id, btf), same as any other BTF-object
+	 * lock. Requiring MEM_WRITE keeps read-only/untrusted bpf_spin_lock
+	 * pointers non-lockable.
+	 */
+	if (!map && !is_res_lock && (reg->type & MEM_WRITE) && btf && reg->off == 0) {
+		const struct btf_type *t = btf_type_by_id(btf, reg->btf_id);
+
+		if (t && btf_type_is_struct(t) &&
+		    !strcmp(btf_name_by_offset(btf, t->name_off), "bpf_spin_lock"))
+			is_kern_spin_lock = true;
 	}
-	spin_lock_off = is_res_lock ? rec->res_spin_lock_off : rec->spin_lock_off;
-	if (spin_lock_off != val + reg->off) {
-		verbose(env, "off %lld doesn't point to 'struct %s_lock' that is at %d\n",
-			val + reg->off, lock_str, spin_lock_off);
-		return -EINVAL;
+
+	if (!is_kern_spin_lock) {
+		rec = reg_btf_record(reg);
+		if (!btf_record_has_field(rec, is_res_lock ? BPF_RES_SPIN_LOCK : BPF_SPIN_LOCK)) {
+			verbose(env, "%s '%s' has no valid %s_lock\n", map ? "map" : "local",
+				map ? map->name : "kptr", lock_str);
+			return -EINVAL;
+		}
+		spin_lock_off = is_res_lock ? rec->res_spin_lock_off : rec->spin_lock_off;
+		if (spin_lock_off != val + reg->off) {
+			verbose(env, "off %lld doesn't point to 'struct %s_lock' that is at %d\n",
+				val + reg->off, lock_str, spin_lock_off);
+			return -EINVAL;
+		}
 	}
 	if (is_lock) {
 		void *ptr;
@@ -9479,6 +9501,10 @@ static const struct bpf_reg_types spin_lock_types = {
 	.types = {
 		PTR_TO_MAP_VALUE,
 		PTR_TO_BTF_ID | MEM_ALLOC,
+		/* cache_ext: writable-cast pointer at a kernel-resident
+		 * struct bpf_spin_lock (bpf_cache_ext_writable_cast). The lock
+		 * identity/validity is checked in process_spin_lock(). */
+		PTR_TO_BTF_ID | PTR_TRUSTED | MEM_WRITE,
 	}
 };
 
@@ -9683,6 +9709,15 @@ found:
 	case PTR_TO_BTF_ID | MEM_PERCPU | MEM_RCU:
 	case PTR_TO_BTF_ID | MEM_PERCPU | PTR_TRUSTED:
 		/* Handled by helper specific checks */
+		break;
+	case PTR_TO_BTF_ID | PTR_TRUSTED | MEM_WRITE:
+		/* cache_ext writable-cast spin lock: validated in
+		 * process_spin_lock() (must point at struct bpf_spin_lock). */
+		if (meta->func_id != BPF_FUNC_spin_lock &&
+		    meta->func_id != BPF_FUNC_spin_unlock) {
+			verifier_bug(env, "unimplemented handling of MEM_WRITE btf id");
+			return -EFAULT;
+		}
 		break;
 	default:
 		verifier_bug(env, "invalid PTR_TO_BTF_ID register for type match");

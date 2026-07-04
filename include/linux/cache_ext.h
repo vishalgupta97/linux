@@ -81,6 +81,7 @@ int bpf_cache_ext_list_sample(struct mem_cgroup *memcg, u64 list,
 				  struct sampling_options *opts,
 				  struct cache_ext_eviction_ctx *ctx);
 u64 bpf_cache_ext_ds_registry_new_list(struct mem_cgroup *memcg);
+u64 bpf_cache_ext_registry_lock_addr(struct mem_cgroup *memcg);
 
 /*
  * Used by the valid_folios_set code
@@ -101,7 +102,18 @@ void cache_ext_list_node_free(struct cache_ext_list_node *node);
 struct cache_ext_ds_registry {
 	/* DECLARE_HASHTABLE(ds_hash, 5) expanded to avoid including hashtable.h */
 	struct hlist_head ds_hash[1 << 5];
-	rwlock_t lock;
+	/*
+	 * Single lock guarding both this registry's ds_hash and the per-folio
+	 * cache_ext_list linkage. It is shared with pure-BPF policies: the kernel
+	 * takes it with spin_lock()/spin_unlock(), while a policy takes the SAME
+	 * lock word via bpf_spin_lock()/bpf_spin_unlock() over a writable-cast
+	 * (struct bpf_spin_lock *) pointer (see cache_ext_ds.bpf.h). bpf_spin_lock()
+	 * uses the standard qspinlock word format, so the two paths interoperate. A
+	 * kernel waiter blocked behind a hung BPF lock holder is unblocked by the
+	 * BPF spin-lock timeout/termination machinery, which forcibly releases the
+	 * holder.
+	 */
+	spinlock_t lock;
 	int nr_entries;
 };
 
