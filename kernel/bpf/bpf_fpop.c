@@ -15,6 +15,7 @@
 extern void bpf_notify_lock_kthread(void);
 extern void bpf_notify_unlock_kthread(void);
 extern void tell_bpf_loop_to_terminate(void);
+extern void bpf_throw(u64 cookie);
 #endif /* CONFIG_BPF_TIMEOUT */
 
 /*
@@ -142,7 +143,6 @@ static void execute_op_and_unlock(struct qspinlock *lock, bpf_callback_t callbac
 #ifdef CONFIG_BPF_TIMEOUT
 	bpf_notify_unlock_kthread(); // Only waiter. Notify kthread.
 #endif
-
 }
 
 
@@ -158,7 +158,7 @@ static void komb_spin_lock_slowpath(struct qspinlock *lock, bpf_callback_t callb
 	tail = encode_tail(smp_processor_id());
 
 	curr_node->locked = true;
-	curr_node->completed = false;
+	curr_node->completed = _FPOP_UNPRCSD;
 	curr_node->next = NULL;
 	curr_node->tail = tail;
 	curr_node->socket_id = numa_node_id();
@@ -173,14 +173,49 @@ static void komb_spin_lock_slowpath(struct qspinlock *lock, bpf_callback_t callb
 	if (old_tail & _Q_TAIL_MASK) {
 		prev_node = decode_tail(old_tail);
 		prev_node->next = curr_node;
-		//TODO: Add timeout here
 		smp_cond_load_relaxed_sched(&curr_node->locked, !(VAL));
 
-		if (curr_node->completed)
+#ifdef CONFIG_BPF_TIMEOUT
+		if (READ_ONCE(curr_node->completed) == _FPOP_PRCSING) {
+			u64 timeout_ns = (u64)READ_ONCE(sysctl_bpf_spin_lock_timeout) * NSEC_PER_MSEC;
+			u64 end_time = ktime_get_mono_fast_ns() + timeout_ns;
+			bool already_told_to_terminate = false;
+
+			while(true) {
+				if(!already_told_to_terminate && ktime_get_mono_fast_ns() > end_time) {
+					tell_bpf_loop_to_terminate();
+					already_told_to_terminate = true;
+					bpf_throw(50); // Check if this will work.
+					return;
+				}
+				if(READ_ONCE(curr_node->completed) == _FPOP_PRCSD)
+					return;
+			}
+		}
+#endif
+		if(READ_ONCE(curr_node->completed) == _FPOP_PRCSD)
 			return;
 	}
 
+#ifdef CONFIG_BPF_TIMEOUT
+	{
+		u64 timeout_ns = (u64)READ_ONCE(sysctl_bpf_spin_lock_timeout) * NSEC_PER_MSEC;
+		u64 end_time = ktime_get_mono_fast_ns() + timeout_ns;
+		bool already_told_to_terminate = false;
+
+		while (true) {
+			if (!already_told_to_terminate && ktime_get_mono_fast_ns() > end_time) {
+				tell_bpf_loop_to_terminate();
+				already_told_to_terminate = true;
+			}
+			if (!(READ_ONCE(lock->val.counter) & _Q_LOCKED_PENDING_MASK))
+				break;
+			cpu_relax();
+		}
+	}
+#else
 	val = atomic_cond_read_acquire(&lock->val, !(VAL & _Q_LOCKED_PENDING_MASK));
+#endif
 
 	if (((val & _Q_TAIL_MASK) == tail) &&
 	    atomic_try_cmpxchg_relaxed(&lock->val, &val, _Q_LOCKED_VAL)) {
@@ -207,9 +242,12 @@ static void komb_spin_lock_slowpath(struct qspinlock *lock, bpf_callback_t callb
 
 	while(true) {
 		counter_val++;
+#ifdef CONFIG_BPF_TIMEOUT
+		WRITE_ONCE(curr_node->locked_completed, _FPOP_PRCSING);
+#endif
 		next_node = get_next_node(curr_node);
 		execute_op(curr_node->callback, curr_node->v1, curr_node->v2, curr_node->v3);
-		WRITE_ONCE(curr_node->locked_completed, 1);
+		WRITE_ONCE(curr_node->locked_completed, _FPOP_PRCSD);
 		if(next_node == NULL || next_node->next == NULL || counter_val > komb_batch_size || need_resched())
 			break;
 		curr_node = next_node;

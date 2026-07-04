@@ -3608,6 +3608,8 @@ __bpf_kfunc void bpf_throw(u64 cookie)
 {
 	struct bpf_throw_ctx ctx = {};
 
+	printk(KERN_ALERT "bpf_throw called with cookie:%d\n", cookie);
+
 	arch_bpf_stack_walk(bpf_stack_walker, &ctx);
 	WARN_ON_ONCE(!ctx.aux);
 	if (ctx.aux)
