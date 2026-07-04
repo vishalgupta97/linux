@@ -417,7 +417,30 @@ void bpf_spin_lock_timeout_handler(void)
 	int cnt, i;
 
 	if(this_cpu_read(fpop_running)) {
-		WRITE_ONCE(ebpf_spinlock_timeout, 0); //Reset timeout
+#ifdef CONFIG_BPF_UNDO_LOG
+		bpf_undo_log_replay();
+#endif
+		/*
+		 * The outer bpf_lock_func() lock is owned by the combiner and is
+		 * handed over by bpf_fpop.c, but callbacks may still acquire
+		 * regular bpf_spin_lock() locks.  Drop those inner locks here so
+		 * a timed-out offloaded callback cannot strand them.
+		 */
+		locks = this_cpu_ptr(held_locks);
+		cnt = this_cpu_read(held_locks_cnt);
+		for (i = cnt - 1; i >= 0; i--) {
+			if (locks[i].lock) {
+#ifdef CONFIG_BPF_SPINLOCK_USE_KOMB
+				BUG_ON(true);
+				komb_spin_unlock((struct qspinlock *)locks[i].lock);
+#else
+				bpf_qspinlock_unlock((struct qspinlock *)locks[i].lock);
+#endif
+				preempt_enable();
+				locks[i].lock = NULL;
+			}
+		}
+		this_cpu_write(held_locks_cnt, 0);
 		return; // Handled by the waiter thread.
 	}
 
@@ -849,7 +872,7 @@ noinline void bpf_lock_timeout_rdtsc(u64 timeout_ns)
 			break;
 		}
 
-		if (per_cpu_ptr(&bpf_active_timer, bpf_cpuid) == NULL)
+		if (!READ_ONCE(*per_cpu_ptr(&bpf_active_timer, bpf_cpuid)))
 			break;
 
 		cpu_relax();

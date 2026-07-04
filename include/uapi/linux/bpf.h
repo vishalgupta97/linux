@@ -5899,13 +5899,13 @@ union bpf_attr {
  *
  *		**-ENOENT** if the bpf_local_storage cannot be found.
  *
- * long bpf_lock_func(void *lock, void *callback_fn, void *local_state)
+ * long bpf_lock_func(void *lock, void *callback_fn, u64 v1, u64 v2, u64 v3)
  *	Description
  *		Acquire the spin lock *lock*, invoke *callback_fn* with the
  *		lock held, then release *lock*. The callback receives
- *		*local_state* as its only argument:
+ *		*v1*, *v2*, and *v3* as its arguments:
  *
- *		long (\*callback_fn)(void \*local_state);
+ *		long (\*callback_fn)(u64 v1, u64 v2, u64 v3, u64, u64);
  *
  *		All writes to global state performed inside *callback_fn*
  *		are recorded in the per-CPU undo log and rolled back if the

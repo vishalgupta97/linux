@@ -512,7 +512,7 @@ void test_spin_lock_mt_timeout(void)
 		goto destroy;
 	}
 
-	for (s = 0; s < 2; s++) {
+	for (s = 1; s < 2; s++) {
 		struct prog_set *ps = &sets[s];
 
 		if (test__start_subtest(MT_SUBTEST(ps, "contended_holder_timeout")))

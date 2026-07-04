@@ -148,6 +148,15 @@ static void execute_op_and_unlock(struct qspinlock *lock, bpf_callback_t callbac
 	reset_state_for_cs_timeout(lock);
 }
 
+#ifdef CONFIG_BPF_TIMEOUT
+static __always_inline void fpop_wait_for_node_reuse(struct fpop_node *node)
+{
+	while (READ_ONCE(node->completed) == (uint8_t)_FPOP_PRCSING)
+		cpu_relax();
+}
+#else
+static __always_inline void fpop_wait_for_node_reuse(struct fpop_node *node) { }
+#endif
 
 static void komb_spin_lock_slowpath(struct qspinlock *lock, bpf_callback_t callback,
 				    u64 v1, u64 v2, u64 v3)
@@ -158,6 +167,7 @@ static void komb_spin_lock_slowpath(struct qspinlock *lock, bpf_callback_t callb
 	uint64_t counter_val = 0;
 
 	curr_node = this_cpu_ptr(&fpop_nodes);
+	fpop_wait_for_node_reuse(curr_node);
 	tail = encode_tail(smp_processor_id());
 
 	curr_node->locked = true;
@@ -175,7 +185,7 @@ static void komb_spin_lock_slowpath(struct qspinlock *lock, bpf_callback_t callb
 
 	if (old_tail & _Q_TAIL_MASK) {
 		prev_node = decode_tail(old_tail);
-		prev_node->next = curr_node;
+		WRITE_ONCE(prev_node->next, curr_node);
 		smp_cond_load_relaxed_sched(&curr_node->locked, !(VAL));
 
 #ifdef CONFIG_BPF_TIMEOUT
@@ -188,6 +198,7 @@ static void komb_spin_lock_slowpath(struct qspinlock *lock, bpf_callback_t callb
 				if(!already_told_to_terminate && ktime_get_mono_fast_ns() > end_time) {
 					tell_bpf_loop_to_terminate();
 					already_told_to_terminate = true;
+					preempt_enable();
 					bpf_throw(50); // Check if this will work.
 					return;
 				}
@@ -215,6 +226,7 @@ static void komb_spin_lock_slowpath(struct qspinlock *lock, bpf_callback_t callb
 				break;
 			cpu_relax();
 		}
+		val = READ_ONCE(lock->val.counter);
 	}
 #else
 	val = atomic_cond_read_acquire(&lock->val, !(VAL & _Q_LOCKED_PENDING_MASK));
@@ -238,8 +250,7 @@ static void komb_spin_lock_slowpath(struct qspinlock *lock, bpf_callback_t callb
 		set_locked(lock);
 		curr_node->locked = false;
 		smp_mb();
-		execute_op(callback, v1, v2, v3); // No Timeout, next waiter exists.
-		WRITE_ONCE(lock->locked, false);
+		execute_op_and_unlock(lock, callback, v1, v2, v3);
 		return;
 	}
 
@@ -270,8 +281,7 @@ static void komb_spin_lock_slowpath(struct qspinlock *lock, bpf_callback_t callb
 	set_locked(lock);
 	next_node->locked = false;
 	smp_mb();
-	execute_op(callback, v1, v2, v3); // No Timeout, next waiter exists.
-	WRITE_ONCE(lock->locked, false);
+	execute_op_and_unlock(lock, callback, v1, v2, v3);
 	return;
 }
 
@@ -280,11 +290,13 @@ void fpop_execute(struct qspinlock *lock, bpf_callback_t callback,
 {
 	u32 val, cnt;
 
+	preempt_disable();
+
 	val = atomic_cmpxchg_acquire(&lock->val, 0, _Q_LOCKED_VAL);
 	if (val == 0)
 	{
 		execute_op_and_unlock(lock, callback, v1, v2, v3);
-		return;
+		goto out;
 	}
 
 	if (val == _Q_PENDING_VAL) {
@@ -326,9 +338,11 @@ void fpop_execute(struct qspinlock *lock, bpf_callback_t callback,
 
 	WRITE_ONCE(lock->locked_pending, _Q_LOCKED_VAL);
 	execute_op_and_unlock(lock, callback, v1, v2, v3);
-	return;
+	goto out;
 
 queue:
 	komb_spin_lock_slowpath(lock, callback, v1, v2, v3);
+out:
+	preempt_enable();
 	return;
 }
