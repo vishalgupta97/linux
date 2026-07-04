@@ -38,9 +38,9 @@ struct fpop_node {
 #define _Q_LOCKED_PENDING_MASK (_Q_LOCKED_MASK | _Q_PENDING_MASK)
 #define _Q_LOCKED_COMBINER_VAL 3
 
-#define _FPOP_PRCSD 2
-#define _FPOP_PRCSING 1
-#define _FPOP_UNPRCSD 0
+#define _FPOP_PRCSD 0x0002
+#define _FPOP_PRCSING 0x0001
+#define _FPOP_UNPRCSD 0x0000
 
 #define smp_cond_load_relaxed_sched(ptr, cond_expr) \
 	({                                          \

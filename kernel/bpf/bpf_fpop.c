@@ -16,7 +16,12 @@ extern void bpf_notify_lock_kthread(void);
 extern void bpf_notify_unlock_kthread(void);
 extern void tell_bpf_loop_to_terminate(void);
 extern void bpf_throw(u64 cookie);
+extern int ebpf_spinlock_timeout;
+extern void set_state_for_cs_timeout(void *lock);
+extern void reset_state_for_cs_timeout(void *lock);
 #endif /* CONFIG_BPF_TIMEOUT */
+
+DEFINE_PER_CPU(bool, fpop_running);
 
 /*
  * bpf_lock_func() acquires and releases the lock inline (it does not go through
@@ -128,21 +133,19 @@ next_node_null:
 static void execute_op(bpf_callback_t callback, u64 v1, u64 v2, u64 v3)
 {
 	fpop_reset_undo_log();
+#ifdef CONFIG_BPF_TIMEOUT
+	WRITE_ONCE(ebpf_spinlock_timeout, 0); // Reset timeout bit
+#endif
 	callback(v1, v2, v3, 0, 0);
 }
 
 static void execute_op_and_unlock(struct qspinlock *lock, bpf_callback_t callback,
 				  u64 v1, u64 v2, u64 v3)
 {
-#ifdef CONFIG_BPF_TIMEOUT
-	bpf_notify_lock_kthread(); // Only waiter. Notify kthread.
-#endif
-	fpop_reset_undo_log();
+	set_state_for_cs_timeout(lock);
 	callback(v1, v2, v3, 0, 0);
 	WRITE_ONCE(lock->locked, false);
-#ifdef CONFIG_BPF_TIMEOUT
-	bpf_notify_unlock_kthread(); // Only waiter. Notify kthread.
-#endif
+	reset_state_for_cs_timeout(lock);
 }
 
 
@@ -158,7 +161,7 @@ static void komb_spin_lock_slowpath(struct qspinlock *lock, bpf_callback_t callb
 	tail = encode_tail(smp_processor_id());
 
 	curr_node->locked = true;
-	curr_node->completed = _FPOP_UNPRCSD;
+	curr_node->completed = (uint8_t)_FPOP_UNPRCSD;
 	curr_node->next = NULL;
 	curr_node->tail = tail;
 	curr_node->socket_id = numa_node_id();
@@ -176,7 +179,7 @@ static void komb_spin_lock_slowpath(struct qspinlock *lock, bpf_callback_t callb
 		smp_cond_load_relaxed_sched(&curr_node->locked, !(VAL));
 
 #ifdef CONFIG_BPF_TIMEOUT
-		if (READ_ONCE(curr_node->completed) == _FPOP_PRCSING) {
+		if (READ_ONCE(curr_node->completed) == (uint8_t)_FPOP_PRCSING) {
 			u64 timeout_ns = (u64)READ_ONCE(sysctl_bpf_spin_lock_timeout) * NSEC_PER_MSEC;
 			u64 end_time = ktime_get_mono_fast_ns() + timeout_ns;
 			bool already_told_to_terminate = false;
@@ -188,12 +191,12 @@ static void komb_spin_lock_slowpath(struct qspinlock *lock, bpf_callback_t callb
 					bpf_throw(50); // Check if this will work.
 					return;
 				}
-				if(READ_ONCE(curr_node->completed) == _FPOP_PRCSD)
+				if(READ_ONCE(curr_node->completed) == (uint8_t)_FPOP_PRCSD)
 					return;
 			}
 		}
 #endif
-		if(READ_ONCE(curr_node->completed) == _FPOP_PRCSD)
+		if(READ_ONCE(curr_node->completed) == (uint8_t)_FPOP_PRCSD)
 			return;
 	}
 
@@ -240,18 +243,22 @@ static void komb_spin_lock_slowpath(struct qspinlock *lock, bpf_callback_t callb
 		return;
 	}
 
+	*this_cpu_ptr(&fpop_running) = true;
+
 	while(true) {
 		counter_val++;
-#ifdef CONFIG_BPF_TIMEOUT
-		WRITE_ONCE(curr_node->locked_completed, _FPOP_PRCSING);
-#endif
 		next_node = get_next_node(curr_node);
+#ifdef CONFIG_BPF_TIMEOUT
+		WRITE_ONCE(curr_node->locked_completed, (uint16_t)_FPOP_PRCSING);
+#endif
 		execute_op(curr_node->callback, curr_node->v1, curr_node->v2, curr_node->v3);
-		WRITE_ONCE(curr_node->locked_completed, _FPOP_PRCSD);
+		WRITE_ONCE(curr_node->locked_completed, (uint16_t)_FPOP_PRCSD);
 		if(next_node == NULL || next_node->next == NULL || counter_val > komb_batch_size || need_resched())
 			break;
 		curr_node = next_node;
 	}
+
+	*this_cpu_ptr(&fpop_running) = false;
 	
 	if (*this_cpu_ptr(&local_queue_head) != NULL) {
 		(*this_cpu_ptr(&local_queue_tail))->next = next_node;

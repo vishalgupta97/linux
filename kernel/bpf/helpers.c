@@ -405,6 +405,8 @@ enum hrtimer_restart bpf_qspinlock_timer_cb(struct hrtimer *timer)
 }
 EXPORT_SYMBOL_GPL(bpf_qspinlock_timer_cb);
 
+DECLARE_PER_CPU(bool, fpop_running);
+
 /*
  * bpf_spin_lock_timeout_handler - release all held locks and terminate program.
  * Called from bpf_loop/bpf_for when timeout is detected.
@@ -413,6 +415,11 @@ void bpf_spin_lock_timeout_handler(void)
 {
 	struct bpf_lock_entry *locks;
 	int cnt, i;
+
+	if(this_cpu_read(fpop_running)) {
+		WRITE_ONCE(ebpf_spinlock_timeout, 0); //Reset timeout
+		return; // Handled by the waiter thread.
+	}
 
 	/* Access per-CPU held locks */
 	locks = this_cpu_ptr(held_locks);
@@ -690,6 +697,75 @@ const struct bpf_func_proto bpf_spin_unlock_proto = {
 	.arg1_type = ARG_PTR_TO_SPIN_LOCK,
 	.arg1_btf_id = BPF_PTR_POISON,
 };
+
+void bpf_notify_lock_kthread(void);
+
+void set_state_for_cs_timeout(void *lock) {
+	struct bpf_lock_entry *locks;
+	int cnt, i;
+	bool found = false;
+
+	/* Track the acquired lock */
+	locks = this_cpu_ptr(held_locks);
+	cnt = this_cpu_read(held_locks_cnt);
+
+	if (cnt < MAX_HELD_LOCKS) {
+		locks[cnt].lock = (struct qspinlock*)lock;
+		this_cpu_inc(held_locks_cnt);
+		cnt++;
+
+		if (cnt == 1) {
+#ifdef CONFIG_BPF_UNDO_LOG
+			this_cpu_write(bpf_undo_log_cursor,
+				       this_cpu_read(bpf_undo_log_base));
+#endif
+#ifdef CONFIG_BPF_TIMEOUT
+			WRITE_ONCE(ebpf_spinlock_timeout, 0);
+#endif
+		}
+	} 
+
+#ifdef CONFIG_BPF_TIMEOUT
+	bpf_notify_lock_kthread();
+#endif
+}
+
+void reset_state_for_cs_timeout(void *lock) 
+{
+	struct bpf_lock_entry *locks;
+	int cnt, i;
+	bool found = false;
+
+	/* Remove lock from tracking (handle OOO unlocking) */
+	locks = this_cpu_ptr(held_locks);
+	cnt = this_cpu_read(held_locks_cnt);
+
+	/* Find and remove the lock from held_locks */
+	for (i = cnt - 1; i >= 0; i--) {
+		if (locks[i].lock == (struct qspinlock *)lock) {
+			/* Shift remaining locks down */
+			for (; i < cnt - 1; i++) {
+				locks[i] = locks[i + 1];
+			}
+			locks[cnt - 1].lock = NULL;
+			this_cpu_dec(held_locks_cnt);
+			found = true;
+			break;
+		}
+	}
+
+	/* Cancel the active timer and clear undo log when last lock is released */
+	if (found && this_cpu_read(held_locks_cnt) == 0) {
+#ifdef CONFIG_BPF_UNDO_LOG
+		this_cpu_write(bpf_undo_log_cursor,
+			       this_cpu_read(bpf_undo_log_base));
+#endif
+#ifdef CONFIG_BPF_TIMEOUT
+		this_cpu_write(bpf_active_timer, NULL);
+		WRITE_ONCE(ebpf_spinlock_timeout, 0);
+#endif
+	}
+}
 
 /*
  * bpf_lock_func(lock, callback_fn, local_state)
