@@ -13,15 +13,14 @@
 
 #ifdef CONFIG_BPF_TIMEOUT
 extern void bpf_notify_lock_kthread(void);
-extern void bpf_notify_unlock_kthread(void);
-extern void tell_bpf_loop_to_terminate(void);
+extern void tell_bpf_loop_to_terminate(void *lock);
 extern void bpf_throw(u64 cookie);
-extern int ebpf_spinlock_timeout;
 extern void set_state_for_cs_timeout(void *lock);
 extern void reset_state_for_cs_timeout(void *lock);
 #endif /* CONFIG_BPF_TIMEOUT */
 
 DEFINE_PER_CPU(bool, fpop_running);
+DEFINE_PER_CPU(struct qspinlock *, fpop_active_lock);
 
 /*
  * bpf_lock_func() acquires and releases the lock inline (it does not go through
@@ -130,13 +129,20 @@ next_node_null:
 	return next_node;
 }
 
-static void execute_op(bpf_callback_t callback, u64 v1, u64 v2, u64 v3)
+static void execute_op(struct qspinlock *lock, bpf_callback_t callback,
+		       u64 v1, u64 v2, u64 v3)
 {
-	fpop_reset_undo_log();
 #ifdef CONFIG_BPF_TIMEOUT
-	WRITE_ONCE(ebpf_spinlock_timeout, 0); // Reset timeout bit
+	this_cpu_write(fpop_active_lock, lock);
+	set_state_for_cs_timeout(lock);
+#else
+	fpop_reset_undo_log();
 #endif
 	callback(v1, v2, v3, 0, 0);
+#ifdef CONFIG_BPF_TIMEOUT
+	reset_state_for_cs_timeout(lock);
+	this_cpu_write(fpop_active_lock, NULL);
+#endif
 }
 
 static void execute_op_and_unlock(struct qspinlock *lock, bpf_callback_t callback,
@@ -196,7 +202,7 @@ static void komb_spin_lock_slowpath(struct qspinlock *lock, bpf_callback_t callb
 
 			while(true) {
 				if(!already_told_to_terminate && ktime_get_mono_fast_ns() > end_time) {
-					tell_bpf_loop_to_terminate();
+					tell_bpf_loop_to_terminate(lock);
 					already_told_to_terminate = true;
 					preempt_enable();
 					bpf_throw(50); // Check if this will work.
@@ -219,7 +225,7 @@ static void komb_spin_lock_slowpath(struct qspinlock *lock, bpf_callback_t callb
 
 		while (true) {
 			if (!already_told_to_terminate && ktime_get_mono_fast_ns() > end_time) {
-				tell_bpf_loop_to_terminate();
+				tell_bpf_loop_to_terminate(lock);
 				already_told_to_terminate = true;
 			}
 			if (!(READ_ONCE(lock->val.counter) & _Q_LOCKED_PENDING_MASK))
@@ -262,7 +268,7 @@ static void komb_spin_lock_slowpath(struct qspinlock *lock, bpf_callback_t callb
 #ifdef CONFIG_BPF_TIMEOUT
 		WRITE_ONCE(curr_node->locked_completed, (uint16_t)_FPOP_PRCSING);
 #endif
-		execute_op(curr_node->callback, curr_node->v1, curr_node->v2, curr_node->v3);
+		execute_op(lock, curr_node->callback, curr_node->v1, curr_node->v2, curr_node->v3);
 		WRITE_ONCE(curr_node->locked_completed, (uint16_t)_FPOP_PRCSD);
 		if(next_node == NULL || next_node->next == NULL || counter_val > komb_batch_size || need_resched())
 			break;
@@ -324,7 +330,7 @@ void fpop_execute(struct qspinlock *lock, bpf_callback_t callback,
 
 		while (true) {
 			if (!already_told_to_terminate && ktime_get_mono_fast_ns() > end_time) {
-				tell_bpf_loop_to_terminate();
+				tell_bpf_loop_to_terminate(lock);
 				already_told_to_terminate = true;
 			}
 			if (!(READ_ONCE(lock->locked)))

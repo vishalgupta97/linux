@@ -105,7 +105,7 @@ config BPF_TIMEOUT
 	bool "Enable BPF spinlock timeout"
 	default n
 	help
-	  Enable a per-CPU hrtimer and kthread watchdog for BPF spinlock
+	  Enable timeout handling and a kthread watchdog for BPF spinlock
 	  critical sections.  When the timeout fires (configurable via
 	  /proc/sys/net/core/bpf_spin_lock_timeout in milliseconds) the BPF
 	  program is terminated via bpf_throw().  All held locks are released.

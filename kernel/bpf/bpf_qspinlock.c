@@ -2,13 +2,11 @@
 /*
  * BPF Custom QSpinlock Slow Path
  *
- * Provides a qspinlock-based lock acquisition function for BPF where the
- * waiter at the head of the MCS queue starts/cancels the hrtimer.  The
- * function acquires the lock with IRQs *enabled* (so the hrtimer can fire on
- * the waiting CPU), then disables IRQs only after acquisition.
+ * Provides a qspinlock-based lock acquisition function for BPF. Timeout
+ * detection is done with ktime polling in the wait paths and by the watchdog
+ * kthread for uncontended holders.
  *
  * Modeled on kernel/bpf/rqspinlock.c but with the following differences:
- *  - No inline timeout / ktime polling.  Timeout via hrtimer only.
  *  - Never returns an error.  On timeout the *owner* is terminated by
  *    bpf_spin_lock_timeout_handler(); the waiter eventually acquires normally.
  *  - No deadlock detection.
@@ -21,11 +19,9 @@
 #include <linux/percpu.h>
 #include <linux/hardirq.h>
 #include <linux/prefetch.h>
-#include <linux/hrtimer.h>
 #include <linux/irqflags.h>
 #include <asm/byteorder.h>
 #include <asm/qspinlock.h>
-#include <linux/bpf_lock_timer.h>
 
 #include "../locking/qspinlock.h"
 #include "../locking/mcs_spinlock.h"
@@ -42,65 +38,9 @@ static DEFINE_PER_CPU_ALIGNED(struct qnode, bpf_qnodes[_Q_MAX_NODES]);
 /* Externs defined in helpers.c / syscall.c                               */
 /* ---------------------------------------------------------------------- */
 #ifdef CONFIG_BPF_TIMEOUT
-extern int ebpf_spinlock_timeout;
 extern int sysctl_bpf_spin_lock_timeout;
-extern const struct bpf_lock_timer_ops bpf_hrtimer_ops;
-extern enum hrtimer_restart bpf_qspinlock_timer_cb(struct hrtimer *timer);
 extern void bpf_notify_lock_kthread(void);
-#endif /* CONFIG_BPF_TIMEOUT */
-
-/* ---------------------------------------------------------------------- */
-/* Per-CPU waiter timers                                                    */
-/* ---------------------------------------------------------------------- */
-
-/*
- * Per-CPU hrtimer used by the waiter at the head of the MCS queue.
- * Started with IRQs enabled so it can fire on the waiting CPU and set
- * ebpf_spinlock_timeout to terminate the owner.
- */
-#ifdef CONFIG_BPF_TIMEOUT
-static DEFINE_PER_CPU(struct hrtimer, bpf_waiter_hrtimer);
-static DEFINE_PER_CPU(struct bpf_lock_timer, bpf_waiter_timer);
-#endif /* CONFIG_BPF_TIMEOUT */
-
-/*
- * Per-CPU pointer to whichever bpf_lock_timer is currently active for this
- * CPU's lock session.  Set by:
- *   - the waiter slow path (contended case), or
- *   - bpf_notify_lock_kthread() (uncontended fast path).
- * Cleared (and the underlying timer cancelled) by bpf_spin_unlock via
- * bpf_lock_timer_cancel().
- */
-#ifdef CONFIG_BPF_TIMEOUT
-DEFINE_PER_CPU(struct bpf_lock_timer *, bpf_active_timer);
-EXPORT_PER_CPU_SYMBOL_GPL(bpf_active_timer);
-#endif /* CONFIG_BPF_TIMEOUT */
-
-/* ---------------------------------------------------------------------- */
-/* Initialisation                                                           */
-/* ---------------------------------------------------------------------- */
-
-#ifdef CONFIG_BPF_TIMEOUT
-/**
- * bpf_qspinlock_init_timers - initialise per-CPU waiter hrtimers.
- * Called once from bpf_lock_kthread_init() (late_initcall in helpers.c).
- */
-void __init bpf_qspinlock_init_timers(void)
-{
-	int cpu;
-
-	for_each_possible_cpu(cpu) {
-		struct hrtimer *timer = per_cpu_ptr(&bpf_waiter_hrtimer, cpu);
-		struct bpf_lock_timer *lt = per_cpu_ptr(&bpf_waiter_timer, cpu);
-
-		hrtimer_setup(timer, bpf_qspinlock_timer_cb, CLOCK_MONOTONIC,
-			      HRTIMER_MODE_REL | HRTIMER_MODE_HARD);
-		lt->ops = &bpf_hrtimer_ops;
-		lt->ctx = timer;
-	}
-}
-
-extern void tell_bpf_loop_to_terminate(void);
+extern void tell_bpf_loop_to_terminate(void *lock);
 #endif /* CONFIG_BPF_TIMEOUT */
 
 /* ---------------------------------------------------------------------- */
@@ -115,10 +55,6 @@ extern void tell_bpf_loop_to_terminate(void);
  *
  * Returns 0 always.  IRQs are disabled after the lock is held; the caller
  * (bpf_qspinlock_lock) stores *flags_out.
- *
- * The hrtimer started here remains active while the new owner holds the lock.
- * It is cancelled by bpf_spin_unlock() via the per-CPU bpf_active_timer
- * pointer.
  *
  * Preemption MUST already be disabled by the caller.
  */
@@ -177,7 +113,6 @@ static void bpf_queued_spin_lock_slowpath(struct qspinlock *lock, u32 val)
 	 *
 	 * This must be a load-acquire so we match the store-release that
 	 * clears the locked bit and create lock sequentiality.
-	 * IRQs are enabled here so the hrtimer can fire on this CPU.
 	 */
 	if (val & _Q_LOCKED_MASK) {
 #ifdef CONFIG_BPF_TIMEOUT
@@ -187,7 +122,7 @@ static void bpf_queued_spin_lock_slowpath(struct qspinlock *lock, u32 val)
 
 		while (true) {
 			if (!already_told_to_terminate && ktime_get_mono_fast_ns() > end_time) {
-				tell_bpf_loop_to_terminate();
+				tell_bpf_loop_to_terminate(lock);
 				already_told_to_terminate = true;
 			}
 			if (!(READ_ONCE(lock->locked)))
@@ -202,8 +137,7 @@ static void bpf_queued_spin_lock_slowpath(struct qspinlock *lock, u32 val)
 	/*
 	 * Take ownership and clear the pending bit: 0,1,0 -> 0,0,1
 	 *
-	 * Lock acquired.  Disable IRQs now.  The timer (if started) keeps
-	 * running — it will be cancelled by bpf_spin_unlock via bpf_active_timer.
+	 * Lock acquired.
 	 */
 	clear_pending_set_locked(lock);
 #ifdef CONFIG_BPF_TIMEOUT
@@ -268,7 +202,7 @@ queue:
 
 	/*
 	 * If there was a previous node, link into the wait queue and spin
-	 * (with IRQs enabled so the hrtimer can fire) until we reach the head.
+	 * until we reach the head.
 	 */
 	if (old & _Q_TAIL_MASK) {
 		prev = decode_tail(old, bpf_qnodes);
@@ -296,7 +230,7 @@ queue:
 
 		while (true) {
 			if (!already_told_to_terminate && ktime_get_mono_fast_ns() > end_time) {
-				tell_bpf_loop_to_terminate();
+				tell_bpf_loop_to_terminate(lock);
 				already_told_to_terminate = true;
 			}
 			if (!(READ_ONCE(lock->val.counter) & _Q_LOCKED_PENDING_MASK))
@@ -383,4 +317,3 @@ void bpf_qspinlock_unlock(struct qspinlock *lock)
   smp_store_release(&lock->locked, 0);
 }
 EXPORT_SYMBOL_GPL(bpf_qspinlock_unlock);
-
