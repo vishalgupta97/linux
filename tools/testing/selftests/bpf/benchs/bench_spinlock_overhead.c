@@ -529,7 +529,7 @@ int main(int argc, char **argv)
 
 	/* Disable BPF spinlock timeout for the duration of the benchmark */
 	old_timeout = read_sysctl(SYSCTL_TIMEOUT);
-	write_sysctl(SYSCTL_TIMEOUT, 0);
+	write_sysctl(SYSCTL_TIMEOUT, 1000000); //1ms
 
 	/* Build the base params struct */
 	base_p.num_threads = cfg.num_threads;

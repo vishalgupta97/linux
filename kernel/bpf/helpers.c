@@ -344,6 +344,7 @@ NOTRACE_BPF_CALL_2(bpf_undo_log_push, unsigned long, addr, u64, size)
 }
 EXPORT_SYMBOL_GPL(bpf_undo_log_push);
 
+#ifdef CONFIG_BPF_TIMEOUT
 static void bpf_undo_log_replay(void)
 {
 	struct bpf_undo_log_entry *base   = this_cpu_read(bpf_undo_log_base);
@@ -364,6 +365,7 @@ static void bpf_undo_log_replay(void)
 	}
 	this_cpu_write(bpf_undo_log_cursor, base);
 }
+#endif /* CONFIG_BPF_TIMEOUT */
 #endif /* CONFIG_BPF_UNDO_LOG */
 
 #ifdef CONFIG_BPF_TIMEOUT
@@ -420,6 +422,7 @@ void tell_bpf_loop_to_terminate(void *lock)
 EXPORT_SYMBOL_GPL(tell_bpf_loop_to_terminate);
 
 static void bpf_cancel_lock_timeout_request_this_cpu(void);
+static void bpf_publish_lock_timeout_request(void);
 
 /*
  * bpf_spin_lock_timeout_handler - release all held locks and terminate program.
@@ -747,9 +750,11 @@ const struct bpf_func_proto bpf_spin_unlock_proto = {
 	.arg1_btf_id = BPF_PTR_POISON,
 };
 
+#ifdef CONFIG_BPF_SPINLOCK_HOOKS
 void bpf_notify_lock_kthread(void);
 
-void set_state_for_cs_timeout(void *lock) {
+void set_state_for_cs_timeout(void *lock, bool notify_watchdog)
+{
 	struct bpf_lock_entry *locks;
 	int cnt;
 
@@ -774,7 +779,8 @@ void set_state_for_cs_timeout(void *lock) {
 	} 
 
 #ifdef CONFIG_BPF_TIMEOUT
-	bpf_notify_lock_kthread();
+	if (notify_watchdog)
+		bpf_publish_lock_timeout_request();
 #endif
 }
 
@@ -846,6 +852,7 @@ const struct bpf_func_proto bpf_lock_func_proto = {
 	.arg4_type = ARG_ANYTHING,
 	.arg5_type = ARG_ANYTHING,
 };
+#endif /* CONFIG_BPF_SPINLOCK_HOOKS */
 
 #ifdef CONFIG_BPF_TIMEOUT
 static u64 bpf_lock_timeout_next_seq(u64 state_seq)
@@ -918,12 +925,7 @@ static bool bpf_scan_lock_timeout_requests(void)
 	return active;
 }
 
-/*
- * Publish this CPU's uncontended lock-timeout request.  The watchdog kthread
- * uses the encoded generation to avoid firing stale requests after unlock and
- * immediate relock on the same CPU.
- */
-void bpf_notify_lock_kthread(void)
+static void bpf_publish_lock_timeout_request(void)
 {
 	struct bpf_lock_timeout_request *req;
 	u64 timeout_ns, state_seq, start_ns;
@@ -944,6 +946,19 @@ void bpf_notify_lock_kthread(void)
 			     bpf_lock_timeout_next_seq(state_seq) |
 			     BPF_LOCK_TIMEOUT_ACTIVE);
 	wake_up(&bpf_lock_timeout_wq);
+}
+
+/*
+ * Publish this CPU's uncontended lock-timeout request.  qspinlock invokes this
+ * before helpers.c records the newly acquired lock, so a non-zero held-lock
+ * count means this is a nested lock and the outer session is already covered.
+ */
+void bpf_notify_lock_kthread(void)
+{
+	if (this_cpu_read(held_locks_cnt) != 0)
+		return;
+
+	bpf_publish_lock_timeout_request();
 }
 
 static int bpf_lock_timeout_kthread_fn(void *data)
@@ -2738,8 +2753,10 @@ bpf_base_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		return &bpf_for_each_map_elem_proto;
 	case BPF_FUNC_loop:
 		return &bpf_loop_proto;
+#ifdef CONFIG_BPF_SPINLOCK_HOOKS
 	case BPF_FUNC_lock_func:
 		return &bpf_lock_func_proto;
+#endif
 	case BPF_FUNC_user_ringbuf_drain:
 		return &bpf_user_ringbuf_drain_proto;
 	case BPF_FUNC_ringbuf_reserve_dynptr:

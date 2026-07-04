@@ -141,7 +141,8 @@ static void bpf_queued_spin_lock_slowpath(struct qspinlock *lock, u32 val)
 	 */
 	clear_pending_set_locked(lock);
 #ifdef CONFIG_BPF_TIMEOUT
-	bpf_notify_lock_kthread(); // Only waiter. Notify kthread.
+	/* The pending-only wait is over and there is no known successor. */
+	bpf_notify_lock_kthread();
 #endif
 	return;
 
@@ -159,7 +160,8 @@ queue:
 		while (!queued_spin_trylock(lock))
 			cpu_relax();
 #ifdef CONFIG_BPF_TIMEOUT
-		bpf_notify_lock_kthread(); // Don't know the next waiter. Notify kthread.
+		/* Acquired outside the queue; no known successor is monitoring us. */
+		bpf_notify_lock_kthread();
 #endif
 		return;
 	}
@@ -182,7 +184,8 @@ queue:
 	if (queued_spin_trylock(lock)) {
 		__this_cpu_dec(bpf_qnodes[0].mcs.count);
 #ifdef CONFIG_BPF_TIMEOUT
-		bpf_notify_lock_kthread(); // Don't know the next waiter. Notify kthread.
+		/* Acquired before queueing; no known successor is monitoring us. */
+		bpf_notify_lock_kthread();
 #endif
 		return;
 	}
@@ -257,7 +260,8 @@ queue:
 	if ((val & _Q_TAIL_MASK) == tail) {
 		if (atomic_try_cmpxchg_relaxed(&lock->val, &val, _Q_LOCKED_VAL)) {
 #ifdef CONFIG_BPF_TIMEOUT
-			bpf_notify_lock_kthread(); //No next waiter. Notify kthread.
+			/* We cleared the tail: the queue is finished for this lock. */
+			bpf_notify_lock_kthread();
 #endif
 			goto release;
 		}
@@ -288,9 +292,9 @@ release:
  * On success: lock is held, IRQs are disabled and saved to *flags_out.
  * Preemption MUST already be disabled by the caller.
  *
- * For the fast (uncontended) path, the kthread is notified to start a timer.
- * For the slow path, the waiter at the head of the MCS queue starts the timer
- * itself.
+ * The watchdog is notified for fast acquisitions and for slow acquisitions
+ * only once the queue is known to be empty. While a queue is active, waiters
+ * poll for owner timeout instead.
  */
 void bpf_qspinlock_lock(struct qspinlock *lock)
 {
@@ -298,9 +302,7 @@ void bpf_qspinlock_lock(struct qspinlock *lock)
 
 	if (likely(atomic_try_cmpxchg_acquire(&lock->val, &val, _Q_LOCKED_VAL))) {
 		/*
-		 * Uncontended fast path — no waiter is at the head of the queue
-		 * to start the timer.  Notify the kthread so it can start the
-		 * watchdog timer for this CPU's critical section.
+		 * Uncontended fast path: no waiter is monitoring this owner.
 		 */
 #ifdef CONFIG_BPF_TIMEOUT
 		bpf_notify_lock_kthread();

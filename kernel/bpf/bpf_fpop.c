@@ -11,34 +11,18 @@
 #include <linux/bpf.h>
 #include <linux/bpf_fpop.h>
 
+extern void set_state_for_cs_timeout(void *lock, bool notify_watchdog);
+extern void reset_state_for_cs_timeout(void *lock);
+
 #ifdef CONFIG_BPF_TIMEOUT
-extern void bpf_notify_lock_kthread(void);
 extern void tell_bpf_loop_to_terminate(void *lock);
 extern void bpf_throw(u64 cookie);
-extern void set_state_for_cs_timeout(void *lock);
-extern void reset_state_for_cs_timeout(void *lock);
 #endif /* CONFIG_BPF_TIMEOUT */
 
+#ifdef CONFIG_BPF_TIMEOUT
 DEFINE_PER_CPU(bool, fpop_running);
 DEFINE_PER_CPU(struct qspinlock *, fpop_active_lock);
-
-/*
- * bpf_lock_func() acquires and releases the lock inline (it does not go through
- * the bpf_spin_lock()/bpf_spin_unlock() helpers), so the per-CPU undo-log cursor
- * is not reset on acquire the way it is for plain bpf_spin_lock() (see the
- * cnt == 1 path in __internal__bpf_spin_lock()).  Each callback executed here is
- * an independent, outermost critical section, so reset the cursor to base before
- * running it.  Without this the cursor advances forever across successive
- * lock_func() calls (and across every queued node a combiner executes on this
- * CPU) until it overflows the per-CPU undo-log page and faults.
- */
-static __always_inline void fpop_reset_undo_log(void)
-{
-#ifdef CONFIG_BPF_UNDO_LOG
-	this_cpu_write(bpf_undo_log_cursor, this_cpu_read(bpf_undo_log_base));
 #endif
-}
-
 
 static DEFINE_PER_CPU_SHARED_ALIGNED(struct fpop_node, fpop_nodes);
 static DEFINE_PER_CPU_ALIGNED(struct fpop_node*, local_queue_head);
@@ -134,21 +118,20 @@ static void execute_op(struct qspinlock *lock, bpf_callback_t callback,
 {
 #ifdef CONFIG_BPF_TIMEOUT
 	this_cpu_write(fpop_active_lock, lock);
-	set_state_for_cs_timeout(lock);
-#else
-	fpop_reset_undo_log();
 #endif
+	set_state_for_cs_timeout(lock, false);
 	callback(v1, v2, v3, 0, 0);
-#ifdef CONFIG_BPF_TIMEOUT
 	reset_state_for_cs_timeout(lock);
+#ifdef CONFIG_BPF_TIMEOUT
 	this_cpu_write(fpop_active_lock, NULL);
 #endif
 }
 
 static void execute_op_and_unlock(struct qspinlock *lock, bpf_callback_t callback,
-				  u64 v1, u64 v2, u64 v3)
+				  u64 v1, u64 v2, u64 v3,
+				  bool notify_watchdog)
 {
-	set_state_for_cs_timeout(lock);
+	set_state_for_cs_timeout(lock, notify_watchdog);
 	callback(v1, v2, v3, 0, 0);
 	WRITE_ONCE(lock->locked, false);
 	reset_state_for_cs_timeout(lock);
@@ -240,7 +223,7 @@ static void komb_spin_lock_slowpath(struct qspinlock *lock, bpf_callback_t callb
 
 	if (((val & _Q_TAIL_MASK) == tail) &&
 	    atomic_try_cmpxchg_relaxed(&lock->val, &val, _Q_LOCKED_VAL)) {
-		execute_op_and_unlock(lock, callback, v1, v2, v3);
+		execute_op_and_unlock(lock, callback, v1, v2, v3, true);
 		return;
 	}
 
@@ -256,11 +239,13 @@ static void komb_spin_lock_slowpath(struct qspinlock *lock, bpf_callback_t callb
 		set_locked(lock);
 		curr_node->locked = false;
 		smp_mb();
-		execute_op_and_unlock(lock, callback, v1, v2, v3);
+		execute_op_and_unlock(lock, callback, v1, v2, v3, false);
 		return;
 	}
 
+#ifdef CONFIG_BPF_TIMEOUT
 	*this_cpu_ptr(&fpop_running) = true;
+#endif
 
 	while(true) {
 		counter_val++;
@@ -275,7 +260,9 @@ static void komb_spin_lock_slowpath(struct qspinlock *lock, bpf_callback_t callb
 		curr_node = next_node;
 	}
 
+#ifdef CONFIG_BPF_TIMEOUT
 	*this_cpu_ptr(&fpop_running) = false;
+#endif
 	
 	if (*this_cpu_ptr(&local_queue_head) != NULL) {
 		(*this_cpu_ptr(&local_queue_tail))->next = next_node;
@@ -287,7 +274,7 @@ static void komb_spin_lock_slowpath(struct qspinlock *lock, bpf_callback_t callb
 	set_locked(lock);
 	next_node->locked = false;
 	smp_mb();
-	execute_op_and_unlock(lock, callback, v1, v2, v3);
+	execute_op_and_unlock(lock, callback, v1, v2, v3, false);
 	return;
 }
 
@@ -301,7 +288,7 @@ void fpop_execute(struct qspinlock *lock, bpf_callback_t callback,
 	val = atomic_cmpxchg_acquire(&lock->val, 0, _Q_LOCKED_VAL);
 	if (val == 0)
 	{
-		execute_op_and_unlock(lock, callback, v1, v2, v3);
+		execute_op_and_unlock(lock, callback, v1, v2, v3, true);
 		goto out;
 	}
 
@@ -343,7 +330,7 @@ void fpop_execute(struct qspinlock *lock, bpf_callback_t callback,
 	}
 
 	WRITE_ONCE(lock->locked_pending, _Q_LOCKED_VAL);
-	execute_op_and_unlock(lock, callback, v1, v2, v3);
+	execute_op_and_unlock(lock, callback, v1, v2, v3, true);
 	goto out;
 
 queue:
