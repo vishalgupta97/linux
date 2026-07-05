@@ -115,7 +115,7 @@ config BPF_TIMEOUT
 	  Can be enabled independently of BPF_UNDO_LOG.
 
 config BPF_SPINLOCK_HOOKS
-	def_bool (BPF_TIMEOUT || BPF_UNDO_LOG)
+	def_bool BPF_SYSCALL
 
 config BPF_SPINLOCK_USE_KOMB
 	bool "Enable komb for spinlock"

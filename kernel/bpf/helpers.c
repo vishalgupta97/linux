@@ -29,11 +29,11 @@
 #include <linux/task_work.h>
 #include <linux/irq_work.h>
 #include <linux/buildid.h>
+#include <linux/bpf_fpop.h>
 #ifdef CONFIG_BPF_SPINLOCK_HOOKS
 #include <linux/hrtimer.h>
 #include <linux/bpf_qspinlock.h>
 #include <linux/bpf_komb.h>
-#include <linux/bpf_fpop.h>
 #include <linux/kthread.h>
 #include <linux/wait.h>
 #endif
@@ -820,6 +820,7 @@ void reset_state_for_cs_timeout(void *lock)
 #endif
 	}
 }
+#endif /* CONFIG_BPF_SPINLOCK_HOOKS */
 
 /*
  * bpf_lock_func(lock, callback_fn, local_state)
@@ -852,7 +853,6 @@ const struct bpf_func_proto bpf_lock_func_proto = {
 	.arg4_type = ARG_ANYTHING,
 	.arg5_type = ARG_ANYTHING,
 };
-#endif /* CONFIG_BPF_SPINLOCK_HOOKS */
 
 #ifdef CONFIG_BPF_TIMEOUT
 static u64 bpf_lock_timeout_next_seq(u64 state_seq)
@@ -2753,10 +2753,8 @@ bpf_base_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		return &bpf_for_each_map_elem_proto;
 	case BPF_FUNC_loop:
 		return &bpf_loop_proto;
-#ifdef CONFIG_BPF_SPINLOCK_HOOKS
 	case BPF_FUNC_lock_func:
 		return &bpf_lock_func_proto;
-#endif
 	case BPF_FUNC_user_ringbuf_drain:
 		return &bpf_user_ringbuf_drain_proto;
 	case BPF_FUNC_ringbuf_reserve_dynptr:

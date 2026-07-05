@@ -11,8 +11,30 @@
 #include <linux/bpf.h>
 #include <linux/bpf_fpop.h>
 
+#ifdef CONFIG_BPF_SPINLOCK_HOOKS
 extern void set_state_for_cs_timeout(void *lock, bool notify_watchdog);
 extern void reset_state_for_cs_timeout(void *lock);
+
+static __always_inline void fpop_enter_cs(struct qspinlock *lock,
+					  bool notify_watchdog)
+{
+	set_state_for_cs_timeout(lock, notify_watchdog);
+}
+
+static __always_inline void fpop_exit_cs(struct qspinlock *lock)
+{
+	reset_state_for_cs_timeout(lock);
+}
+#else
+static __always_inline void fpop_enter_cs(struct qspinlock *lock,
+					  bool notify_watchdog)
+{
+}
+
+static __always_inline void fpop_exit_cs(struct qspinlock *lock)
+{
+}
+#endif /* CONFIG_BPF_SPINLOCK_HOOKS */
 
 #ifdef CONFIG_BPF_TIMEOUT
 extern void tell_bpf_loop_to_terminate(void *lock);
@@ -119,9 +141,9 @@ static void execute_op(struct qspinlock *lock, bpf_callback_t callback,
 #ifdef CONFIG_BPF_TIMEOUT
 	this_cpu_write(fpop_active_lock, lock);
 #endif
-	set_state_for_cs_timeout(lock, false);
+	fpop_enter_cs(lock, false);
 	callback(v1, v2, v3, 0, 0);
-	reset_state_for_cs_timeout(lock);
+	fpop_exit_cs(lock);
 #ifdef CONFIG_BPF_TIMEOUT
 	this_cpu_write(fpop_active_lock, NULL);
 #endif
@@ -131,10 +153,10 @@ static void execute_op_and_unlock(struct qspinlock *lock, bpf_callback_t callbac
 				  u64 v1, u64 v2, u64 v3,
 				  bool notify_watchdog)
 {
-	set_state_for_cs_timeout(lock, notify_watchdog);
+	fpop_enter_cs(lock, notify_watchdog);
 	callback(v1, v2, v3, 0, 0);
 	WRITE_ONCE(lock->locked, false);
-	reset_state_for_cs_timeout(lock);
+	fpop_exit_cs(lock);
 }
 
 #ifdef CONFIG_BPF_TIMEOUT
