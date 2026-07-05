@@ -10,7 +10,7 @@ import matplotlib.cm as cm
 DATA_STRUCTURES = ["list", "graph", "ring"] #, "trie"] #"rbtree"
 OPERATIONS      = ["insert"] #, "lookup", "update", "delete"]
 VARIANTS        = ["kmod_bpf", "lock_func"] #"undo_log", "kmod", "kmod_bpf"] #"arena"
-THREADS         = [1, 2, 4, 8, 16, 28, 32, 64, 80, 96, 112]
+THREADS         = [1, 2, 4, 8, 12, 16, 20, 28, 56, 84, 112, 128, 168, 224]
 # ─────────────────────────────────────────────────────────────────────────────
 
 if len(sys.argv) < 2:
