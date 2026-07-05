@@ -333,14 +333,46 @@ static int __init bpf_undo_log_init(void)
 }
 core_initcall(bpf_undo_log_init);
 
-/*
- * Marker stub — the x86 JIT replaces every call site with inline R12-cursor
- * code. Reaching this body means JIT inlining failed; reject loudly.
- */
 NOTRACE_BPF_CALL_2(bpf_undo_log_push, unsigned long, addr, u64, size)
 {
+#ifdef CONFIG_BPF_UNDO_LOG_CALL_HELPER
+	struct bpf_undo_log_entry *base = this_cpu_read(bpf_undo_log_base);
+	struct bpf_undo_log_entry *cursor = this_cpu_read(bpf_undo_log_cursor);
+	u64 old_value = 0;
+	int cnt = cursor - base;
+
+	if (WARN_ONCE(cnt >= CONFIG_BPF_UNDO_LOG_MAX_ENTRIES,
+		      "BPF undo log overflow (cnt=%d max=%d)\n",
+		      cnt, CONFIG_BPF_UNDO_LOG_MAX_ENTRIES))
+		return -ENOSPC;
+
+	switch (size) {
+	case 1:
+		old_value = READ_ONCE(*(u8 *)addr);
+		break;
+	case 2:
+		old_value = READ_ONCE(*(u16 *)addr);
+		break;
+	case 4:
+		old_value = READ_ONCE(*(u32 *)addr);
+		break;
+	case 8:
+		old_value = READ_ONCE(*(u64 *)addr);
+		break;
+	default:
+		WARN_ONCE(1, "bpf_undo_log_push: invalid size %llu\n", size);
+		return -EINVAL;
+	}
+
+	cursor->addr = (void *)addr;
+	cursor->old_value = old_value;
+	cursor->size = (u8)size;
+	this_cpu_write(bpf_undo_log_cursor, cursor + 1);
+	return 0;
+#else
 	WARN_ONCE(1, "bpf_undo_log_push reached: JIT inlining missing\n");
 	return -EOPNOTSUPP;
+#endif
 }
 EXPORT_SYMBOL_GPL(bpf_undo_log_push);
 
@@ -423,6 +455,7 @@ EXPORT_SYMBOL_GPL(tell_bpf_loop_to_terminate);
 
 static void bpf_cancel_lock_timeout_request_this_cpu(void);
 static void bpf_publish_lock_timeout_request(void);
+static void bpf_publish_lock_timeout_request_target(int target_cpu);
 
 /*
  * bpf_spin_lock_timeout_handler - release all held locks and terminate program.
@@ -473,6 +506,9 @@ void bpf_spin_lock_timeout_handler(void)
 			this_cpu_write(held_locks_cnt, 0);
 		}
 		bpf_cancel_lock_timeout_request_this_cpu();
+#ifdef CONFIG_BPF_TIMEOUT_KTHREAD_ONLY
+		bpf_clear_spinlock_timeout();
+#endif
 		return; // Handled by the waiter thread.
 	}
 
@@ -535,6 +571,7 @@ struct bpf_lock_timeout_request {
 	atomic64_t state_seq;
 	u64 start_ns;
 	u64 end_ns;
+	int target_cpu;
 } ____cacheline_aligned_in_smp;
 
 #define BPF_LOCK_TIMEOUT_STATE_MASK	GENMASK_ULL(1, 0)
@@ -752,8 +789,17 @@ const struct bpf_func_proto bpf_spin_unlock_proto = {
 
 #ifdef CONFIG_BPF_SPINLOCK_HOOKS
 void bpf_notify_lock_kthread(void);
+void set_state_for_cs_timeout_target(void *lock, bool notify_watchdog,
+				     int target_cpu);
 
 void set_state_for_cs_timeout(void *lock, bool notify_watchdog)
+{
+	set_state_for_cs_timeout_target(lock, notify_watchdog,
+					smp_processor_id());
+}
+
+void set_state_for_cs_timeout_target(void *lock, bool notify_watchdog,
+				     int target_cpu)
 {
 	struct bpf_lock_entry *locks;
 	int cnt;
@@ -780,7 +826,7 @@ void set_state_for_cs_timeout(void *lock, bool notify_watchdog)
 
 #ifdef CONFIG_BPF_TIMEOUT
 	if (notify_watchdog)
-		bpf_publish_lock_timeout_request();
+		bpf_publish_lock_timeout_request_target(target_cpu);
 #endif
 }
 
@@ -903,6 +949,9 @@ static bool bpf_scan_lock_timeout_requests(void)
 	for_each_possible_cpu(cpu) {
 		struct bpf_lock_timeout_request *req;
 		u64 state_seq, firing_seq, end_ns;
+#ifdef CONFIG_BPF_TIMEOUT_KTHREAD_ONLY
+		int target_cpu;
+#endif
 
 		req = per_cpu_ptr(&bpf_lock_timeout_requests, cpu);
 		state_seq = (u64)atomic64_read_acquire(&req->state_seq);
@@ -918,14 +967,22 @@ static bool bpf_scan_lock_timeout_requests(void)
 		firing_seq = (state_seq & ~BPF_LOCK_TIMEOUT_STATE_MASK) |
 			     BPF_LOCK_TIMEOUT_FIRING;
 		if ((u64)atomic64_cmpxchg(&req->state_seq, (s64)state_seq,
-					  (s64)firing_seq) == state_seq)
+					  (s64)firing_seq) == state_seq) {
+#ifdef CONFIG_BPF_TIMEOUT_KTHREAD_ONLY
+			target_cpu = READ_ONCE(req->target_cpu);
+#endif
 			tell_bpf_loop_to_terminate_cpu(cpu);
+#ifdef CONFIG_BPF_TIMEOUT_KTHREAD_ONLY
+			if (target_cpu != cpu)
+				tell_bpf_loop_to_terminate_cpu(target_cpu);
+#endif
+		}
 	}
 
 	return active;
 }
 
-static void bpf_publish_lock_timeout_request(void)
+static void bpf_publish_lock_timeout_request_target(int target_cpu)
 {
 	struct bpf_lock_timeout_request *req;
 	u64 timeout_ns, state_seq, start_ns;
@@ -934,18 +991,27 @@ static void bpf_publish_lock_timeout_request(void)
 	timeout_ms = READ_ONCE(sysctl_bpf_spin_lock_timeout);
 	if (timeout_ms <= 0)
 		return;
+	if (target_cpu < 0 || target_cpu >= nr_cpu_ids ||
+	    !cpu_possible(target_cpu))
+		target_cpu = smp_processor_id();
 
 	req = this_cpu_ptr(&bpf_lock_timeout_requests);
 	timeout_ns = (u64)timeout_ms * NSEC_PER_MSEC;
 	start_ns = ktime_get_mono_fast_ns();
 	WRITE_ONCE(req->start_ns, start_ns);
 	WRITE_ONCE(req->end_ns, start_ns + timeout_ns);
+	WRITE_ONCE(req->target_cpu, target_cpu);
 
 	state_seq = (u64)atomic64_read(&req->state_seq);
 	atomic64_set_release(&req->state_seq,
 			     bpf_lock_timeout_next_seq(state_seq) |
 			     BPF_LOCK_TIMEOUT_ACTIVE);
 	wake_up(&bpf_lock_timeout_wq);
+}
+
+static void bpf_publish_lock_timeout_request(void)
+{
+	bpf_publish_lock_timeout_request_target(smp_processor_id());
 }
 
 /*

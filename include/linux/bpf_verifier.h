@@ -620,6 +620,7 @@ struct bpf_insn_aux_data {
 #define MAX_USED_BTFS 64 /* max number of BTFs accessed by one BPF program */
 
 #define BPF_VERIFIER_TMP_LOG_SIZE	1024
+#define BPF_UNDO_LOG_SPILL_SIZE		48
 
 struct bpf_verifier_log {
 	/* Logical start and end positions of a "log window" of the verifier log.

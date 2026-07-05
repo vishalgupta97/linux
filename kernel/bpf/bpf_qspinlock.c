@@ -115,7 +115,7 @@ static void bpf_queued_spin_lock_slowpath(struct qspinlock *lock, u32 val)
 	 * clears the locked bit and create lock sequentiality.
 	 */
 	if (val & _Q_LOCKED_MASK) {
-#ifdef CONFIG_BPF_TIMEOUT
+#if defined(CONFIG_BPF_TIMEOUT) && !defined(CONFIG_BPF_TIMEOUT_KTHREAD_ONLY)
 		u64 timeout_ns = (u64)READ_ONCE(sysctl_bpf_spin_lock_timeout) * NSEC_PER_MSEC;
 		u64 end_time = ktime_get_mono_fast_ns() + timeout_ns;
 		bool already_told_to_terminate = false;
@@ -225,7 +225,7 @@ queue:
 	 * We are now at the head of the waitqueue.
 	 * Wait for the owner & pending to go away: *,x,y -> *,0,0
 	 */
-#ifdef CONFIG_BPF_TIMEOUT
+#if defined(CONFIG_BPF_TIMEOUT) && !defined(CONFIG_BPF_TIMEOUT_KTHREAD_ONLY)
 	{
 		u64 timeout_ns = (u64)READ_ONCE(sysctl_bpf_spin_lock_timeout) * NSEC_PER_MSEC;
 		u64 end_time = ktime_get_mono_fast_ns() + timeout_ns;
@@ -268,6 +268,9 @@ queue:
 	}
 
 	set_locked(lock);
+#ifdef CONFIG_BPF_TIMEOUT_KTHREAD_ONLY
+	bpf_notify_lock_kthread();
+#endif
 
 	/*
 	 * Contended path: wait for next waiter to appear, then wake it.

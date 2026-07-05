@@ -114,6 +114,19 @@ config BPF_TIMEOUT
 
 	  Can be enabled independently of BPF_UNDO_LOG.
 
+config BPF_TIMEOUT_KTHREAD_ONLY
+	bool "Use kthread for all BPF spinlock timeouts"
+	default n
+	depends on BPF_TIMEOUT
+	help
+	  Route both contended and uncontended BPF spinlock timeout detection
+	  through the watchdog kthread.
+
+	  When disabled, the existing split remains: contended qspinlock/fpop
+	  waiters poll for owner timeout, while uncontended owners use the
+	  watchdog kthread. Enable this option to compare the all-kthread
+	  timeout strategy against the waiter/kthread split.
+
 config BPF_SPINLOCK_HOOKS
 	def_bool BPF_SYSCALL
 
@@ -133,6 +146,20 @@ config BPF_UNDO_LOG
 
 	  Can be enabled independently of BPF_TIMEOUT (instrumentation works
 	  even without a timeout; writes are tracked but never replayed).
+
+config BPF_UNDO_LOG_CALL_HELPER
+	bool "Use helper calls for BPF undo log writes"
+	default n
+	depends on BPF_UNDO_LOG
+	help
+	  Use the original undo-log implementation strategy where verifier
+	  instrumentation calls bpf_undo_log_push() before each write in a BPF
+	  spinlock critical section.
+
+	  When disabled, the verifier emits undo-log markers that the x86 JIT
+	  replaces with inline cursor updates. Enable this option to compare the
+	  performance cost of the helper-call implementation against the
+	  optimized inline implementation.
 
 config BPF_UNDO_LOG_MAX_ENTRIES
 	int "Maximum undo log entries per BPF spinlock critical section"
