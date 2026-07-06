@@ -13,11 +13,11 @@ entries_ratios=(1 2 4 6 8)
 
 time=${runtime}
 
-parent_dir=${results_dir}
+parent_dir=${results_dir}-${kernel}
 
 DIR=${parent_dir}/results-${lock_type}-${ncores}cores-${time}seconds
 
-#make clean
+make clean
 make || exit
 
 numlocks=${#locks[@]}

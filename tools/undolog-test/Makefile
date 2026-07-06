@@ -1,5 +1,5 @@
 PWD := $(shell pwd)
-KDIR ?= $(PWD)/../..
+KDIR ?= $(PWD)/../../../../epfltest/linux
 
 ifneq ($(KERNELRELEASE),)
 
