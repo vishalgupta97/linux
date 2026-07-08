@@ -49,35 +49,30 @@ int BPF_PROG(ring_init, __u32 num_slots)
 	return 0;
 }
 
-struct ring_enqueue_ctx {
-	__u32 slot;
-	__u64 val;
-};
-
-static int ring_enqueue_cb(void *ctx)
+static int ring_enqueue_cb(__u64 slot_v, __u64 val)
 {
-	struct ring_enqueue_ctx *c = ctx;
+	__u32 slot = (__u32)slot_v;
 
 	/* 2 arena writes → 2 undo-log entries */
-	ring_pool[c->slot].data  = c->val;
-	ring_pool[c->slot].valid = 1;
+	ring_pool[slot].data  = val;
+	ring_pool[slot].valid = 1;
 	return 0;
 }
 
 SEC("fentry/bench_undo_ring_enqueue")
 int BPF_PROG(ring_enqueue, __u64 val)
 {
-	struct ring_enqueue_ctx c = { .val = val };
 	struct ring_lock_entry *lk;
+	__u32 slot;
 
 	/* Claim a slot atomically outside the lock */
-	c.slot = (__u32)(__sync_fetch_and_add(&ring_head, 1) % BENCH_RING_SLOTS);
+	slot = (__u32)(__sync_fetch_and_add(&ring_head, 1) % BENCH_RING_SLOTS);
 
-	lk = bpf_map_lookup_elem(&ring_locks, &c.slot);
+	lk = bpf_map_lookup_elem(&ring_locks, &slot);
 	if (!lk)
 		return 0;
 
-	bpf_lock_func(&lk->lock, ring_enqueue_cb, &c);
+	bpf_lock_func(&lk->lock, ring_enqueue_cb, slot, val, 0);
 	return 0;
 }
 
@@ -89,57 +84,48 @@ int BPF_PROG(ring_lookup, __u32 slot)
 }
 
 /* Overwrite slot data. 1 undo-log write. */
-struct ring_update_ctx {
-	__u32 slot;
-	__u64 val;
-};
-
-static int ring_update_cb(void *ctx)
+static int ring_update_cb(__u64 slot_v, __u64 val)
 {
-	struct ring_update_ctx *c = ctx;
+	__u32 slot = (__u32)slot_v;
 
-	ring_pool[c->slot].data = c->val;	/* 1 undo-log entry */
+	ring_pool[slot].data = val;	/* 1 undo-log entry */
 	return 0;
 }
 
 SEC("fentry/bench_undo_ring_update")
 int BPF_PROG(ring_update, __u32 slot, __u64 val)
 {
-	struct ring_update_ctx c = { .slot = slot % BENCH_RING_SLOTS, .val = val };
 	struct ring_lock_entry *lk;
+	__u32 key = slot % BENCH_RING_SLOTS;
 
-	lk = bpf_map_lookup_elem(&ring_locks, &c.slot);
+	lk = bpf_map_lookup_elem(&ring_locks, &key);
 	if (!lk)
 		return 0;
 
-	bpf_lock_func(&lk->lock, ring_update_cb, &c);
+	bpf_lock_func(&lk->lock, ring_update_cb, key, val, 0);
 	return 0;
 }
 
 /* Mark slot invalid (dequeue). 1 undo-log write. */
-struct ring_dequeue_ctx {
-	__u32 slot;
-};
-
-static int ring_dequeue_cb(void *ctx)
+static int ring_dequeue_cb(__u64 slot_v)
 {
-	struct ring_dequeue_ctx *c = ctx;
+	__u32 slot = (__u32)slot_v;
 
-	ring_pool[c->slot].valid = 0;	/* 1 undo-log entry */
+	ring_pool[slot].valid = 0;	/* 1 undo-log entry */
 	return 0;
 }
 
 SEC("fentry/bench_undo_ring_dequeue")
 int BPF_PROG(ring_dequeue_op, __u32 slot)
 {
-	struct ring_dequeue_ctx c = { .slot = slot % BENCH_RING_SLOTS };
 	struct ring_lock_entry *lk;
+	__u32 key = slot % BENCH_RING_SLOTS;
 
-	lk = bpf_map_lookup_elem(&ring_locks, &c.slot);
+	lk = bpf_map_lookup_elem(&ring_locks, &key);
 	if (!lk)
 		return 0;
 
-	bpf_lock_func(&lk->lock, ring_dequeue_cb, &c);
+	bpf_lock_func(&lk->lock, ring_dequeue_cb, key, 0, 0);
 	return 0;
 }
 

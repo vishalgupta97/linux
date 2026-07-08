@@ -29,9 +29,9 @@
 #include <linux/task_work.h>
 #include <linux/irq_work.h>
 #include <linux/buildid.h>
+#include <linux/bpf_fpop.h>
 #ifdef CONFIG_BPF_SPINLOCK_HOOKS
 #include <linux/hrtimer.h>
-#include <linux/bpf_lock_timer.h>
 #include <linux/bpf_qspinlock.h>
 #include <linux/bpf_komb.h>
 #include <linux/kthread.h>
@@ -307,7 +307,7 @@ static DEFINE_PER_CPU(int, held_locks_cnt);
 #endif /* CONFIG_BPF_SPINLOCK_HOOKS */
 
 #ifdef CONFIG_BPF_TIMEOUT
-int ebpf_spinlock_timeout;
+static DEFINE_PER_CPU(int, ebpf_spinlock_timeout);
 #endif /* CONFIG_BPF_TIMEOUT */
 
 #ifdef CONFIG_BPF_UNDO_LOG
@@ -333,17 +333,50 @@ static int __init bpf_undo_log_init(void)
 }
 core_initcall(bpf_undo_log_init);
 
-/*
- * Marker stub — the x86 JIT replaces every call site with inline R12-cursor
- * code. Reaching this body means JIT inlining failed; reject loudly.
- */
 NOTRACE_BPF_CALL_2(bpf_undo_log_push, unsigned long, addr, u64, size)
 {
+#ifdef CONFIG_BPF_UNDO_LOG_CALL_HELPER
+	struct bpf_undo_log_entry *base = this_cpu_read(bpf_undo_log_base);
+	struct bpf_undo_log_entry *cursor = this_cpu_read(bpf_undo_log_cursor);
+	u64 old_value = 0;
+	int cnt = cursor - base;
+
+	if (WARN_ONCE(cnt >= CONFIG_BPF_UNDO_LOG_MAX_ENTRIES,
+		      "BPF undo log overflow (cnt=%d max=%d)\n",
+		      cnt, CONFIG_BPF_UNDO_LOG_MAX_ENTRIES))
+		return -ENOSPC;
+
+	switch (size) {
+	case 1:
+		old_value = READ_ONCE(*(u8 *)addr);
+		break;
+	case 2:
+		old_value = READ_ONCE(*(u16 *)addr);
+		break;
+	case 4:
+		old_value = READ_ONCE(*(u32 *)addr);
+		break;
+	case 8:
+		old_value = READ_ONCE(*(u64 *)addr);
+		break;
+	default:
+		WARN_ONCE(1, "bpf_undo_log_push: invalid size %llu\n", size);
+		return -EINVAL;
+	}
+
+	cursor->addr = (void *)addr;
+	cursor->old_value = old_value;
+	cursor->size = (u8)size;
+	this_cpu_write(bpf_undo_log_cursor, cursor + 1);
+	return 0;
+#else
 	WARN_ONCE(1, "bpf_undo_log_push reached: JIT inlining missing\n");
 	return -EOPNOTSUPP;
+#endif
 }
 EXPORT_SYMBOL_GPL(bpf_undo_log_push);
 
+#ifdef CONFIG_BPF_TIMEOUT
 static void bpf_undo_log_replay(void)
 {
 	struct bpf_undo_log_entry *base   = this_cpu_read(bpf_undo_log_base);
@@ -364,45 +397,65 @@ static void bpf_undo_log_replay(void)
 	}
 	this_cpu_write(bpf_undo_log_cursor, base);
 }
+#endif /* CONFIG_BPF_TIMEOUT */
 #endif /* CONFIG_BPF_UNDO_LOG */
 
 #ifdef CONFIG_BPF_TIMEOUT
-/*
- * hrtimer backend ops for bpf_lock_timer.  Used by both the per-CPU waiter
- * timers (bpf_qspinlock.c) and the global kthread timer (below).
- */
-static void bpf_hrtimer_start_fn(void *ctx, u64 timeout_ns)
-{
-	struct hrtimer *timer = ctx;
+DECLARE_PER_CPU(bool, fpop_running);
+DECLARE_PER_CPU(struct qspinlock *, fpop_active_lock);
 
-	hrtimer_start(timer, ns_to_ktime(timeout_ns),
-		      HRTIMER_MODE_REL | HRTIMER_MODE_HARD);
+bool bpf_spinlock_timeout_pending(void)
+{
+	return READ_ONCE(*this_cpu_ptr(&ebpf_spinlock_timeout));
+}
+EXPORT_SYMBOL_GPL(bpf_spinlock_timeout_pending);
+
+void bpf_clear_spinlock_timeout(void)
+{
+	WRITE_ONCE(*this_cpu_ptr(&ebpf_spinlock_timeout), 0);
+}
+EXPORT_SYMBOL_GPL(bpf_clear_spinlock_timeout);
+
+void tell_bpf_loop_to_terminate_cpu(int cpu)
+{
+	if (cpu < 0 || cpu >= nr_cpu_ids || !cpu_possible(cpu))
+		return;
+	WRITE_ONCE(*per_cpu_ptr(&ebpf_spinlock_timeout, cpu), 1);
+}
+EXPORT_SYMBOL_GPL(tell_bpf_loop_to_terminate_cpu);
+
+static int bpf_find_lock_owner_cpu(struct qspinlock *lock)
+{
+	int cpu;
+
+	for_each_possible_cpu(cpu) {
+		struct bpf_lock_entry *locks = per_cpu_ptr(held_locks, cpu);
+		int cnt = READ_ONCE(*per_cpu_ptr(&held_locks_cnt, cpu));
+		int i;
+
+		for (i = cnt - 1; i >= 0; i--) {
+			if (READ_ONCE(locks[i].lock) == lock)
+				return cpu;
+		}
+	}
+	return -1;
 }
 
-static void bpf_hrtimer_cancel_fn(void *ctx)
+void tell_bpf_loop_to_terminate(void *lock)
 {
-	struct hrtimer *timer = ctx;
+	int cpu = -1;
 
-	hrtimer_cancel(timer);
+	if (lock)
+		cpu = bpf_find_lock_owner_cpu((struct qspinlock *)lock);
+	if (cpu < 0)
+		cpu = smp_processor_id();
+	tell_bpf_loop_to_terminate_cpu(cpu);
 }
+EXPORT_SYMBOL_GPL(tell_bpf_loop_to_terminate);
 
-const struct bpf_lock_timer_ops bpf_hrtimer_ops = {
-	.start  = bpf_hrtimer_start_fn,
-	.cancel = bpf_hrtimer_cancel_fn,
-};
-EXPORT_SYMBOL_GPL(bpf_hrtimer_ops);
-
-/*
- * hrtimer callback: sets the timeout flag.  The actual lock release and
- * program termination is handled in bpf_loop/bpf_for iterations via
- * bpf_spin_lock_timeout_handler().
- */
-enum hrtimer_restart bpf_qspinlock_timer_cb(struct hrtimer *timer)
-{
-	WRITE_ONCE(ebpf_spinlock_timeout, 1);
-	return HRTIMER_NORESTART;
-}
-EXPORT_SYMBOL_GPL(bpf_qspinlock_timer_cb);
+static void bpf_cancel_lock_timeout_request_this_cpu(void);
+static void bpf_publish_lock_timeout_request(void);
+static void bpf_publish_lock_timeout_request_target(int target_cpu);
 
 /*
  * bpf_spin_lock_timeout_handler - release all held locks and terminate program.
@@ -412,6 +465,52 @@ void bpf_spin_lock_timeout_handler(void)
 {
 	struct bpf_lock_entry *locks;
 	int cnt, i;
+
+	if(this_cpu_read(fpop_running)) {
+		struct qspinlock *fpop_lock = this_cpu_read(fpop_active_lock);
+		bool keep_fpop_lock = false;
+
+#ifdef CONFIG_BPF_UNDO_LOG
+		bpf_undo_log_replay();
+#endif
+		/*
+		 * The outer bpf_lock_func() lock is owned by the combiner and is
+		 * handed over by bpf_fpop.c, but callbacks may still acquire
+		 * regular bpf_spin_lock() locks.  Drop those inner locks here so
+		 * a timed-out offloaded callback cannot strand them.
+		 */
+		locks = this_cpu_ptr(held_locks);
+		cnt = this_cpu_read(held_locks_cnt);
+		for (i = cnt - 1; i >= 0; i--) {
+			if (locks[i].lock == fpop_lock) {
+				keep_fpop_lock = true;
+				continue;
+			}
+			if (locks[i].lock) {
+#ifdef CONFIG_BPF_SPINLOCK_USE_KOMB
+				BUG_ON(true);
+				komb_spin_unlock((struct qspinlock *)locks[i].lock);
+#else
+				bpf_qspinlock_unlock((struct qspinlock *)locks[i].lock);
+#endif
+				preempt_enable();
+				locks[i].lock = NULL;
+			}
+		}
+		if (keep_fpop_lock) {
+			locks[0].lock = fpop_lock;
+			for (i = 1; i < cnt; i++)
+				locks[i].lock = NULL;
+			this_cpu_write(held_locks_cnt, 1);
+		} else {
+			this_cpu_write(held_locks_cnt, 0);
+		}
+		bpf_cancel_lock_timeout_request_this_cpu();
+#ifdef CONFIG_BPF_TIMEOUT_KTHREAD_ONLY
+		bpf_clear_spinlock_timeout();
+#endif
+		return; // Handled by the waiter thread.
+	}
 
 	/* Access per-CPU held locks */
 	locks = this_cpu_ptr(held_locks);
@@ -446,7 +545,8 @@ void bpf_spin_lock_timeout_handler(void)
 
 	/* Reset lock count and timeout flag */
 	this_cpu_write(held_locks_cnt, 0);
-	WRITE_ONCE(ebpf_spinlock_timeout, 0);
+	bpf_cancel_lock_timeout_request_this_cpu();
+	bpf_clear_spinlock_timeout();
 
 	/* Terminate the BPF program */
 	bpf_throw(100);
@@ -456,17 +556,29 @@ EXPORT_SYMBOL_GPL(bpf_spin_lock_timeout_handler);
 
 /*
  * Global kthread timer instance — used for the uncontended (fast-path) case
- * where no waiter is present to start the hrtimer.
+ * where no contended waiter is polling for timeout.
  */
 static struct task_struct *bpf_lock_timeout_kthread;
 static DECLARE_WAIT_QUEUE_HEAD(bpf_lock_timeout_wq);
-static atomic_t bpf_lock_timeout_pending = ATOMIC_INIT(0);
 
-static struct hrtimer bpf_kthread_hrtimer;
-static struct bpf_lock_timer bpf_kthread_timer;
+enum bpf_lock_timeout_state {
+	BPF_LOCK_TIMEOUT_IDLE,
+	BPF_LOCK_TIMEOUT_ACTIVE,
+	BPF_LOCK_TIMEOUT_FIRING,
+};
 
-/* Declared in bpf_qspinlock.c / exported via EXPORT_PER_CPU_SYMBOL_GPL */
-DECLARE_PER_CPU(struct bpf_lock_timer *, bpf_active_timer);
+struct bpf_lock_timeout_request {
+	atomic64_t state_seq;
+	u64 start_ns;
+	u64 end_ns;
+	int target_cpu;
+} ____cacheline_aligned_in_smp;
+
+#define BPF_LOCK_TIMEOUT_STATE_MASK	GENMASK_ULL(1, 0)
+#define BPF_LOCK_TIMEOUT_SEQ_INC	(BPF_LOCK_TIMEOUT_STATE_MASK + 1)
+
+static DEFINE_PER_CPU(struct bpf_lock_timeout_request,
+		      bpf_lock_timeout_requests);
 #endif /* CONFIG_BPF_TIMEOUT */
 
 #if defined(CONFIG_QUEUED_SPINLOCKS) || defined(CONFIG_BPF_ARCH_SPINLOCK)
@@ -574,7 +686,7 @@ noinline void __internal__bpf_spin_lock(struct qspinlock *lock)
 				       this_cpu_read(bpf_undo_log_base));
 #endif
 #ifdef CONFIG_BPF_TIMEOUT
-			WRITE_ONCE(ebpf_spinlock_timeout, 0);
+			bpf_clear_spinlock_timeout();
 #endif
 		}
 	} else {
@@ -647,22 +759,8 @@ noinline void __internal__bpf_spin_unlock(struct qspinlock *lock)
 			       this_cpu_read(bpf_undo_log_base));
 #endif
 #ifdef CONFIG_BPF_TIMEOUT
-		/*
-		 * Cancel whichever timer is active for this CPU's lock session.
-		 * This covers both the waiter-started hrtimer (set in
-		 * bpf_qspinlock.c) and the kthread-started hrtimer (set by
-		 * bpf_notify_lock_kthread).  hrtimer_cancel() is safe cross-CPU.
-		 */
-		{
-			struct bpf_lock_timer *active =
-				this_cpu_read(bpf_active_timer);
-
-			if (active) {
-				//bpf_lock_timer_cancel(active);
-				this_cpu_write(bpf_active_timer, NULL);
-			}
-		}
-		WRITE_ONCE(ebpf_spinlock_timeout, 0);
+		bpf_cancel_lock_timeout_request_this_cpu();
+		bpf_clear_spinlock_timeout();
 #endif
 	}
 
@@ -689,6 +787,87 @@ const struct bpf_func_proto bpf_spin_unlock_proto = {
 	.arg1_btf_id = BPF_PTR_POISON,
 };
 
+#ifdef CONFIG_BPF_SPINLOCK_HOOKS
+void bpf_notify_lock_kthread(void);
+void set_state_for_cs_timeout_target(void *lock, bool notify_watchdog,
+				     int target_cpu);
+
+void set_state_for_cs_timeout(void *lock, bool notify_watchdog)
+{
+	set_state_for_cs_timeout_target(lock, notify_watchdog,
+					smp_processor_id());
+}
+
+void set_state_for_cs_timeout_target(void *lock, bool notify_watchdog,
+				     int target_cpu)
+{
+	struct bpf_lock_entry *locks;
+	int cnt;
+
+	/* Track the acquired lock */
+	locks = this_cpu_ptr(held_locks);
+	cnt = this_cpu_read(held_locks_cnt);
+
+	if (cnt < MAX_HELD_LOCKS) {
+		locks[cnt].lock = (struct qspinlock*)lock;
+		this_cpu_inc(held_locks_cnt);
+		cnt++;
+
+		if (cnt == 1) {
+#ifdef CONFIG_BPF_UNDO_LOG
+			this_cpu_write(bpf_undo_log_cursor,
+				       this_cpu_read(bpf_undo_log_base));
+#endif
+#ifdef CONFIG_BPF_TIMEOUT
+			bpf_clear_spinlock_timeout();
+#endif
+		}
+	} 
+
+#ifdef CONFIG_BPF_TIMEOUT
+	if (notify_watchdog)
+		bpf_publish_lock_timeout_request_target(target_cpu);
+#endif
+}
+
+void reset_state_for_cs_timeout(void *lock) 
+{
+	struct bpf_lock_entry *locks;
+	int cnt, i;
+	bool found = false;
+
+	/* Remove lock from tracking (handle OOO unlocking) */
+	locks = this_cpu_ptr(held_locks);
+	cnt = this_cpu_read(held_locks_cnt);
+
+	/* Find and remove the lock from held_locks */
+	for (i = cnt - 1; i >= 0; i--) {
+		if (locks[i].lock == (struct qspinlock *)lock) {
+			/* Shift remaining locks down */
+			for (; i < cnt - 1; i++) {
+				locks[i] = locks[i + 1];
+			}
+			locks[cnt - 1].lock = NULL;
+			this_cpu_dec(held_locks_cnt);
+			found = true;
+			break;
+		}
+	}
+
+	/* Cancel the active timer and clear undo log when last lock is released */
+	if (found && this_cpu_read(held_locks_cnt) == 0) {
+#ifdef CONFIG_BPF_UNDO_LOG
+		this_cpu_write(bpf_undo_log_cursor,
+			       this_cpu_read(bpf_undo_log_base));
+#endif
+#ifdef CONFIG_BPF_TIMEOUT
+		bpf_cancel_lock_timeout_request_this_cpu();
+		bpf_clear_spinlock_timeout();
+#endif
+	}
+}
+#endif /* CONFIG_BPF_SPINLOCK_HOOKS */
+
 /*
  * bpf_lock_func(lock, callback_fn, local_state)
  *
@@ -700,24 +879,12 @@ const struct bpf_func_proto bpf_spin_unlock_proto = {
  * bpf_spin_lock_timeout_handler() rolls back the undo log, releases the locks
  * held in this CPU's held_locks[], and bpf_throw()s out of the program.
  */
-NOTRACE_BPF_CALL_3(bpf_lock_func, void *, lock, void *, callback_fn,
-		   void *, local_state)
+NOTRACE_BPF_CALL_5(bpf_lock_func, void *, lock, void *, callback_fn,
+		   u64, v1, u64, v2, u64, v3)
 {
 	bpf_callback_t callback = (bpf_callback_t)callback_fn;
 
-#ifdef CONFIG_BPF_SPINLOCK_HOOKS
-	__internal__bpf_spin_lock((struct qspinlock *)lock);
-#else
-	__bpf_spin_lock(lock);
-#endif
-
-	callback((u64)(long)local_state, 0, 0, 0, 0);
-
-#ifdef CONFIG_BPF_SPINLOCK_HOOKS
-	__internal__bpf_spin_unlock((struct qspinlock *)lock);
-#else
-	__bpf_spin_unlock(lock);
-#endif
+	fpop_execute((struct qspinlock *)lock, callback, v1, v2, v3);
 	return 0;
 }
 
@@ -728,60 +895,136 @@ const struct bpf_func_proto bpf_lock_func_proto = {
 	.arg1_type = ARG_PTR_TO_SPIN_LOCK,
 	.arg1_btf_id = BPF_PTR_POISON,
 	.arg2_type = ARG_PTR_TO_FUNC,
-	.arg3_type = ARG_PTR_TO_STACK_OR_NULL,
+	.arg3_type = ARG_ANYTHING,
+	.arg4_type = ARG_ANYTHING,
+	.arg5_type = ARG_ANYTHING,
 };
 
 #ifdef CONFIG_BPF_TIMEOUT
-/* ---------------------------------------------------------------------- */
-/* Kthread for uncontended timeout*/
-/* ---------------------------------------------------------------------- */
+static u64 bpf_lock_timeout_next_seq(u64 state_seq)
+{
+	return (state_seq & ~BPF_LOCK_TIMEOUT_STATE_MASK) +
+		BPF_LOCK_TIMEOUT_SEQ_INC;
+}
 
-/**
- * bpf_notify_lock_kthread - notify the watchdog kthread to start a timer.
- *
- * Called from bpf_qspinlock_lock() when the lock is acquired via the
- * uncontended fast path (no waiter was present to start the hrtimer).
- * Records that the kthread's timer instance is the active timer for this
- * CPU's lock session, then wakes the kthread.
+static enum bpf_lock_timeout_state bpf_lock_timeout_state(u64 state_seq)
+{
+	return state_seq & BPF_LOCK_TIMEOUT_STATE_MASK;
+}
+
+static void bpf_cancel_lock_timeout_request_this_cpu(void)
+{
+	struct bpf_lock_timeout_request *req;
+	u64 state_seq;
+
+	req = this_cpu_ptr(&bpf_lock_timeout_requests);
+	state_seq = (u64)atomic64_read(&req->state_seq);
+	atomic64_set_release(&req->state_seq,
+			     bpf_lock_timeout_next_seq(state_seq) |
+			     BPF_LOCK_TIMEOUT_IDLE);
+}
+
+static bool bpf_any_lock_timeout_request_active(void)
+{
+	int cpu;
+
+	for_each_possible_cpu(cpu) {
+		struct bpf_lock_timeout_request *req;
+		u64 state_seq;
+
+		req = per_cpu_ptr(&bpf_lock_timeout_requests, cpu);
+		state_seq = (u64)atomic64_read_acquire(&req->state_seq);
+		if (bpf_lock_timeout_state(state_seq) == BPF_LOCK_TIMEOUT_ACTIVE)
+			return true;
+	}
+	return false;
+}
+
+static bool bpf_scan_lock_timeout_requests(void)
+{
+	bool active = false;
+	u64 now = ktime_get_mono_fast_ns();
+	int cpu;
+
+	for_each_possible_cpu(cpu) {
+		struct bpf_lock_timeout_request *req;
+		u64 state_seq, firing_seq, end_ns;
+#ifdef CONFIG_BPF_TIMEOUT_KTHREAD_ONLY
+		int target_cpu;
+#endif
+
+		req = per_cpu_ptr(&bpf_lock_timeout_requests, cpu);
+		state_seq = (u64)atomic64_read_acquire(&req->state_seq);
+		if (bpf_lock_timeout_state(state_seq) != BPF_LOCK_TIMEOUT_ACTIVE)
+			continue;
+
+		end_ns = READ_ONCE(req->end_ns);
+		if (now < end_ns) {
+			active = true;
+			continue;
+		}
+
+		firing_seq = (state_seq & ~BPF_LOCK_TIMEOUT_STATE_MASK) |
+			     BPF_LOCK_TIMEOUT_FIRING;
+		if ((u64)atomic64_cmpxchg(&req->state_seq, (s64)state_seq,
+					  (s64)firing_seq) == state_seq) {
+#ifdef CONFIG_BPF_TIMEOUT_KTHREAD_ONLY
+			target_cpu = READ_ONCE(req->target_cpu);
+#endif
+			tell_bpf_loop_to_terminate_cpu(cpu);
+#ifdef CONFIG_BPF_TIMEOUT_KTHREAD_ONLY
+			if (target_cpu != cpu)
+				tell_bpf_loop_to_terminate_cpu(target_cpu);
+#endif
+		}
+	}
+
+	return active;
+}
+
+static void bpf_publish_lock_timeout_request_target(int target_cpu)
+{
+	struct bpf_lock_timeout_request *req;
+	u64 timeout_ns, state_seq, start_ns;
+	int timeout_ms;
+
+	timeout_ms = READ_ONCE(sysctl_bpf_spin_lock_timeout);
+	if (timeout_ms <= 0)
+		return;
+	if (target_cpu < 0 || target_cpu >= nr_cpu_ids ||
+	    !cpu_possible(target_cpu))
+		target_cpu = smp_processor_id();
+
+	req = this_cpu_ptr(&bpf_lock_timeout_requests);
+	timeout_ns = (u64)timeout_ms * NSEC_PER_MSEC;
+	start_ns = ktime_get_mono_fast_ns();
+	WRITE_ONCE(req->start_ns, start_ns);
+	WRITE_ONCE(req->end_ns, start_ns + timeout_ns);
+	WRITE_ONCE(req->target_cpu, target_cpu);
+
+	state_seq = (u64)atomic64_read(&req->state_seq);
+	atomic64_set_release(&req->state_seq,
+			     bpf_lock_timeout_next_seq(state_seq) |
+			     BPF_LOCK_TIMEOUT_ACTIVE);
+	wake_up(&bpf_lock_timeout_wq);
+}
+
+static void bpf_publish_lock_timeout_request(void)
+{
+	bpf_publish_lock_timeout_request_target(smp_processor_id());
+}
+
+/*
+ * Publish this CPU's uncontended lock-timeout request.  qspinlock invokes this
+ * before helpers.c records the newly acquired lock, so a non-zero held-lock
+ * count means this is a nested lock and the outer session is already covered.
  */
 void bpf_notify_lock_kthread(void)
 {
-	if (READ_ONCE(sysctl_bpf_spin_lock_timeout) <= 0)
+	if (this_cpu_read(held_locks_cnt) != 0)
 		return;
 
-	/* Record kthread's global timer as the active timer for this CPU */
-	bpf_kthread_timer.bpf_cpuid = smp_processor_id();
-	this_cpu_write(bpf_active_timer, &bpf_kthread_timer);
-
-	/* One-way notification: set pending flag and wake the kthread */
-	atomic_set(&bpf_lock_timeout_pending, 1);
-	wake_up(&bpf_lock_timeout_wq);
-}
-EXPORT_SYMBOL_GPL(bpf_notify_lock_kthread);
-
-//TODO: Remove noinline
-noinline void tell_bpf_loop_to_terminate(void)
-{
-	WRITE_ONCE(ebpf_spinlock_timeout, 1);
-}
-
-//TODO: Remove noinline
-noinline void bpf_lock_timeout_rdtsc(u64 timeout_ns)
-{
-	u64 end_time = ktime_get_mono_fast_ns() + timeout_ns;
-	int bpf_cpuid = bpf_kthread_timer.bpf_cpuid;
-
-	while (true) {
-		if (ktime_get_mono_fast_ns() > end_time) {
-			tell_bpf_loop_to_terminate();
-			break;
-		}
-
-		if (per_cpu_ptr(&bpf_active_timer, bpf_cpuid) == NULL)
-			break;
-
-		cpu_relax();
-	}
+	bpf_publish_lock_timeout_request();
 }
 
 static int bpf_lock_timeout_kthread_fn(void *data)
@@ -789,37 +1032,21 @@ static int bpf_lock_timeout_kthread_fn(void *data)
 	while (!kthread_should_stop()) {
 		wait_event_interruptible(
 			bpf_lock_timeout_wq,
-			atomic_read(&bpf_lock_timeout_pending) ||
+			bpf_any_lock_timeout_request_active() ||
 				kthread_should_stop());
 
 		if (kthread_should_stop())
 			break;
 
-		if (atomic_cmpxchg(&bpf_lock_timeout_pending, 1, 0) == 1) {
-			u64 timeout_ns =
-				(u64)READ_ONCE(sysctl_bpf_spin_lock_timeout) *
-				NSEC_PER_MSEC;
-			//bpf_lock_timer_start(&bpf_kthread_timer, timeout_ns);
-			bpf_lock_timeout_rdtsc(timeout_ns);
-		}
+		while (!kthread_should_stop() &&
+		       bpf_scan_lock_timeout_requests())
+			cpu_relax();
 	}
 	return 0;
 }
 
-extern void __init bpf_qspinlock_init_timers(void);
-
 static int __init bpf_lock_kthread_init(void)
 {
-	/* Initialise the kthread's own hrtimer instance */
-	hrtimer_setup(&bpf_kthread_hrtimer, bpf_qspinlock_timer_cb,
-		      CLOCK_MONOTONIC, HRTIMER_MODE_REL | HRTIMER_MODE_HARD);
-	bpf_kthread_timer.ops = &bpf_hrtimer_ops;
-	bpf_kthread_timer.ctx = &bpf_kthread_hrtimer;
-
-	/* Initialise per-CPU waiter timers in bpf_qspinlock.c */
-	bpf_qspinlock_init_timers();
-
-	/* Start the watchdog kthread */
 	bpf_lock_timeout_kthread = kthread_run(bpf_lock_timeout_kthread_fn,
 					       NULL, "bpf_lock_wd");
 	if (IS_ERR(bpf_lock_timeout_kthread)) {
@@ -3611,6 +3838,8 @@ static bool bpf_stack_walker(void *cookie, u64 ip, u64 sp, u64 bp)
 __bpf_kfunc void bpf_throw(u64 cookie)
 {
 	struct bpf_throw_ctx ctx = {};
+
+	printk(KERN_ALERT "bpf_throw called with cookie:%d\n", cookie);
 
 	arch_bpf_stack_walk(bpf_stack_walker, &ctx);
 	WARN_ON_ONCE(!ctx.aux);

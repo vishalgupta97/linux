@@ -38,12 +38,6 @@ struct {
 	__type(value, struct lockval);
 } map_b SEC(".maps");
 
-/* Context passed through bpf_lock_func() to the callback. */
-struct cb_ctx {
-	int key;
-	__u64 newval;
-};
-
 /* Shared infinite-spin helpers used to drive the lock past the timeout. */
 #define LOOP_CNT (1 << 10)
 
@@ -54,27 +48,28 @@ static int spin1(void *ctx) { bpf_loop(LOOP_CNT, spin2, NULL, 0); return 0; }
 
 /* ------------------------------------------------------------------ */
 /* Commit path: callback writes a map value and returns normally.      */
-/* local_state carries the key + value to prove it is passed through.  */
+/* key + value are passed as scalar callback args to prove they are    */
+/* passed through.                                                     */
 /* ------------------------------------------------------------------ */
-static int commit_cb(void *ctx)
+static int commit_cb(__u64 key_v, __u64 newval)
 {
-	struct cb_ctx *c = ctx;
-	struct lockval *v = bpf_map_lookup_elem(&map_a, &c->key);
+	int key = (int)key_v;
+	struct lockval *v = bpf_map_lookup_elem(&map_a, &key);
 
 	if (v)
-		v->x = c->newval;
+		v->x = newval;
 	return 0;
 }
 
 SEC("tc")
 int lf_commit(struct __sk_buff *ctx)
 {
-	struct cb_ctx c = { .key = 0, .newval = 0x0102030405060708ULL };
-	struct lockval *v = bpf_map_lookup_elem(&map_a, &c.key);
+	int key = 0;
+	struct lockval *v = bpf_map_lookup_elem(&map_a, &key);
 
 	if (!v)
 		return 0;
-	bpf_lock_func(&v->lock, commit_cb, &c);
+	bpf_lock_func(&v->lock, commit_cb, key, 0x0102030405060708ULL, 0);
 	return 0;
 }
 
@@ -82,13 +77,13 @@ int lf_commit(struct __sk_buff *ctx)
 /* Timeout path: callback writes a map value then spins forever.       */
 /* The write must be rolled back by the timeout handler.               */
 /* ------------------------------------------------------------------ */
-static int timeout_cb(void *ctx)
+static int timeout_cb(__u64 key_v, __u64 newval)
 {
-	struct cb_ctx *c = ctx;
-	struct lockval *v = bpf_map_lookup_elem(&map_a, &c->key);
+	int key = (int)key_v;
+	struct lockval *v = bpf_map_lookup_elem(&map_a, &key);
 
 	if (v)
-		v->x = c->newval;
+		v->x = newval;
 	bpf_loop(LOOP_CNT, spin1, NULL, 0); /* trigger timeout */
 	return 0;
 }
@@ -96,12 +91,12 @@ static int timeout_cb(void *ctx)
 SEC("tc")
 int lf_timeout(struct __sk_buff *ctx)
 {
-	struct cb_ctx c = { .key = 1, .newval = 0xdeadbeefcafef00dULL };
-	struct lockval *v = bpf_map_lookup_elem(&map_a, &c.key);
+	int key = 1;
+	struct lockval *v = bpf_map_lookup_elem(&map_a, &key);
 
 	if (!v)
 		return 0;
-	bpf_lock_func(&v->lock, timeout_cb, &c);
+	bpf_lock_func(&v->lock, timeout_cb, key, 0xdeadbeefcafef00dULL, 0);
 	return 0;
 }
 
@@ -130,7 +125,7 @@ int lf_diff_lock(struct __sk_buff *ctx)
 
 	if (!v)
 		return 0;
-	bpf_lock_func(&v->lock, diff_lock_cb, NULL);
+	bpf_lock_func(&v->lock, diff_lock_cb, 0, 0, 0);
 	return 0;
 }
 
@@ -148,7 +143,7 @@ static int nesting_cb(void *ctx)
 	struct lockval *v2 = bpf_map_lookup_elem(&map_b, &key);
 
 	if (v2)
-		bpf_lock_func(&v2->lock, inner_cb, NULL);
+		bpf_lock_func(&v2->lock, inner_cb, 0, 0, 0);
 	return 0;
 }
 
@@ -161,7 +156,7 @@ int lf_nested_reject(struct __sk_buff *ctx)
 
 	if (!v)
 		return 0;
-	bpf_lock_func(&v->lock, nesting_cb, NULL);
+	bpf_lock_func(&v->lock, nesting_cb, 0, 0, 0);
 	return 0;
 }
 
@@ -198,7 +193,7 @@ int lf_cb_aa_reject(struct __sk_buff *ctx)
 
 	if (!v)
 		return 0;
-	bpf_lock_func(&v->lock, aa_cb, NULL);
+	bpf_lock_func(&v->lock, aa_cb, 0, 0, 0);
 	return 0;
 }
 

@@ -3712,10 +3712,10 @@ DECLARE_PER_CPU(struct bpf_undo_log_entry *, bpf_undo_log_cursor);
  * programs, and the arena-mapped address for combined arena+undo-log programs. */
 DECLARE_PER_CPU(struct bpf_undo_log_entry *, bpf_undo_log_base);
 
-/* Internal helper injected by the verifier before writes inside a spinlock
- * critical section. The x86 JIT replaces every call site with inline R12-cursor
- * code. If this ever executes, JIT inlining failed — the stub WARNs loudly.
- * Not callable from BPF programs directly.
+/* Internal helper/marker injected by the verifier before writes inside a
+ * spinlock critical section. By default the x86 JIT replaces every call site
+ * with inline cursor code; CONFIG_BPF_UNDO_LOG_CALL_HELPER restores the
+ * original helper-call implementation. Not callable from BPF programs directly.
  */
 u64 bpf_undo_log_push(u64 addr, u64 size, u64 r3, u64 r4, u64 r5);
 #endif /* CONFIG_BPF_UNDO_LOG */

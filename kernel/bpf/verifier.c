@@ -11206,16 +11206,18 @@ static int set_lock_func_callback_state(struct bpf_verifier_env *env,
 					struct bpf_func_state *callee,
 					int insn_idx)
 {
-	/* bpf_lock_func(void *lock, void *callback_fn, void *local_state);
-	 * callback_fn(void *local_state);
+	/* bpf_lock_func(void *lock, void *callback_fn, u64 v1, u64 v2, u64 v3);
+	 * callback_fn(u64 v1, u64 v2, u64 v3, u64, u64);
 	 * The lock has already been acquired (in check_func_arg) so the
-	 * callback is verified with the lock held.
+	 * callback is verified with the lock held.  The three scalar values
+	 * passed to bpf_lock_func() are forwarded as the first three callback
+	 * arguments; the remaining two are always zero (see execute_op()).
 	 */
 	callee->regs[BPF_REG_1] = caller->regs[BPF_REG_3];
+	callee->regs[BPF_REG_2] = caller->regs[BPF_REG_4];
+	callee->regs[BPF_REG_3] = caller->regs[BPF_REG_5];
 
 	/* unused */
-	__mark_reg_not_init(env, &callee->regs[BPF_REG_2]);
-	__mark_reg_not_init(env, &callee->regs[BPF_REG_3]);
 	__mark_reg_not_init(env, &callee->regs[BPF_REG_4]);
 	__mark_reg_not_init(env, &callee->regs[BPF_REG_5]);
 
@@ -23833,6 +23835,44 @@ static int do_misc_fixups(struct bpf_verifier_env *env)
 		mark_subprog_exc_cb(env, env->exception_callback_subprog);
 	}
 
+#ifdef CONFIG_BPF_UNDO_LOG_CALL_HELPER
+	{
+		int sp;
+
+		for (sp = 0; sp < env->subprog_cnt; sp++) {
+			const int sp_end = (sp + 1 < env->subprog_cnt) ?
+					   subprogs[sp + 1].start : insn_cnt;
+			bool has_cs_write = false;
+			int j;
+
+			for (j = subprogs[sp].start; j < sp_end; j++) {
+				u8 cls = BPF_CLASS(env->prog->insnsi[j].code);
+				u8 mode = BPF_MODE(env->prog->insnsi[j].code);
+
+				if (!env->insn_aux_data[j].in_critical_section)
+					continue;
+				if ((cls == BPF_STX || cls == BPF_ST) &&
+				    (mode == BPF_MEM || mode == BPF_ATOMIC ||
+				     mode == BPF_PROBE_MEM32 ||
+				     mode == BPF_PROBE_ATOMIC)) {
+					has_cs_write = true;
+					break;
+				}
+			}
+			if (!has_cs_write)
+				continue;
+
+			subprogs[sp].stack_depth += BPF_UNDO_LOG_SPILL_SIZE;
+			if (subprogs[sp].stack_depth > MAX_BPF_STACK) {
+				verbose(env,
+					"BPF stack limit exceeded after spinlock undo log reservation (%d > %d)\n",
+					subprogs[sp].stack_depth, MAX_BPF_STACK);
+				return -EINVAL;
+			}
+		}
+		stack_depth = subprogs[cur_subprog].stack_depth;
+	}
+#endif
 
 	for (i = 0; i < insn_cnt;) {
 #ifdef CONFIG_BPF_UNDO_LOG
@@ -23842,10 +23882,75 @@ static int do_misc_fixups(struct bpf_verifier_env *env)
 
 			if ((cls == BPF_STX || cls == BPF_ST) &&
 			    (mode == BPF_MEM || mode == BPF_ATOMIC ||
-			     mode == BPF_PROBE_MEM32)) {
+			     mode == BPF_PROBE_MEM32 ||
+			     mode == BPF_PROBE_ATOMIC)) {
 				cnt = 0;
+#ifdef CONFIG_BPF_UNDO_LOG_CALL_HELPER
+				{
+					u64 arena_vm_start = 0;
+					int spill_depth = (int)stack_depth;
+					int k;
+
+					if (mode == BPF_PROBE_MEM32 ||
+					    mode == BPF_PROBE_ATOMIC) {
+						arena_vm_start =
+							bpf_arena_get_kern_vm_start(prog->aux->arena);
+						if (!arena_vm_start) {
+							verifier_bug(env,
+								     "arena undo-log write missing arena vm_start");
+							return -EFAULT;
+						}
+					}
+
+					for (k = 0; k <= 5; k++)
+						insn_buf[cnt++] =
+							BPF_STX_MEM(BPF_DW, BPF_REG_FP, k,
+								    -(spill_depth - 40 + k * 8));
+
+					if (insn->dst_reg <= BPF_REG_5)
+						insn_buf[cnt++] =
+							BPF_LDX_MEM(BPF_DW, BPF_REG_1,
+								    BPF_REG_FP,
+								    -(spill_depth - 40 +
+								      insn->dst_reg * 8));
+					else
+						insn_buf[cnt++] =
+							BPF_MOV64_REG(BPF_REG_1,
+								      insn->dst_reg);
+					if (insn->off)
+						insn_buf[cnt++] =
+							BPF_ALU64_IMM(BPF_ADD, BPF_REG_1,
+								      insn->off);
+					if (arena_vm_start) {
+						struct bpf_insn ld_addr[2] = {
+							BPF_LD_IMM64(BPF_REG_2,
+								     arena_vm_start),
+						};
+
+						insn_buf[cnt++] = ld_addr[0];
+						insn_buf[cnt++] = ld_addr[1];
+						insn_buf[cnt++] =
+							BPF_ALU64_REG(BPF_ADD, BPF_REG_1,
+								      BPF_REG_2);
+					}
+					insn_buf[cnt++] =
+						BPF_MOV64_IMM(BPF_REG_2,
+							      BPF_LDST_BYTES(insn));
+					insn_buf[cnt++] = BPF_EMIT_CALL(bpf_undo_log_push);
+
+					for (k = 0; k <= 5; k++)
+						insn_buf[cnt++] =
+							BPF_LDX_MEM(BPF_DW, k, BPF_REG_FP,
+								    -(spill_depth - 40 + k * 8));
+				}
+#else
 				insn_buf[cnt++] = BPF_EMIT_CALL(bpf_undo_log_push);
+#endif
 				insn_buf[cnt++] = *insn;
+				if (WARN_ONCE(cnt > INSN_BUF_SIZE,
+					      "BPF undo log: insn_buf overflow cnt=%d\n",
+					      cnt))
+					return -EFAULT;
 
 				new_prog = bpf_patch_insn_data(env, i + delta,
 							       insn_buf, cnt);
@@ -23855,7 +23960,9 @@ static int do_misc_fixups(struct bpf_verifier_env *env)
 				delta    += cnt - 1;
 				env->prog = prog = new_prog;
 				insn      = new_prog->insnsi + i + delta;
+#ifndef CONFIG_BPF_UNDO_LOG_CALL_HELPER
 				prog->aux->undo_log_requires_jit = true;
+#endif
 				goto next_insn;
 			}
 		}

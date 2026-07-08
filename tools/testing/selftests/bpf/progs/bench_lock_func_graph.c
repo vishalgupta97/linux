@@ -57,15 +57,10 @@ int BPF_PROG(graph_init, __u32 num_nodes, __u32 num_edges)
 	return 0;
 }
 
-struct graph_edge_ctx {
-	__u32 src;
-	__u32 dst;
-	__u64 weight;
-};
-
-static int graph_add_edge_cb(void *ctx)
+static int graph_add_edge_cb(__u64 src_v, __u64 dst_v, __u64 weight)
 {
-	struct graph_edge_ctx *c = ctx;
+	__u32 src = (__u32)src_v;
+	__u32 dst = (__u32)dst_v;
 	__u32 e;
 
 	e = (__u32)__sync_fetch_and_add(&graph_edge_alloc, 1);
@@ -73,18 +68,17 @@ static int graph_add_edge_cb(void *ctx)
 		return 0;
 
 	/* 5 arena writes → 5 undo-log entries */
-	graph_edges[e].src      = c->src;
-	graph_edges[e].dst      = c->dst;
-	graph_edges[e].weight   = c->weight;
-	graph_edges[e].next_out = graph_nodes[c->src].first_edge;
-	graph_nodes[c->src].first_edge = e;
+	graph_edges[e].src      = src;
+	graph_edges[e].dst      = dst;
+	graph_edges[e].weight   = weight;
+	graph_edges[e].next_out = graph_nodes[src].first_edge;
+	graph_nodes[src].first_edge = e;
 	return 0;
 }
 
 SEC("fentry/bench_undo_graph_add_edge")
 int BPF_PROG(graph_add_edge, __u32 src, __u32 dst, __u64 weight)
 {
-	struct graph_edge_ctx c = { .src = src, .dst = dst, .weight = weight };
 	struct graph_global_lock *g;
 	__u32 key0 = 0;
 
@@ -95,22 +89,23 @@ int BPF_PROG(graph_add_edge, __u32 src, __u32 dst, __u64 weight)
 	if (!g)
 		return 0;
 
-	bpf_lock_func(&g->lock, graph_add_edge_cb, &c);
+	bpf_lock_func(&g->lock, graph_add_edge_cb, src, dst, weight);
 	return 0;
 }
 
 /* Traverse adjacency list of src; return weight if dst found. 0 undo-log writes. */
-static int graph_lookup_cb(void *ctx)
+static int graph_lookup_cb(__u64 src_v, __u64 dst_v)
 {
-	struct graph_edge_ctx *c = ctx;
+	__u32 src = (__u32)src_v;
+	__u32 dst = (__u32)dst_v;
 	__u32 e;
 	int depth;
 
-	e = graph_nodes[c->src].first_edge;
+	e = graph_nodes[src].first_edge;
 	bpf_for(depth, 0, BENCH_MAX_POOL) {
 		if (e >= BENCH_MAX_POOL)
 			break;
-		if (graph_edges[e].dst == c->dst)
+		if (graph_edges[e].dst == dst)
 			break;
 		e = graph_edges[e].next_out;
 	}
@@ -120,7 +115,6 @@ static int graph_lookup_cb(void *ctx)
 SEC("fentry/bench_undo_graph_lookup")
 int BPF_PROG(graph_lookup, __u32 src, __u32 dst)
 {
-	struct graph_edge_ctx c = { .src = src, .dst = dst };
 	struct graph_global_lock *g;
 	__u32 key0 = 0;
 
@@ -131,23 +125,24 @@ int BPF_PROG(graph_lookup, __u32 src, __u32 dst)
 	if (!g)
 		return 0;
 
-	bpf_lock_func(&g->lock, graph_lookup_cb, &c);
+	bpf_lock_func(&g->lock, graph_lookup_cb, src, dst, 0);
 	return 0;
 }
 
 /* Find edge (src, dst); update its weight. 1 undo-log write. */
-static int graph_update_cb(void *ctx)
+static int graph_update_cb(__u64 src_v, __u64 dst_v, __u64 weight)
 {
-	struct graph_edge_ctx *c = ctx;
+	__u32 src = (__u32)src_v;
+	__u32 dst = (__u32)dst_v;
 	__u32 e;
 	int depth;
 
-	e = graph_nodes[c->src].first_edge;
+	e = graph_nodes[src].first_edge;
 	bpf_for(depth, 0, BENCH_MAX_POOL) {
 		if (e >= BENCH_MAX_POOL)
 			break;
-		if (graph_edges[e].dst == c->dst) {
-			graph_edges[e].weight = c->weight;	/* 1 undo-log entry */
+		if (graph_edges[e].dst == dst) {
+			graph_edges[e].weight = weight;	/* 1 undo-log entry */
 			break;
 		}
 		e = graph_edges[e].next_out;
@@ -158,7 +153,6 @@ static int graph_update_cb(void *ctx)
 SEC("fentry/bench_undo_graph_update")
 int BPF_PROG(graph_update, __u32 src, __u32 dst, __u64 weight)
 {
-	struct graph_edge_ctx c = { .src = src, .dst = dst, .weight = weight };
 	struct graph_global_lock *g;
 	__u32 key0 = 0;
 
@@ -169,25 +163,26 @@ int BPF_PROG(graph_update, __u32 src, __u32 dst, __u64 weight)
 	if (!g)
 		return 0;
 
-	bpf_lock_func(&g->lock, graph_update_cb, &c);
+	bpf_lock_func(&g->lock, graph_update_cb, src, dst, weight);
 	return 0;
 }
 
 /* Unlink edge (src, dst) from src's adjacency list. 1–2 undo-log writes. */
-static int graph_delete_cb(void *ctx)
+static int graph_delete_cb(__u64 src_v, __u64 dst_v)
 {
-	struct graph_edge_ctx *c = ctx;
+	__u32 src = (__u32)src_v;
+	__u32 dst = (__u32)dst_v;
 	__u32 e, prev;
 	int depth;
 
-	e    = graph_nodes[c->src].first_edge;
+	e    = graph_nodes[src].first_edge;
 	prev = (__u32)~0;
 	bpf_for(depth, 0, BENCH_MAX_POOL) {
 		if (e >= BENCH_MAX_POOL)
 			break;
-		if (graph_edges[e].dst == c->dst) {
+		if (graph_edges[e].dst == dst) {
 			if (prev == (__u32)~0)
-				graph_nodes[c->src].first_edge = graph_edges[e].next_out; /* 1 undo-log */
+				graph_nodes[src].first_edge = graph_edges[e].next_out; /* 1 undo-log */
 			else
 				graph_edges[prev].next_out  = graph_edges[e].next_out; /* 1 undo-log */
 			break;
@@ -201,7 +196,6 @@ static int graph_delete_cb(void *ctx)
 SEC("fentry/bench_undo_graph_delete")
 int BPF_PROG(graph_delete_op, __u32 src, __u32 dst)
 {
-	struct graph_edge_ctx c = { .src = src, .dst = dst };
 	struct graph_global_lock *g;
 	__u32 key0 = 0;
 
@@ -212,7 +206,7 @@ int BPF_PROG(graph_delete_op, __u32 src, __u32 dst)
 	if (!g)
 		return 0;
 
-	bpf_lock_func(&g->lock, graph_delete_cb, &c);
+	bpf_lock_func(&g->lock, graph_delete_cb, src, dst, 0);
 	return 0;
 }
 

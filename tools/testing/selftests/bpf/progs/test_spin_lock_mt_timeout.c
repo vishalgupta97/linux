@@ -46,8 +46,8 @@ struct {
 #define LOOP_CNT (1 << 10)
 
 /* Nested loops -> ~1024^4 iterations: guaranteed to exceed any sane timeout.
- * Each bpf_loop iteration re-checks ebpf_spinlock_timeout, so the program is
- * terminated promptly once the flag is set.
+ * Each bpf_loop iteration re-checks this CPU's spinlock timeout state, so the
+ * program is terminated promptly once its lock session times out.
  */
 static int cb4(void *ctx) { return 0; }
 static int cb3(void *ctx) { bpf_loop(LOOP_CNT, cb4, NULL, 0); return 0; }
@@ -148,9 +148,7 @@ int short_cs_incr_b(struct __sk_buff *ctx)
 
 /* Independent worker on lock B that DOES run a bounded loop.  The loop is far
  * shorter than the timeout so this program should always commit on its own.
- * But because it polls ebpf_spinlock_timeout each iteration, it is a victim of
- * the global-flag limitation: a timeout raised by an unrelated lock-A holder on
- * another CPU can falsely terminate it mid-loop and roll back its counter bump.
+ * This catches timeout state leaking from unrelated lock sessions on other CPUs.
  */
 SEC("tc")
 int worker_b_short_loop(struct __sk_buff *ctx)
@@ -260,7 +258,7 @@ int lf_holder_loop_write_a(struct __sk_buff *ctx)
 	a = bpf_map_lookup_elem(&mt_locks, &key);
 	if (!a)
 		return 0;
-	bpf_lock_func(&a->lock, lf_holder_a_cb, NULL);
+	bpf_lock_func(&a->lock, lf_holder_a_cb, 0, 0, 0);
 	return 0;
 }
 
@@ -284,7 +282,7 @@ int lf_short_cs_incr_a(struct __sk_buff *ctx)
 	a = bpf_map_lookup_elem(&mt_locks, &key);
 	if (!a)
 		return 0;
-	bpf_lock_func(&a->lock, lf_incr_a_cb, NULL);
+	bpf_lock_func(&a->lock, lf_incr_a_cb, 0, 0, 0);
 	return 0;
 }
 
@@ -307,7 +305,7 @@ int lf_short_cs_incr_b(struct __sk_buff *ctx)
 	b = bpf_map_lookup_elem(&mt_locks, &key);
 	if (!b)
 		return 0;
-	bpf_lock_func(&b->lock, lf_incr_b_cb, NULL);
+	bpf_lock_func(&b->lock, lf_incr_b_cb, 0, 0, 0);
 	return 0;
 }
 
@@ -333,7 +331,7 @@ int lf_worker_b_short_loop(struct __sk_buff *ctx)
 	b = bpf_map_lookup_elem(&mt_locks, &key);
 	if (!b)
 		return 0;
-	bpf_lock_func(&b->lock, lf_workerb_cb, NULL);
+	bpf_lock_func(&b->lock, lf_workerb_cb, 0, 0, 0);
 	return 0;
 }
 
@@ -367,7 +365,7 @@ int lf_nested_inner_holder(struct __sk_buff *ctx)
 	a = bpf_map_lookup_elem(&mt_locks, &key);
 	if (!a)
 		return 0;
-	bpf_lock_func(&a->lock, lf_nested_cb, NULL);
+	bpf_lock_func(&a->lock, lf_nested_cb, 0, 0, 0);
 	return 0;
 }
 
@@ -403,7 +401,7 @@ int lf_deadlock_ab(struct __sk_buff *ctx)
 	a = bpf_map_lookup_elem(&mt_locks, &key);
 	if (!a)
 		return 0;
-	bpf_lock_func(&a->lock, lf_dlab_cb, NULL);
+	bpf_lock_func(&a->lock, lf_dlab_cb, 0, 0, 0);
 	return 0;
 }
 
@@ -436,7 +434,7 @@ int lf_deadlock_ba(struct __sk_buff *ctx)
 	b = bpf_map_lookup_elem(&mt_locks, &key);
 	if (!b)
 		return 0;
-	bpf_lock_func(&b->lock, lf_dlba_cb, NULL);
+	bpf_lock_func(&b->lock, lf_dlba_cb, 0, 0, 0);
 	return 0;
 }
 

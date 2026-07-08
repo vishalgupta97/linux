@@ -127,7 +127,7 @@ static bool is_uimm32(u64 value)
 	return value == (u64)(u32)value;
 }
 
-#ifdef CONFIG_BPF_UNDO_LOG
+#if defined(CONFIG_BPF_UNDO_LOG) && !defined(CONFIG_BPF_UNDO_LOG_CALL_HELPER)
 static bool bpf_insn_is_undo_log_marker(const struct bpf_insn *insn)
 {
 	if (insn->code != (BPF_JMP | BPF_CALL) || insn->src_reg)
@@ -148,7 +148,7 @@ static bool bpf_prog_has_undo_log_markers(const struct bpf_prog *prog)
 #else
 static inline bool bpf_insn_is_undo_log_marker(const struct bpf_insn *insn) { return false; }
 static inline bool bpf_prog_has_undo_log_markers(const struct bpf_prog *p) { return false; }
-#endif /* CONFIG_BPF_UNDO_LOG */
+#endif /* CONFIG_BPF_UNDO_LOG && !CONFIG_BPF_UNDO_LOG_CALL_HELPER */
 
 /* mov dst, src */
 #define EMIT_mov(DST, SRC)								 \
@@ -295,7 +295,7 @@ static u8 add_3mod(u8 byte, u32 r1, u32 r2, u32 index)
 	return byte;
 }
 
-#ifdef CONFIG_BPF_UNDO_LOG
+#if defined(CONFIG_BPF_UNDO_LOG) && !defined(CONFIG_BPF_UNDO_LOG_CALL_HELPER)
 /*
  * Store src_reg to [R12 + off]. R12 as a memory base always requires a SIB
  * byte (rm=4 in ModRM, SIB=0x24 for no-index/R12-base), unlike most other
@@ -329,7 +329,9 @@ static void emit_stx_r12base(u8 **pprog, u32 size, u32 src_reg, int off)
 		EMIT2_off32(0x80 | modrm_rm4, 0x24, off);
 	*pprog = prog;
 }
+#endif
 
+#ifdef CONFIG_BPF_UNDO_LOG
 static void emit_undo_log_spill_r12(u8 **pprog, bool active)
 {
 	u8 *prog = *pprog;
@@ -1288,7 +1290,7 @@ static void emit_ldsx_r12(u8 **prog, u32 size, u32 dst_reg, u32 src_reg, int off
 	emit_ldsx_index(prog, size, dst_reg, src_reg, X86_REG_R12, off);
 }
 
-#ifdef CONFIG_BPF_UNDO_LOG
+#if defined(CONFIG_BPF_UNDO_LOG) && !defined(CONFIG_BPF_UNDO_LOG_CALL_HELPER)
 /*
  * Combined arena+undo-log push: R12 = vm_start (fixed arena base).
  * Temporarily borrows R12 for the cursor via push/pop, leaving vm_start intact.
@@ -1297,8 +1299,8 @@ static void emit_ldsx_r12(u8 **prog, u32 size, u32 dst_reg, u32 src_reg, int off
  * off       : signed 16-bit offset from that base (the CS write's ->off)
  * bpf_size  : BPF_B / BPF_H / BPF_W / BPF_DW (for the old-value load width)
  * byte_size : 1 / 2 / 4 / 8  (stored in entry.size)
- * is_arena  : true if the store uses PROBE_MEM32 addressing (dst_breg is a
- *             32-bit arena offset; kernel VA = dst_breg + R12 + off)
+ * is_arena  : true if the store uses arena addressing (dst_breg is a 32-bit
+ *             arena offset; kernel VA = dst_breg + R12 + off)
  */
 static void emit_undo_log_push_combined(u8 **pprog, u32 dst_breg, s32 off,
 					u32 bpf_size, int byte_size, bool is_arena)
@@ -1350,7 +1352,7 @@ static void emit_undo_log_push_combined(u8 **pprog, u32 dst_breg, s32 off,
 
 	*pprog = prog;
 }
-#endif /* CONFIG_BPF_UNDO_LOG */
+#endif /* CONFIG_BPF_UNDO_LOG && !CONFIG_BPF_UNDO_LOG_CALL_HELPER */
 
 /* STX: *(u8*)(dst_reg + off) = src_reg */
 static void emit_stx(u8 **pprog, u32 size, u32 dst_reg, u32 src_reg, int off)
@@ -1913,7 +1915,7 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image, u8 *rw_image
 				dst_reg = X86_REG_R9;
 		}
 
-#ifdef CONFIG_BPF_UNDO_LOG
+#if defined(CONFIG_BPF_UNDO_LOG) && !defined(CONFIG_BPF_UNDO_LOG_CALL_HELPER)
 		if (bpf_insn_is_undo_log_marker(insn)) {
 			const struct bpf_insn *next = insn + 1;
 			u32 dst_breg = (priv_frame_ptr && next->dst_reg == BPF_REG_FP)
@@ -1924,7 +1926,8 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image, u8 *rw_image
 			if (arena_vm_start) {
 				/* Combined arena+undo-log: R12 = vm_start (fixed).
 				 * Use push/pop R12 to borrow it as cursor temporarily. */
-				bool is_arena = (BPF_MODE(next->code) == BPF_PROBE_MEM32);
+				bool is_arena = (BPF_MODE(next->code) == BPF_PROBE_MEM32 ||
+						 BPF_MODE(next->code) == BPF_PROBE_ATOMIC);
 
 				emit_undo_log_push_combined(&prog, dst_breg, off,
 							    BPF_SIZE(next->code), size,
@@ -2993,7 +2996,9 @@ emit_jmp:
 			return -EINVAL;
 		}
 
+#if defined(CONFIG_BPF_UNDO_LOG) && !defined(CONFIG_BPF_UNDO_LOG_CALL_HELPER)
 emit_insn_done:
+#endif
 		ilen = prog - temp;
 		if (ilen > BPF_MAX_INSN_SIZE) {
 			pr_err("bpf_jit: fatal insn size error\n");

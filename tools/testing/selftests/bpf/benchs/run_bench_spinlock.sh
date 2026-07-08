@@ -67,11 +67,11 @@ run_bench() {
 }
 
 {
-	for thread in 1 2 4 8 16 32 64 80 96 112 128; do
+	for thread in 1 2 4 8 12 16 20 28 56 84 112 128 168 224; do
 		for pool in 128; do #1 8 32 128; do
-			for ds in ring list trie graph; do
+			for ds in list ring graph; do #trie
 			for op in insert; do  #lookup update delete; do
-				for variant in kmod kmod_bpf undo_log; do
+				for variant in lock_func kmod_bpf; do #kmod kmod_bpf undo_log; do
 				
 				# For insert, no prefill; for read/write/delete ops
 				# prefill to full pool capacity.
