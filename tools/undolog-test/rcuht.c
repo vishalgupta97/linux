@@ -171,6 +171,13 @@ noinline int attach_cs_ht(u32 src_value, u32 dst_value, struct stats *stats)
 }
 EXPORT_SYMBOL(attach_cs_ht);
 
+noinline int attach_cs_ht_fpop(u32 src_value, u32 dst_value, struct stats *stats)
+{
+	stats->write_moves++;
+	return 0;
+}
+EXPORT_SYMBOL(attach_cs_ht_fpop);
+
 static int rcuhashbash_read_lock(u32 value, struct stats *stats)
 {
 		struct rcuhashbash_entry *entry;
@@ -710,6 +717,16 @@ static struct rcuhashbash_ops all_ops[] = {
 				.read_lock_bucket = NULL,
 				.read_unlock_bucket = NULL,
 				.write = attach_cs_ht,
+				.write_lock_buckets = NULL,
+				.write_unlock_buckets = NULL,
+		},
+		{
+				.reader_type = "table_bpf_spinlock_undolog_fpop",
+				.writer_type = "table_bpf_spinlock_undolog_fpop",
+				.read = NULL,
+				.read_lock_bucket = NULL,
+				.read_unlock_bucket = NULL,
+				.write = attach_cs_ht_fpop,
 				.write_lock_buckets = NULL,
 				.write_unlock_buckets = NULL,
 		},

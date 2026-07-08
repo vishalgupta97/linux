@@ -9,8 +9,47 @@
 #include <bpf/libbpf.h>
 #include <bpf/bpf.h>
 #include "rcuhashbash.skel.h"
+#include <fcntl.h>
 
 #define MAX_ENTRIES_PER_BUCKET 64
+
+#define SYSCTL_PATH "/proc/sys/net/core/bpf_spin_lock_timeout"
+
+/* ------------------------------------------------------------------ */
+/* sysctl + config detection helpers                                    */
+/* ------------------------------------------------------------------ */
+
+static int __read_sysctl(void)
+{
+	int fd, val = 0;
+	char buf[32];
+
+	fd = open(SYSCTL_PATH, O_RDONLY);
+	if (fd < 0)
+		return -1;
+	if (read(fd, buf, sizeof(buf)) > 0)
+		val = atoi(buf);
+	close(fd);
+	return val;
+}
+
+static int __write_sysctl(int val)
+{
+	int fd;
+	char buf[32];
+
+	fd = open(SYSCTL_PATH, O_WRONLY);
+	if (fd < 0)
+		return -1;
+	snprintf(buf, sizeof(buf), "%d\n", val);
+	if (write(fd, buf, strlen(buf)) < 0) {
+		close(fd);
+		return -1;
+	}
+	close(fd);
+	return 0;
+}
+
 
 static volatile int keep_running = 1;
 static void sig_handler(int sig) { keep_running = 0; }
@@ -44,6 +83,9 @@ int main(int argc, char **argv)
         fprintf(stderr, "entries-per-bucket must be <= %d\n",
                 MAX_ENTRIES_PER_BUCKET); return 1;
     }
+
+    int old_timeout = __read_sysctl();
+    __write_sysctl(1000); //1s
 
     /* ── Load BPF skeleton ──────────────────────────────────── */
     struct rcuhashbash_bpf *skel = rcuhashbash_bpf__open_and_load();
@@ -95,6 +137,7 @@ int main(int argc, char **argv)
     signal(SIGTERM, sig_handler);
     while (keep_running) sleep(1);
     printf("\nDetaching...\n");
+    __write_sysctl(old_timeout);
 
 cleanup:
     rcuhashbash_bpf__destroy(skel);

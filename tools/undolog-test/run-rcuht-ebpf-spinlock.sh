@@ -1,7 +1,7 @@
 source defaults.sh
 
 #locks=(table_bpf_spinlock_baseline)
-locks=(table_bpf_spinlock_undolog)
+locks=(table_bpf_spinlock_undolog_fpop)
 binaries=(baseline)
 
 lock_type=spinlock
@@ -21,6 +21,8 @@ make clean
 make || exit
 
 numlocks=${#locks[@]}
+
+sudo sysctl -w net.core.bpf_spin_lock_timeout=10000
 
 for binary in ${binaries[@]}
 do
@@ -57,6 +59,7 @@ do
 				sudo ./send-ioctl 1
 				sleep ${time}
 				sudo ./send-ioctl 2
+				sleep 1
 				kill -TERM ${loader_pid}
 				wait ${loader_pid}
 				sudo rmmod ${binary}.ko
@@ -69,3 +72,5 @@ do
 done
 done
 done
+
+sudo sysctl -w net.core.bpf_spin_lock_timeout=0

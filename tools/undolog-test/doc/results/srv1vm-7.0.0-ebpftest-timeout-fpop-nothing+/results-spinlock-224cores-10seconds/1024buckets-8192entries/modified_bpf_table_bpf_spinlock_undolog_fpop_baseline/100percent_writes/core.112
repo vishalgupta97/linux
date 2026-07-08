@@ -1,0 +1,23 @@
+[76409.372537] BPF_SYNC: Module loaded, device /dev/bpf_rcuht_sync created. Send BPF_READY ioctl to unblock.
+[76409.372559] BPF waiter kthread: waiting for BPF attach signal...
+[76411.395005] BPF_IOCTL: BPF program attached, signaling ready!
+[76411.395170] init_ht called
+[76411.396498] rcuhashbash starting threads
+[76421.415380] BPF_IOCTL: Remove BPF program
+[76421.415556] rcuhashbash exiting threads
+[76421.470508] Removing IOCTL chardev
+[76421.483616] ======== KOMB spinlock stats ========
+[76421.485133] Combiner_count: 0
+[76421.486126] waiter_combined: 0
+[76421.487709] ooo_unlocks: 0
+[76421.489018] ooo_combiner_count: 0
+[76421.490396] ooo_waiter_combined: 0
+[76421.492016] rcuhashbash summary: (up: 21556084 down: 23516254)
+[76421.493865] rcuhashbash summary: ro=0 rw=112 reader_type=table_bpf_spinlock_undolog_fpop writer_type=table_bpf_spinlock_undolog_fpop
+               rcuhashbash summary: writer proportion 100/100
+               rcuhashbash summary: buckets=1024 entries=8192 reader_range=16384 writer_range=16384
+               rcuhashbash summary: writes: 45072338 moves, 0 dests in use, 0 misses (45072338)
+               rcuhashbash summary: reads: 0 hits, 0 misses (0)
+               rcuhashbash summary: total: 45072338 (avg: 10024552269 min: 10019754187 max: 10027642911)
+[76421.511669] BPF waiter kthread exiting: BPF ready! Flag set.
+[76421.512222] rcuhashbash done

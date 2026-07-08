@@ -4,6 +4,9 @@
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_tracing.h>
 
+static long (* const bpf_lock_func5)(void *lock, void *callback_fn,
+                                     __u64 v1, __u64 v2, __u64 v3) = (void *)212;
+
 #define MAX_BUCKETS            1024
 #define MAX_ENTRIES            65536
 #define MAX_ENTRIES_PER_BUCKET 64
@@ -91,6 +94,34 @@ int BPF_PROG(trace_attach_cs_ht, u32 src_value, u32 dst_value, void *stats)
 end:
     bpf_spin_unlock(&glv->lock);
 
+    return 0;
+}
+
+static int traverse_ht(__u64 src_bucket, __u64 dst_value) {
+    for(int i = 0; i < NUM_ENTRIES; i++)
+	{
+	    u32 entry_key = (src_bucket * NUM_ENTRIES) + i;
+
+	    struct entry_val *eval = bpf_map_lookup_elem(&entries, &entry_key);
+	    if (!eval) {
+		return 0;
+            }
+	    eval->value = dst_value + i;
+	}
+	return 0;
+}
+
+SEC("fentry/attach_cs_ht_fpop")
+int BPF_PROG(trace_attach_cs_ht_fpop, u32 src_value, u32 dst_value, void *stats)
+{
+    u32 src_bucket = src_value % 1024;
+
+    u32 lock_key = 0;
+    struct global_lock_val *glv = bpf_map_lookup_elem(&global_lock_map, &lock_key);
+    if (!glv)
+        return 0;
+
+    bpf_lock_func5(&glv->lock, traverse_ht, src_bucket, dst_value, 0);
     return 0;
 }
 
