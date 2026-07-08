@@ -10,7 +10,8 @@
  *  - Never returns an error.  On timeout the *owner* is terminated by
  *    bpf_spin_lock_timeout_handler(); the waiter eventually acquires normally.
  *  - No deadlock detection.
- *  - Uses its own bpf_qnodes per-CPU MCS nodes (separate from rqnodes).
+ *  - Uses the native qspinlock per-CPU MCS nodes, so BPF and kernel waiters
+ *    decode the same tail into the same queue node.
  */
 
 #include <linux/smp.h>
@@ -28,11 +29,9 @@
 
 #include <linux/bpf_qspinlock.h>
 
-/*
- * Separate per-CPU MCS queue nodes for BPF — must not share nodes with the
- * generic kernel qspinlock or rqspinlock paths.
- */
-static DEFINE_PER_CPU_ALIGNED(struct qnode, bpf_qnodes[_Q_MAX_NODES]);
+#ifdef CONFIG_PARAVIRT_SPINLOCKS
+#error "BPF qspinlock requires native qspinlocks; disable CONFIG_PARAVIRT_SPINLOCKS"
+#endif
 
 /* ---------------------------------------------------------------------- */
 /* Externs defined in helpers.c / syscall.c                               */
@@ -147,7 +146,7 @@ static void bpf_queued_spin_lock_slowpath(struct qspinlock *lock, u32 val)
 	return;
 
 queue:
-	node = this_cpu_ptr(&bpf_qnodes[0].mcs);
+	node = this_cpu_ptr(&qnodes[0].mcs);
 	idx = node->count++;
 	tail = encode_tail(smp_processor_id(), idx);
 
@@ -182,7 +181,7 @@ queue:
 	 * the lock was released while we were setting up.
 	 */
 	if (queued_spin_trylock(lock)) {
-		__this_cpu_dec(bpf_qnodes[0].mcs.count);
+		__this_cpu_dec(qnodes[0].mcs.count);
 #ifdef CONFIG_BPF_TIMEOUT
 		/* Acquired before queueing; no known successor is monitoring us. */
 		bpf_notify_lock_kthread();
@@ -208,7 +207,7 @@ queue:
 	 * until we reach the head.
 	 */
 	if (old & _Q_TAIL_MASK) {
-		prev = decode_tail(old, bpf_qnodes);
+		prev = decode_tail(old, qnodes);
 
 		/* Link @node into the waitqueue. */
 		WRITE_ONCE(prev->next, node);
@@ -280,7 +279,7 @@ queue:
 	arch_mcs_spin_unlock_contended(&next->locked);
 
 release:
-	__this_cpu_dec(bpf_qnodes[0].mcs.count);
+	__this_cpu_dec(qnodes[0].mcs.count);
 }
 
 /* ---------------------------------------------------------------------- */

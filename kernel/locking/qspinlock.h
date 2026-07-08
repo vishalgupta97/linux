@@ -44,6 +44,8 @@ struct qnode {
 #endif
 };
 
+DECLARE_PER_CPU_ALIGNED(struct qnode, qnodes[_Q_MAX_NODES]);
+
 /*
  * We must be able to distinguish between no-tail and the tail at 0:0,
  * therefore increment the cpu number by one.
